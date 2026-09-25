@@ -1,88 +1,65 @@
-import { fontFamily, tokens } from '../theme/tokens';
+import { useMemo } from 'react';
+import { PaneGrid } from '../features/panes/pane-grid';
+import { StatusBar } from '../features/statusbar/statusbar';
+import { type Store, StoreContext, useAppSelector } from '../state/store';
+import { ChromeThemeContext, chromeFonts, createChromeTheme } from '../theme/chrome';
+import { tokens } from '../theme/tokens';
+import { TopBar } from './top-bar';
 
-/** Composition root: the window's ground, its accent light and the top bar with the wordmark. */
-export function App() {
-  return (
-    <div
-      testId="app-root"
-      style={{
-        position: 'relative',
-        display: 'flex',
-        flexDirection: 'column',
-        width: '100%',
-        height: '100%',
-        backgroundColor: tokens.ground,
-        fontFamily: fontFamily.ui,
-      }}
-    >
-      <div
-        style={{
-          position: 'absolute',
-          top: 0,
-          left: 0,
-          right: 0,
-          height: tokens.layout.groundGlowHeight,
-          background: {
-            type: 'linear-gradient',
-            angle: 180,
-            stops: [
-              { color: tokens.groundGlow, position: 0 },
-              { color: tokens.groundGlowEnd, position: 1 },
-            ],
-          },
-        }}
-      />
-      <TopBar />
-    </div>
+function Shell() {
+  const accent = useAppSelector((s) => s.settings.accent);
+  const fontSize = useAppSelector((s) => s.settings.font_size);
+  const reducedMotion = useAppSelector((s) => s.reducedMotion);
+  const geist = useAppSelector((s) => s.env.geistAvailable);
+  const theme = useMemo(
+    () => createChromeTheme(accent, fontSize, chromeFonts(geist), reducedMotion),
+    [accent, fontSize, geist, reducedMotion],
   );
-}
-
-function TopBar() {
   return (
-    <div
-      style={{
-        height: tokens.layout.headerHeight,
-        flexShrink: 0,
-        display: 'flex',
-        alignItems: 'center',
-        paddingLeft: tokens.layout.headerPaddingLeft,
-        paddingRight: tokens.layout.headerPaddingRight,
-      }}
-    >
-      <Wordmark />
-    </div>
-  );
-}
-
-function Wordmark() {
-  return (
-    <div testId="wordmark" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+    <ChromeThemeContext.Provider value={theme}>
       <div
+        testId="app-root"
         style={{
-          width: 8,
-          height: 8,
-          borderRadius: 2,
-          backgroundColor: tokens.accent,
-          boxShadow: {
-            offsetX: 0,
-            offsetY: 0,
-            blurRadius: 12,
-            spreadRadius: 0,
-            color: tokens.accentGlow,
-          },
-        }}
-      />
-      <text
-        style={{
-          color: tokens.text,
-          fontFamily: fontFamily.ui,
-          fontSize: tokens.type.wordmark.fontSize,
-          fontWeight: tokens.type.wordmark.fontWeight,
-          lineHeight: tokens.type.wordmark.lineHeight,
+          position: 'relative',
+          display: 'flex',
+          flexDirection: 'column',
+          width: '100%',
+          height: '100%',
+          backgroundColor: tokens.ground,
+          fontFamily: theme.fonts.ui,
         }}
       >
-        ply
-      </text>
-    </div>
+        <div
+          style={{
+            position: 'absolute',
+            top: 0,
+            left: 0,
+            right: 0,
+            height: tokens.layout.groundGlowHeight,
+            pointerEvents: 'none',
+            background: {
+              type: 'linear-gradient',
+              angle: 180,
+              stops: [
+                { color: theme.accent.groundGlow, position: 0 },
+                { color: theme.accent.groundGlowEnd, position: 1 },
+              ],
+            },
+          }}
+        />
+        <TopBar />
+        <PaneGrid />
+        <StatusBar />
+      </div>
+    </ChromeThemeContext.Provider>
+  );
+}
+
+/** Composition root: provides the store and the chrome theme, and lays out bar, grid and footer. */
+export function App({ store }: { store: Store }) {
+  return (
+    <StoreContext.Provider value={store}>
+      <Shell />
+    </StoreContext.Provider>
   );
 }

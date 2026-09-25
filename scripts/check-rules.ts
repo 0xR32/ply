@@ -623,7 +623,8 @@ export function checkAppLayers(root: string, files: string[]): CheckResult {
         else if (!['state', 'ipc', 'theme'].includes(to))
           deny(`${from} imports only proto.gen, theme and state/actions`);
       } else if (from === 'state') {
-        if (to === 'ipc' && !file.startsWith('app/src/state/effects'))
+        const protoGen = /^app\/src\/ipc\/proto\.gen(\.ts)?$/.test(target);
+        if (to === 'ipc' && !protoGen && !file.startsWith('app/src/state/effects'))
           deny('only state/effects.ts calls ipc');
         else if (to.startsWith('features/') || to === 'ui')
           deny('state never imports features or ui');

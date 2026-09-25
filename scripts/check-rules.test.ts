@@ -99,6 +99,7 @@ describe('check-rules', () => {
       'app/src/ui/text.tsx': "import { s } from '../state/store';\n",
       'app/src/state/reducer.ts': "import { c } from '../ipc/control-client';\n",
       'app/src/state/effects.ts': "import { c } from '../ipc/control-client';\n",
+      'app/src/state/actions.ts': "import type { Pane } from '../ipc/proto.gen';\n",
     });
     const v = checkAppLayers(root, files).violations.map((x) => `${x.file}:${x.line}`);
     expect(v.sort()).toEqual([

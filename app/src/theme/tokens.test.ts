@@ -1,5 +1,12 @@
 import { describe, expect, test } from 'bun:test';
-import { accentAlternatives, ansi16, terminalTheme, tokens } from './tokens';
+import {
+  accentAlternatives,
+  accentPalette,
+  ansi16,
+  terminalTheme,
+  terminalThemeFor,
+  tokens,
+} from './tokens';
 
 const RGB = /^#[0-9A-F]{6}$/;
 
@@ -65,5 +72,26 @@ describe('tokens', () => {
 
   test('the default accent alternative is the accent token', () => {
     expect(accentAlternatives.blue).toBe(tokens.accent);
+  });
+
+  test('every accent choice moves the cursor and selection but never the ANSI slots', () => {
+    for (const name of Object.keys(accentAlternatives) as (keyof typeof accentAlternatives)[]) {
+      const theme = terminalThemeFor(name);
+      expect(theme.cursor).toBe(accentAlternatives[name]);
+      expect(theme.selectionBg).toMatch(RGB);
+      expect(theme.ansi).toEqual([...ansi16]);
+    }
+    expect(terminalTheme).toEqual(terminalThemeFor('blue'));
+  });
+
+  test('accent tints are the accent at the named opacity', () => {
+    const n = Number.parseInt(accentAlternatives.mint.slice(1), 16);
+    const rgb = [(n >> 16) & 255, (n >> 8) & 255, n & 255].map(String);
+    expect([...(accentPalette('mint').a45.match(/[\d.]+/g) ?? [])]).toEqual([...rgb, '0.45']);
+    expect(
+      accentPalette('blue')
+        .groundGlow.match(/[\d.]+/g)
+        ?.at(-1),
+    ).toBe('0.09');
   });
 });

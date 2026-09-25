@@ -1,0 +1,100 @@
+import { createTestRoot, type TestRenderer } from '@gpuix/react/testing';
+import type { ReactNode } from 'react';
+import { ChromeThemeContext, chromeFonts, createChromeTheme } from '../theme/chrome';
+import type { Tab, Workspace } from './actions';
+import { type AppState, initialState, type PaneState } from './reducer';
+import { createStore, type Store, StoreContext } from './store';
+
+/** The workspace test states use; `/Users/example` keeps fixtures free of real paths (INV-11). */
+export const testWorkspace: Workspace = {
+  id: 1,
+  path: '/Users/example',
+  name: 'example',
+  opened_at: 1_790_000_000,
+};
+
+/** A pane with test defaults (tab 1, idle claude pane in the example workspace) overridden by `fields`. */
+export function makePane(fields: Partial<PaneState> & { id: number }): PaneState {
+  return {
+    workspace_id: testWorkspace.id,
+    tab_id: 1,
+    position: 0,
+    cli: 'claude',
+    cwd: `${testWorkspace.path}/code/ply`,
+    title: 'claude',
+    status: 'idle',
+    created_at: 1_790_000_000,
+    ...fields,
+  };
+}
+
+/** A connected, loaded state holding `panes` in `tabs` (tab 1 active unless `activeTabId` says otherwise). */
+export function makeState(
+  panes: PaneState[],
+  tabs: Partial<Tab>[] = [{ id: 1 }],
+  patch: Partial<AppState> = {},
+): AppState {
+  const base = initialState({
+    home: testWorkspace.path,
+    shellName: 'zsh',
+    geistAvailable: false,
+  });
+  const full: Tab[] = tabs.map((t, i) => {
+    const id = t.id ?? i + 1;
+    const ids = t.pane_ids ?? panes.filter((p) => p.tab_id === id).map((p) => p.id);
+    const focus = t.focus_pane_id ?? ids[0];
+    return {
+      name: t.name ?? `tab${id}`,
+      position: i,
+      zoomed: false,
+      ...t,
+      id,
+      pane_ids: ids,
+      ...(focus !== undefined ? { focus_pane_id: focus } : {}),
+    };
+  });
+  return {
+    ...base,
+    connection: { kind: 'connected', daemonVersion: '0.1.0' },
+    workspace: testWorkspace,
+    panes: Object.fromEntries(panes.map((p) => [p.id, p])),
+    tabs: full,
+    activeTabId: full[0]?.id ?? null,
+    reducedMotion: true,
+    ...patch,
+  };
+}
+
+/** A mounted test tree with the store and the chrome theme around `node`; call `unmount` in `finally`. */
+export interface Mounted {
+  store: Store;
+  renderer: TestRenderer;
+  unmount: () => void;
+  rerender: (node: ReactNode) => void;
+}
+
+/** Renders `node` in GPUIX's test renderer under a store holding `state` (or the given store). */
+export function mountWithStore(
+  node: ReactNode,
+  state: AppState | Store,
+  size: { width: number; height: number } = { width: 1440, height: 900 },
+): Mounted {
+  const store = 'dispatch' in state ? state : createStore(state);
+  const { render, renderer, unmount } = createTestRoot(size);
+  const wrap = (child: ReactNode) => {
+    const s = store.getState();
+    const theme = createChromeTheme(
+      s.settings.accent,
+      s.settings.font_size,
+      chromeFonts(false),
+      true,
+    );
+    return (
+      <StoreContext.Provider value={store}>
+        <ChromeThemeContext.Provider value={theme}>{child}</ChromeThemeContext.Provider>
+      </StoreContext.Provider>
+    );
+  };
+  render(wrap(node));
+  return { store, renderer, unmount, rerender: (next) => render(wrap(next)) };
+}

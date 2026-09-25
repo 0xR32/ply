@@ -1,16 +1,102 @@
 import { describe, expect, test } from 'bun:test';
-import { createTestRoot, hasNativeTestRenderer } from '@gpuix/react/testing';
+import { join } from 'node:path';
+import { createTestRoot, hasNativeTestRenderer, type TestRenderer } from '@gpuix/react/testing';
+import { createStore, type Store } from '../state/store';
+import { makePane, makeState } from '../state/test-support';
 import { App } from './App';
 
+const shots = process.env.PLY_SCREENSHOT_DIR;
+
+function shot(renderer: TestRenderer, name: string): void {
+  if (!shots) return;
+  renderer.flush();
+  renderer.captureScreenshot(join(shots, `${name}.png`));
+}
+
+function canvasState() {
+  const now = Math.floor(Date.now() / 1000);
+  return makeState(
+    [
+      makePane({
+        id: 1,
+        title: 'Tab bar polish',
+        status: 'running',
+        statusSince: now - 252,
+        progress: { done: 3, total: 5 },
+        model_seen: 'claude-opus-5',
+        branch: 'feat/tab-bar',
+      }),
+      makePane({
+        id: 2,
+        position: 1,
+        title: 'Review the page guides',
+        status: 'waiting_permission',
+        detail: 'claude wants to edit guide-dot.tsx',
+        progress: { done: 2, total: 4 },
+        model_seen: 'claude-sonnet-5',
+        branch: 'feat/page-guides',
+      }),
+      makePane({ id: 3, position: 2, cli: 'shell', title: 'zsh', branch: 'feat/tab-bar' }),
+      makePane({
+        id: 4,
+        tab_id: 2,
+        cli: 'codex',
+        cwd: '/Users/example/code/notes',
+        title: "This week's merges",
+        progress: { done: 1, total: 1 },
+        model_seen: 'gpt-5-codex',
+        branch: 'main',
+      }),
+    ],
+    [
+      { id: 1, name: 'ply' },
+      { id: 2, name: 'notes' },
+    ],
+  );
+}
+
+function mount(store: Store) {
+  const root = createTestRoot({ width: 1440, height: 900 });
+  root.render(<App store={store} />);
+  return root;
+}
+
 describe.if(hasNativeTestRenderer)('App', () => {
-  test('paints the empty shell with the wordmark', () => {
-    const { render, renderer, unmount } = createTestRoot({ width: 1280, height: 800 });
+  test('paints the main screen of the canvas: bar, tabs, needs-you pill, panes and footer', () => {
+    const store = createStore(canvasState());
+    const { renderer, unmount } = mount(store);
     try {
-      render(<App />);
-      renderer.flush();
-      expect(renderer.getAllText()).toContain('ply');
-      const shot = process.env.PLY_SCREENSHOT;
-      if (shot) renderer.captureScreenshot(shot);
+      const text = renderer.getAllText();
+      for (const s of [
+        'ply',
+        'notes',
+        '1 needs you',
+        'Search or run a command',
+        'Commands',
+        'Terminal here',
+      ]) {
+        expect(text).toContain(s);
+      }
+      expect(text).toContain('2 claude · 1 codex · 1 zsh');
+      const bar = renderer.findByTestId('top-bar');
+      expect(bar && renderer.getElementBounds(bar.id)?.height).toBe(52);
+      const footer = renderer.findByTestId('statusbar');
+      expect(footer && renderer.getElementBounds(footer.id)?.height).toBe(36);
+      shot(renderer, 'main');
+    } finally {
+      unmount();
+    }
+  });
+
+  test('clicking the needs-you pill focuses the waiting pane', () => {
+    const store = createStore(canvasState());
+    const { renderer, unmount } = mount(store);
+    try {
+      const pill = renderer.findByTestId('needs-you');
+      const b = pill && renderer.getElementBounds(pill.id);
+      if (!b) throw new Error('pill did not paint');
+      renderer.nativeSimulateClick(b.x + b.width / 2, b.y + b.height / 2);
+      expect(store.getState().tabs[0]?.focus_pane_id).toBe(2);
     } finally {
       unmount();
     }
