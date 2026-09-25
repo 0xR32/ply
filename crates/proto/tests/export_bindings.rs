@@ -19,8 +19,8 @@ use ply_proto::control::{
 };
 use ply_proto::hook::HookEnvelope;
 use ply_proto::pane::{
-    AccentName, AgentCli, Cli, Layout, MAX_PANES_PER_TAB, OptionAsMeta, Pane, PaneStatus, Progress,
-    Rgb, Session, Settings, Tab, TerminalTheme, Workspace,
+    AccentName, AgentCli, Cli, CliUsage, Layout, MAX_PANES_PER_TAB, OptionAsMeta, Pane, PaneStatus,
+    Progress, Rgb, Session, Settings, Tab, TerminalTheme, Usage, UsageWindow, Workspace,
 };
 use ply_proto::{C2_VERSION, HOOK_VERSION, PROTOCOL_VERSION};
 use ts_rs::{Config, TS};
@@ -64,6 +64,9 @@ fn generate() -> String {
         decl::<AccentName>(&cfg),
         decl::<OptionAsMeta>(&cfg),
         decl::<Settings>(&cfg),
+        decl::<Usage>(&cfg),
+        decl::<CliUsage>(&cfg),
+        decl::<UsageWindow>(&cfg),
         decl::<ClientMsg>(&cfg),
         decl::<ServerMsg>(&cfg),
         decl::<Hello>(&cfg),
@@ -241,6 +244,7 @@ fn method_table_matches_call() {
             settings: Settings::default(),
         }),
         Call::DaemonShutdown(DaemonShutdownParams { kill_panes: false }),
+        Call::UsageGet(Empty {}),
     ];
     let from_calls: Vec<&str> = calls.iter().map(Call::method).collect();
     assert_eq!(names, from_calls);

@@ -350,6 +350,64 @@ export type Settings = {
 };
 
 /**
+ * What `usage.get` returns (Ruling R59): each CLI's plan usage as its own local files last recorded it.
+ */
+export type Usage = {
+  /**
+   * Claude Code's, from the usage cache in its `.claude.json`; absent when there is none.
+   */
+  claude?: CliUsage;
+  /**
+   * Codex's, from the rate limits its newest rollouts recorded; absent when there are none.
+   */
+  codex?: CliUsage;
+};
+
+/**
+ * One CLI's plan usage, as recorded at `as_of`; the numbers are the CLI's, never computed by ply.
+ */
+export type CliUsage = {
+  /**
+   * When the CLI recorded these numbers; they may be hours old.
+   */
+  as_of: number;
+  /**
+   * The plan as the CLI names it (Codex's `plan_type`), when it records one.
+   */
+  plan?: string;
+  /**
+   * The limit windows, never empty: shortest first, the all-models window before per-model ones of equal length.
+   */
+  windows: Array<UsageWindow>;
+};
+
+/**
+ * One rate-limit window: how much of it is used and when it starts over.
+ */
+export type UsageWindow = {
+  /**
+   * What the window is, for display: `"Session · 5h"`, `"Week · all models"`, `"Week · Opus"`, `"Week"`, `"2 d"`.
+   */
+  label: string;
+  /**
+   * Length of the window in minutes (300 is the 5-hour session, 10 080 the week), when known.
+   */
+  window_minutes?: number;
+  /**
+   * Percent of the limit used, 0–100 (more when the CLI reports an overrun).
+   */
+  used_percent: number;
+  /**
+   * When the window starts over; may already be past when the record is old.
+   */
+  resets_at?: number;
+  /**
+   * The models the sessions behind this record used, sorted (Codex's `turn_context.model`); empty when unknown.
+   */
+  models: Array<string>;
+};
+
+/**
  * Messages from the app to plyd, tagged by `"t"`.
  */
 export type ClientMsg = ({ t: 'hello' } & Hello) | ({ t: 'req' } & Request);
@@ -417,6 +475,7 @@ export type Request = {
   | { m: 'settings.get'; p: Empty }
   | { m: 'settings.set'; p: SettingsSetParams }
   | { m: 'daemon.shutdown'; p: DaemonShutdownParams }
+  | { m: 'usage.get'; p: Empty }
 );
 
 /**
@@ -436,7 +495,8 @@ export type Call =
   | { m: 'layout.save'; p: LayoutSaveParams }
   | { m: 'settings.get'; p: Empty }
   | { m: 'settings.set'; p: SettingsSetParams }
-  | { m: 'daemon.shutdown'; p: DaemonShutdownParams };
+  | { m: 'daemon.shutdown'; p: DaemonShutdownParams }
+  | { m: 'usage.get'; p: Empty };
 
 /**
  * The answer to a request: `{"t":"res","id","ok":true,"r":…}` or `{"t":"res","id","ok":false,"err":{…}}`.
@@ -800,6 +860,7 @@ export type Methods = {
   'settings.get': { params: Empty; result: Settings };
   'settings.set': { params: SettingsSetParams; result: Empty };
   'daemon.shutdown': { params: DaemonShutdownParams; result: Empty };
+  'usage.get': { params: Empty; result: Usage };
 };
 
 /** A C1 method name. */

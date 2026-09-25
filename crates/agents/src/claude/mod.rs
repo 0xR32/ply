@@ -2,6 +2,7 @@
 
 pub mod progress;
 pub mod settings;
+pub mod usage;
 
 use std::path::Path;
 use std::time::Duration;

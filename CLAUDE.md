@@ -22,9 +22,9 @@ map. `docs/` has one document per subject (see the doc map below).
 |---|---|
 | the app | `app/` — Bun + React on GPUIX (`@gpuix/react` and `@gpuix/native` 0.10.0 from npm, used as released). `app/src/main.tsx` is the entry, `app/src/theme/tokens.ts` the only palette |
 | the terminal view | `app/src/terminal/` (C2 codec, replica, runs, input, selection) and `app/src/features/panes/terminal-view.tsx` |
-| the daemon | `crates/daemon` (`plyd`): ptys, one libghostty-vt terminal per pane, the C1 and C2 servers, SQLite, the LaunchAgent |
+| the daemon | `crates/daemon` (`plyd`): ptys, one libghostty-vt terminal per pane, the C1 and C2 servers, SQLite, the LaunchAgent, `usage.get` (the CLIs' own usage records, read-only) |
 | the terminal engine | `crates/term` (`ply-term`) over `crates/ghostty-sys`, whose `build.rs` downloads pristine ghostty 44f2a44 (SHA-256-verified) and builds libghostty-vt from it with Zig |
-| the agent adapters | `crates/agents` (`ply-agents`): launch specs, the Claude hooks file, hook/notify/OSC 9/rollout parsing, progress, the version check |
+| the agent adapters | `crates/agents` (`ply-agents`): launch specs, the Claude hooks file, hook/notify/OSC 9/rollout parsing, progress, the version check, the plan-usage parsers |
 | the hook helper | `crates/hook` (`ply-hook`): one hook or notify payload → one C3 line to plyd |
 | the wire types | `crates/proto` (`ply-proto`): C1, C2, C3; `app/src/ipc/proto.gen.ts` is generated from it |
 | the gates | `scripts/check-rules.ts` (the invariants and layers), `scripts/check-deps.ts` + `deps.allow.toml` (dependency admission), `deny.toml` |

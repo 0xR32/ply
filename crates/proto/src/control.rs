@@ -2,8 +2,8 @@
 //!
 //! The app sends [`ClientMsg`] (`hello` first, then `req`); plyd answers with [`ServerMsg`] (`welcome`, `res`,
 //! `evt`). Every struct rejects unknown fields (INV-10). Requests carry a method name in `m` and its params in
-//! `p`; [`Call`] lists every method of the 4.1 table plus ADR-0009's additions, and [`METHODS`] names the result
-//! type of each. No type here carries pty bytes (INV-2).
+//! `p`; [`Call`] lists every method of the 4.1 table plus ADR-0009's additions and Ruling R59's `usage.get`, and
+//! [`METHODS`] names the result type of each. No type here carries pty bytes (INV-2).
 //!
 //! ```
 //! use ply_proto::control::{Call, ClientMsg, PaneCloseParams, Request};
@@ -399,6 +399,9 @@ pub enum Call {
     /// `daemon.shutdown` → `{}`, sent before plyd emits `daemon.stopping` and exits.
     #[serde(rename = "daemon.shutdown")]
     DaemonShutdown(DaemonShutdownParams),
+    /// `usage.get` → [`crate::pane::Usage`]: the CLIs' plan usage from their own local files, read-only (Ruling R59).
+    #[serde(rename = "usage.get")]
+    UsageGet(Empty),
 }
 
 impl Call {
@@ -419,6 +422,7 @@ impl Call {
             Self::SettingsGet(_) => "settings.get",
             Self::SettingsSet(_) => "settings.set",
             Self::DaemonShutdown(_) => "daemon.shutdown",
+            Self::UsageGet(_) => "usage.get",
         }
     }
 }
@@ -505,6 +509,11 @@ pub const METHODS: &[MethodInfo] = &[
         name: "daemon.shutdown",
         params: "DaemonShutdownParams",
         result: "Empty",
+    },
+    MethodInfo {
+        name: "usage.get",
+        params: "Empty",
+        result: "Usage",
     },
 ];
 

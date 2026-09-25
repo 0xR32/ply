@@ -17,7 +17,7 @@ use ply_proto::data::{
     Style, StyleEntry, Underline, kind,
 };
 use ply_proto::hook::HookEnvelope;
-use ply_proto::pane::{Layout, Pane, Session, Settings, Workspace};
+use ply_proto::pane::{Layout, Pane, Session, Settings, Usage, Workspace};
 use ply_proto::{C2_VERSION, Error, PROTOCOL_VERSION, version};
 use serde_json::Value;
 
@@ -123,6 +123,7 @@ fn c1_goldens_cover_every_method_and_event() {
         "res.ok.pane.json",
         "res.err.json",
         "res.err.tab_full.json",
+        "res.ok.usage.json",
     ] {
         assert!(names.contains(n), "no golden {n}");
     }
@@ -147,10 +148,36 @@ fn c1_results_decode_into_their_method_types() {
         result_of::<Vec<Session>>(&read("res.ok.sessions.json")),
         result_of::<Layout>(&read("res.ok.layout.json")),
         result_of::<Settings>(&read("res.ok.settings.json")),
+        result_of::<Usage>(&read("res.ok.usage.json")),
+        result_of::<Usage>(&read("res.ok.usage.none.json")),
         result_of::<control::Empty>(&read("res.ok.empty.json")),
     ];
     for (typed, raw) in pairs {
         assert_eq!(typed, raw);
+    }
+}
+
+#[test]
+fn c1_usage_rejects_unknown_fields_at_every_level() {
+    let ServerMsg::Res(Response { outcome: Ok(r), .. }) = decode_line::<ServerMsg>(
+        &std::fs::read(golden_dir("c1").join("res.ok.usage.json")).unwrap(),
+    )
+    .unwrap() else {
+        panic!("not a successful response");
+    };
+    let usage: Usage = serde_json::from_value(r.clone()).unwrap();
+    assert_eq!(usage.claude.as_ref().map(|c| c.windows.len()), Some(3));
+    let pointers = ["", "/claude", "/claude/windows/0", "/codex/windows/0"];
+    for pointer in pointers {
+        let mut v = r.clone();
+        let Some(Value::Object(map)) = v.pointer_mut(pointer) else {
+            panic!("no object at {pointer}");
+        };
+        map.insert("account_uuid".to_owned(), Value::Bool(true));
+        assert!(
+            serde_json::from_value::<Usage>(v).is_err(),
+            "an unknown field at {pointer:?} was accepted"
+        );
     }
 }
 

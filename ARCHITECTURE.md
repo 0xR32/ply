@@ -5,7 +5,7 @@ ply is three processes and three pieces of wire:
 | Piece | Where | Talks to |
 |---|---|---|
 | the app | `app/` (TypeScript, React on GPUIX from npm) | plyd over C1 (`run/plyd.sock`) and C2 (`run/data.sock`); nothing else |
-| `plyd`, the daemon | `crates/daemon` (Rust, tokio) over `crates/term`, `crates/agents`, `crates/proto` | the app over C1 and C2; every pane's child process over its pty; `ply-hook` over C3 (`run/hook.sock`); Codex rollout files on disk |
+| `plyd`, the daemon | `crates/daemon` (Rust, tokio) over `crates/term`, `crates/agents`, `crates/proto` | the app over C1 and C2; every pane's child process over its pty; `ply-hook` over C3 (`run/hook.sock`); Codex rollout files and Claude Code's usage cache on disk, read-only |
 | `ply-hook` | `crates/hook` (std + serde_json) | plyd over C3, once per hook or notify invocation |
 | the agents | the user's own `claude` and `codex`, found on the login-shell `PATH` | their pty; `ply-hook` through the hooks and notify program ply passes per invocation |
 
@@ -21,14 +21,16 @@ sessions") stops a process, and a rebuilt plyd replaces the running one after
 ply makes no network request (INV-1). It never calls a model, holds a key,
 rewrites a prompt or picks a model; everything it knows about a session comes
 from the CLI's own hooks, notify payloads, OSC 9 notifications and Codex's
-rollout files.
+rollout files, and the plan usage ⌘U shows is what the CLIs last recorded on
+disk (`usage.get`).
 
 ## Three boundaries
 
 **C1, control: app ⇄ plyd.** JSON lines over `run/plyd.sock`, at most 1 MiB a
 line, `#[serde(deny_unknown_fields)]` on every struct, `PROTOCOL_VERSION = 1`
 checked at `hello`. Requests carry an id and a method (`workspace.*`, `pane.*`,
-`session.list`, `theme.set`, `layout.*`, `settings.*`, `daemon.shutdown`);
+`session.list`, `theme.set`, `layout.*`, `settings.*`, `daemon.shutdown`,
+`usage.get`);
 plyd broadcasts events (`pane.added`, `pane.removed`, `pane.status`,
 `pane.progress`, `pane.meta`, `pane.exit`, `daemon.stopping`) to every client.
 The Rust types in `crates/proto/src/control.rs` and `pane.rs` are the single
@@ -65,7 +67,8 @@ notification callback) and through its rollout JSONL files (tailed by offset).
 crates/proto/src
 ├── lib.rs           the three protocols and their versions
 ├── control.rs       C1: ClientMsg, ServerMsg, every request and event, ErrorCode, MAX_LINE_BYTES
-├── pane.rs          Pane, PaneStatus, Progress, Workspace, Tab, Layout, Session, TerminalTheme, Settings
+├── pane.rs          Pane, PaneStatus, Progress, Workspace, Tab, Layout, Session, TerminalTheme, Settings,
+│                    Usage (the CLIs' plan usage)
 ├── data.rs          C2: Frame, the hand-written little-endian codec, FrameReader, cells, styles, input payloads
 ├── hook.rs          C3: HookEnvelope
 └── version.rs       PROTOCOL_VERSION, C2_VERSION, HOOK_VERSION and the one comparison
@@ -83,10 +86,12 @@ crates/term/src      (feature `engine` = plyd only)
 crates/agents/src
 ├── adapter.rs       Adapter and AgentSession: launch specs and signals, the contract plyd drives
 ├── claude/          mod.rs (launch, hook payloads → signals) · settings.rs (the hooks-only --settings file) ·
-│                    progress.rs (TodoWrite and Task tools)
+│                    progress.rs (TodoWrite and Task tools) · usage.rs (the usage cache in .claude.json)
 ├── codex/           mod.rs (launch, -c overrides, thread binding) · notify.rs · osc9.rs (classification) ·
-│                    rollout.rs (records, update_plan, discovery) · literal.rs (code-mode JS literals)
+│                    rollout.rs (records, update_plan, discovery) · literal.rs (code-mode JS literals) ·
+│                    usage.rs (token_count rate limits)
 ├── install.rs       reads a CLI's version from its install layout without executing it
+├── usage.rs         what both usage parsers share: window labels, RFC 3339 times
 ├── meta.rs · plan.rs · version.rs
 
 crates/hook/src      main.rs: stdin (or Codex's last argv) → one C3 line, 200 ms, exit 0
@@ -100,6 +105,7 @@ crates/daemon/src
 │                    process's session, status machine, progress limit and tailer) · state.rs (the spec 6.3
 │                    machine) · launch.rs (create, resume, restore) · mod.rs
 ├── tail.rs          C4: finding and tailing a Codex pane's rollout
+├── usage.rs         usage.get: the CLIs' plan usage read from their own files, bounded, cached 5 s
 ├── osc.rs · branch.rs   OSC 7/9 and typed input; the git branch label
 ├── publisher.rs     the C2 delivery rules as small clocked state machines
 ├── pty.rs           rustix pty + Command, setsid/TIOCSCTTY in the one audited pre_exec block

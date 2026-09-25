@@ -1,0 +1,58 @@
+{
+  "numStartups": 412,
+  "installMethod": "native",
+  "autoUpdates": false,
+  "theme": "dark",
+  "userID": "0000000000000000000000000000000000000000000000000000000000000000",
+  "oauthAccount": {
+    "accountUuid": "00000000-0000-4000-8000-00000000c1a0",
+    "emailAddress": "example@example.com",
+    "organizationUuid": "00000000-0000-4000-8000-00000000c1a1",
+    "organizationName": "Example"
+  },
+  "projects": {
+    "/Users/example/project": {
+      "allowedTools": [],
+      "history": [{ "display": "an old prompt with \"cachedUsageUtilization\" in it", "pastedContents": {} }],
+      "lastCost": 0.42,
+      "lastSessionId": "00000000-0000-4000-8000-00000000c1a2"
+    }
+  },
+  "cachedUsageUtilization": {
+    "fetchedAtMs": 1790350000123,
+    "accountUuid": "00000000-0000-4000-8000-00000000c1a0",
+    "utilization": {
+      "amber_cistern": { "utilization": 99, "resets_at": "2026-09-25T18:50:00.474957+00:00" },
+      "five_hour": {
+        "utilization": 81,
+        "resets_at": "2026-09-25T18:50:00.474957+00:00",
+        "limit_dollars": null,
+        "used_dollars": null,
+        "remaining_dollars": null,
+        "locked_reason": null
+      },
+      "seven_day": {
+        "utilization": 30,
+        "resets_at": "2026-09-26T08:00:00.474985+00:00",
+        "limit_dollars": null,
+        "used_dollars": null,
+        "remaining_dollars": null,
+        "locked_reason": null
+      },
+      "seven_day_breakdown": { "utilization": 55 },
+      "seven_day_oauth_apps": null,
+      "seven_day_opus": null,
+      "seven_day_sonnet": { "utilization": 104, "resets_at": "2026-09-26T08:00:00.474985+00:00" },
+      "limits": [],
+      "spend": { "utilization": 7 },
+      "extra_usage": {
+        "is_enabled": false,
+        "monthly_limit": null,
+        "used_credits": null,
+        "utilization": null,
+        "currency": null
+      }
+    }
+  },
+  "hasCompletedOnboarding": true
+}

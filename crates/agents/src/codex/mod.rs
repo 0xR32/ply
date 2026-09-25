@@ -4,6 +4,7 @@ mod literal;
 pub mod notify;
 pub mod osc9;
 pub mod rollout;
+pub mod usage;
 
 use std::path::Path;
 use std::time::Duration;

@@ -18,6 +18,7 @@
 //! the engine ([`osc`]), and each pane task drives the spec 6.3 state machine ([`panes::state`]) through its agent
 //! integration ([`panes::agent`]) into `pane.status`, `pane.progress` and `pane.meta`, with a branch label from git
 //! ([`branch`]). After a restart, panes whose process is gone are `lost`, and `pane.resume` brings them back (WP9).
+//! `usage.get` answers with the plan usage the CLIs recorded in their own files ([`usage`], Ruling R59), read-only.
 //!
 //! ```no_run
 //! # async fn start() -> Result<(), ply_daemon::Error> {
@@ -53,5 +54,6 @@ pub mod publisher;
 pub mod replay;
 pub mod server;
 pub mod tail;
+pub mod usage;
 
 pub use error::{Error, Result};

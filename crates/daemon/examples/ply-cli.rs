@@ -10,6 +10,7 @@
 //! cargo run -p ply-daemon --example ply-cli -- type 3 '/exit\r'  # type into pane 3 (\r, \n and \e are escapes)
 //! cargo run -p ply-daemon --example ply-cli -- answer 3 no    # pane.answer: refuse pane 3's dialog (ESC)
 //! cargo run -p ply-daemon --example ply-cli -- close 3        # pane.close {kill:true}
+//! cargo run -p ply-daemon --example ply-cli -- usage          # usage.get: the CLIs' plan usage as JSON
 //! ```
 //!
 //! It talks to the plyd of `PLY_HOME` (else the installed one). Attaching resizes the pane to the client's size, as
@@ -42,6 +43,7 @@ fn main() -> ExitCode {
     {
         ["demo"] => demo(),
         ["list"] => list(),
+        ["usage"] => usage(),
         ["screen", id] => pane_id(id).and_then(screen),
         ["create", cli, cwd] => create(cli, cwd, None),
         ["create", cli, cwd, prompt] => create(cli, cwd, Some(prompt)),
@@ -57,7 +59,7 @@ fn main() -> ExitCode {
             pane_id(id).and_then(|id| simple("pane.close", json!({"pane_id": id, "kill": true})))
         }
         _ => Err(
-            "usage: ply-cli demo | list | screen <pane> | create <cli> <cwd> [prompt] | watch <secs> | type <pane> <text> | answer <pane> <yes|no> | close <pane>"
+            "usage: ply-cli demo | list | screen <pane> | create <cli> <cwd> [prompt] | watch <secs> | type <pane> <text> | answer <pane> <yes|no> | close <pane> | usage"
                 .into(),
         ),
     };
@@ -214,6 +216,13 @@ fn list() -> Result<bool> {
             );
         }
     }
+    Ok(true)
+}
+
+fn usage() -> Result<bool> {
+    let mut c = Control::connect(&paths()?.control_socket())?;
+    let usage = call(&mut c, "usage.get", json!({}))?;
+    println!("{}", serde_json::to_string_pretty(&usage)?);
     Ok(true)
 }
 

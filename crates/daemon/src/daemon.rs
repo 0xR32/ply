@@ -33,6 +33,7 @@ use crate::paths::Paths;
 use crate::power::KeepAwake;
 use crate::pty::Geometry;
 use crate::server::{control, data, hooks};
+use crate::usage::UsageCache;
 
 /// C1 events buffered per connected client before a slow one is dropped.
 pub const EVENT_CAPACITY: usize = 1024;
@@ -75,6 +76,8 @@ pub struct Shared {
     pub events: broadcast::Sender<Event>,
     /// The terminal palette; `None` until the first `theme.set` (or a stored one).
     pub palette: watch::Sender<Option<Palette>>,
+    /// The last `usage.get` answer, reused for a few seconds.
+    pub usage: UsageCache,
     registry: Mutex<Registry>,
     geometry: Mutex<Geometry>,
     power: KeepAwake,
@@ -216,6 +219,7 @@ pub async fn run(options: Options) -> Result<()> {
         hook_program: options.hook_program,
         events,
         palette: watch::Sender::new(palette),
+        usage: UsageCache::default(),
         registry: Mutex::new(registry),
         geometry: Mutex::new(DEFAULT_GEOMETRY),
         power: KeepAwake::new(options.keep_awake),

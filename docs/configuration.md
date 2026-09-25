@@ -111,7 +111,8 @@ set them in the file with plyd stopped, or with `settings.set`.
 | `CODEX_HOME`, `CLAUDE_CONFIG_DIR`, `HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY`, `ALL_PROXY` (and `http_proxy`, `https_proxy`, `no_proxy`, `all_proxy`), `SSL_CERT_FILE`, `SSL_CERT_DIR`, `NODE_EXTRA_CA_CERTS`, `LANG`, `LC_ALL`, `LC_CTYPE` | the login-shell probe, then every pane | Ruling R52: when the login shell (its rc files included) exports one of these, every pane gets that value, as in a terminal; plyd's own value goes into the probe and is kept when the shell does not change it, or when no shell answers. No other variable is read from the shell, so an API key an rc file exports never reaches plyd or a pane. The log names the variables taken (`crates/daemon/src/login.rs`, `CAPTURED`). |
 | `LANG`, `LC_*`, `TMPDIR`, `LOGNAME`, `SSH_AUTH_SOCK`, `__CF_USER_TEXT_ENCODING` | plyd | Passed through to every pane when set (the login shell's `LANG`, `LC_ALL` and `LC_CTYPE` win, above); `LANG` defaults to `en_US.UTF-8`. |
 | `NODE_ENV` | the app | `test` (set by `bun test`) keeps the log in memory instead of a file, and gives terminal views an inert host that never opens a socket or touches the pasteboard. |
-| `CODEX_HOME` | Codex, plyd | Where Codex keeps its rollouts (`$CODEX_HOME/sessions/`, default `~/.codex`). plyd follows a Codex pane's rollouts under the `CODEX_HOME` that pane runs with, the login shell's when it exports one (above). Tests that run a CLI sandbox it together with `HOME`. |
+| `CODEX_HOME` | Codex, plyd | Where Codex keeps its rollouts (`$CODEX_HOME/sessions/`, default `~/.codex`). plyd follows a Codex pane's rollouts under the `CODEX_HOME` that pane runs with, the login shell's when it exports one (above), and reads the rate limits in the newest of them for ⌘U's usage view. Tests that run a CLI sandbox it together with `HOME`. |
+| `CLAUDE_CONFIG_DIR` | Claude Code, plyd | Where Claude Code keeps its configuration, `.claude.json` included (default: `~/.claude.json` in the home directory). plyd reads the plan-usage cache in that `.claude.json` for ⌘U's usage view, from the login shell's value when it exports one (above). |
 
 **Set by plyd for panes** (`docs/agents.md`): `TERM=xterm-256color` and
 `COLORTERM=truecolor` for every pane, `SHELL` and the login `PATH`;
@@ -245,6 +246,11 @@ holds it.
   uses the system font and the terminal Menlo. The TTFs, under the SIL Open Font
   Licence, are in `app/assets/fonts/`; `just fonts` copies them into
   `~/Library/Fonts`, the one thing it writes.
+- While ⌘U is held, plyd reads, at most once every 5 s, Claude Code's
+  `.claude.json` and the ends of Codex's 20 most recently written rollouts
+  (8 MiB at most) for the usage view: the CLIs' own local records of their plan
+  usage, read-only, kept in memory for 5 s, never written and never sent
+  anywhere (`docs/agents.md`, **Plan usage**).
 - ply makes no network request while it runs (INV-1).
 
 ### Building

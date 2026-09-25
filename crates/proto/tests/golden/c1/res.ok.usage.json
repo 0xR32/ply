@@ -1,0 +1,48 @@
+{
+  "t": "res",
+  "id": 15,
+  "ok": true,
+  "r": {
+    "claude": {
+      "as_of": 1790350000,
+      "windows": [
+        {
+          "label": "Session · 5h",
+          "window_minutes": 300,
+          "used_percent": 81.0,
+          "resets_at": 1790362200,
+          "models": []
+        },
+        {
+          "label": "Week · all models",
+          "window_minutes": 10080,
+          "used_percent": 30.0,
+          "resets_at": 1790409600,
+          "models": []
+        },
+        {
+          "label": "Week · Opus",
+          "window_minutes": 10080,
+          "used_percent": 12.5,
+          "models": []
+        }
+      ]
+    },
+    "codex": {
+      "as_of": 1790349260,
+      "plan": "plus",
+      "windows": [
+        {
+          "label": "Week",
+          "window_minutes": 10080,
+          "used_percent": 14.0,
+          "resets_at": 1790926095,
+          "models": [
+            "gpt-6-astra",
+            "gpt-6-sol"
+          ]
+        }
+      ]
+    }
+  }
+}

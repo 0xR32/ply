@@ -82,9 +82,10 @@ below 2^53, so a JavaScript number holds them. Times are Unix seconds, UTC.
    ```
 
 The rule is equality, not "at least". Version 1 is frozen; a change to any
-message bumps it, with one exception: `pane.answer`'s R55 field, whose mismatch
-`deny_unknown_fields` already turns into `bad_request` (see there). The client
-checks `welcome.v` the same way.
+message bumps it, with two exceptions whose mismatch is already loud:
+`pane.answer`'s R55 field, which `deny_unknown_fields` turns into `bad_request`
+(see there), and the `usage.get` method (Ruling R59), which a plyd from before
+answers `unknown_method`. The client checks `welcome.v` the same way.
 
 Anything else as the first line also ends the connection: a `req` is answered
 `bad_request` ("send hello first") on its own id, and an unreadable line is
@@ -147,9 +148,11 @@ the results are made of are under **Records**.
 | `settings.get` | `{}` | `Settings` |
 | `settings.set` | `{settings}` | `{}` |
 | `daemon.shutdown` | `{kill_panes}` | `{}` |
+| `usage.get` | `{}` | `Usage` |
 
 The implementations are `crates/daemon/src/server/control.rs` (`dispatch`),
-`crates/daemon/src/panes/launch.rs` and `crates/daemon/src/panes/registry.rs`.
+`crates/daemon/src/panes/launch.rs`, `crates/daemon/src/panes/registry.rs` and
+`crates/daemon/src/usage.rs`.
 
 ### `workspace.list`
 
@@ -324,6 +327,19 @@ resumed); "Quit ply and stop sessions" asks first, sends `kill_panes: true`
 and quits the app once the answer arrives (or at once when plyd is not
 connected).
 
+### `usage.get`
+
+The plan usage Claude Code and Codex last recorded in their own local files
+(Ruling R59), for the app's hold-⌘U view. plyd reads, on a blocking thread and
+never writing them (INV-8), Claude Code's `.claude.json` (in `CLAUDE_CONFIG_DIR`
+when the login shell sets it, else the home directory) and the ends of Codex's
+20 most recently written rollouts under `$CODEX_HOME/sessions/` (8 MiB at
+most); it makes no request (INV-1), so every number is as old as the CLI's last
+report and `as_of` says how old. A CLI with nothing readable is absent, so
+`{}` means neither has recorded any usage; that is never an error. An answer
+is reused for 5 s. `docs/agents.md` (**Plan usage**) has what is read from
+each file.
+
 ## Events
 
 ```
@@ -400,6 +416,23 @@ created_at, closed_at?, last_activity_at?}`.
 | `font_size` | f32, points | 12.5 |
 
 `docs/configuration.md` says what each one does.
+
+**`Usage`** — `{claude?, codex?}`, each a `CliUsage`; an absent CLI recorded
+no usage ply can read.
+
+**`CliUsage`** — `{as_of, plan?, windows}`: when the CLI recorded the numbers
+(Unix seconds), the plan as the CLI names it (Codex's `plan_type`; Claude Code
+records none), and the windows, never empty, shortest first.
+
+**`UsageWindow`** — one rate-limit window:
+
+| Field | Type | Meaning |
+|---|---|---|
+| `label` | string | What it is: `Session · 5h`, `Week · all models`, `Week · Opus`, `Week · Sonnet` (Claude Code); `Session · 5h`, `Week` or the window's length such as `2 d`, followed by the limit's name for a limit other than Codex's general one. |
+| `window_minutes` | u32, optional | 300 for the 5-hour session, 10 080 for the week. |
+| `used_percent` | f64 | Percent used as the CLI reported it; more than 100 when it reported an overrun. |
+| `resets_at` | u64, optional | When the window starts over; already past when the record is older than the window. |
+| `models` | string[] | The models the Codex turns behind the record ran on, sorted; empty for Claude Code. |
 
 **`TerminalTheme`** (the `palette` of `theme.set`) — camelCase keys, colours as
 `"#RRGGBB"` strings (either case read, upper case written):
@@ -557,7 +590,8 @@ are allowed for those two pairs.
   `c1_unknown_fields_are_rejected_everywhere`,
   `c1_unknown_method_and_bad_params_keep_the_id`,
   `c1_invalid_values_are_rejected`, `c1_line_cap_is_enforced`,
-  `c1_version_mismatch_is_detectable`, `c1_types_carry_no_pty_bytes`.
+  `c1_version_mismatch_is_detectable`, `c1_types_carry_no_pty_bytes`,
+  `c1_usage_rejects_unknown_fields_at_every_level`.
 - `crates/daemon/tests/lifecycle.rs` against a real plyd:
   `handshakes_check_versions_and_panes`,
   `a_live_pane_closes_only_with_kill_and_its_session_is_kept`,
@@ -565,6 +599,11 @@ are allowed for those two pairs.
   `a_restart_reopens_a_shell_by_itself_and_keeps_the_settings`,
   `an_unwritable_config_toml_is_reported_but_the_palette_and_settings_still_apply`,
   `a_second_plyd_refuses_to_start`.
+- `crates/daemon/tests/usage.rs` against a real plyd in a sandboxed home:
+  `usage_comes_from_the_clis_files_which_stay_untouched`,
+  `claude_config_dir_moves_the_cache_and_nothing_is_no_usage`; the readers'
+  bounds in `crates/daemon/src/usage.rs` and the parsers in
+  `crates/agents/tests/usage.rs`.
 - `crates/daemon/src/panes/registry.rs` unit tests (layout, closing, event
   order) and `crates/daemon/src/server/control.rs`
   (`lines_are_capped_and_split_at_newlines`).

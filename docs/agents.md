@@ -530,10 +530,48 @@ When none of them is there the version is unknown, plyd logs a warning and
 launches anyway. The adapters also name a `--version` probe
 (`version_probe_args`) as a last resort, but plyd does not run it.
 
+## Plan usage
+
+Holding ⌘U shows each CLI's plan usage (`usage.get`, Ruling R59). ply computes
+none of it and asks no server: it shows what the CLIs themselves last recorded
+on disk, with its age, and reads those files without ever writing them
+(`crates/daemon/src/usage.rs`; the parsers are
+`crates/agents/src/claude/usage.rs` and `crates/agents/src/codex/usage.rs`).
+
+- **Claude Code** caches the usage it fetches in `.claude.json`
+  (`$CLAUDE_CONFIG_DIR/.claude.json` when the login shell exports
+  `CLAUDE_CONFIG_DIR`, else `~/.claude.json`) under `cachedUsageUtilization`:
+  `{fetchedAtMs, accountUuid, utilization: {five_hour, seven_day,
+  seven_day_opus, seven_day_sonnet, …}}`, each window `{utilization (percent),
+  resets_at (RFC 3339)}`. ply takes those four windows when they hold a number
+  — "Session · 5h", "Week · all models", "Week · Opus", "Week · Sonnet" — and
+  `fetchedAtMs` as their age. It never reads the account id or any of the
+  other keys (there are many, under internal code names). The cache is Claude
+  Code's internal state, not a published format: a window that is missing,
+  `null` or renamed is left out, and a cache without `fetchedAtMs` or any
+  readable window counts as none, so a change in a Claude Code release makes
+  the view show less, never fail. plyd parses the whole file (64 MiB at most)
+  and keeps only that object.
+- **Codex** records the account's rate limits in every `token_count`
+  `event_msg` of its rollouts: `rate_limits: {limit_id, limit_name, primary,
+  secondary, plan_type, …}`, each window `{used_percent, window_minutes,
+  resets_at (Unix seconds)}` (`resets_in_seconds` is read too). plyd reads the
+  20 most recently written rollouts from their ends — at most 2 MiB of each and
+  8 MiB in all, a line over 1 MiB skipped — takes each file's newest record and
+  the model of the turn behind it (`turn_context.model`), and keeps the newest
+  record per `limit_id` with every model seen with it. 300 minutes is "Session ·
+  5h", 10 080 "Week", any other window is named by its length ("2 d"), and a
+  limit other than `codex` adds its name. `plan_type` and the age come from the
+  newest record.
+
+An answer is reused for 5 s. A CLI with no readable record is simply absent,
+and the view says "No usage recorded yet".
+
 ## What ply never does to the user's configuration
 
 ply never writes `~/.claude/settings.json`, `~/.claude.json` or
-`~/.codex/config.toml` (INV-8). Everything it configures is per invocation:
+`~/.codex/config.toml` (INV-8); it reads `~/.claude.json` only for the usage
+cache above. Everything it configures is per invocation:
 Claude Code's `--settings` file lives in ply's own `run/panes/<id>/`, and
 Codex's options are `-c` arguments. ply never passes a permission-skipping flag,
 never installs, updates or signs in either CLI, and adds no hook to the user's
@@ -594,6 +632,12 @@ terminal and the CLI repaints it.
   `update_plan` shapes, turn events, the tailer's pre-filter, discovery, the
   R28 binding flow and the R49 rebinding), `codex_osc9.rs` (the prefix table
   and the observed bodies).
+- `crates/agents/tests/usage.rs`: the scrubbed `tests/fixtures/claude/dot-claude.json`
+  and the synthetic `rollout-usage-*.jsonl` beside the S3b captures (the four
+  windows and nothing else, tolerant parsing, the newest record per limit and
+  its models); `crates/daemon/src/usage.rs` (the sources, the bounded
+  tail-first reading, missing and malformed files, the 5 s cache) and
+  `crates/daemon/tests/usage.rs` (a real plyd, files unchanged).
 - `crates/hook/tests/hook.rs`: the C3 line, the payload byte for byte, INV-12
   (plyd down, stdin held open, a listener that never reads) and INV-14 (stdout
   and stderr empty on fourteen bad paths).

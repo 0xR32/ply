@@ -1,4 +1,5 @@
-//! Domain records C1 carries: panes, workspaces, tabs, layouts, sessions, the terminal palette and settings.
+//! Domain records C1 carries: panes, workspaces, tabs, layouts, sessions, the terminal palette, settings and the
+//! CLIs' plan usage.
 
 use std::fmt;
 
@@ -330,4 +331,50 @@ impl Default for Settings {
             font_size: 12.5,
         }
     }
+}
+
+/// What `usage.get` returns (Ruling R59): each CLI's plan usage as its own local files last recorded it.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+#[ts(optional_fields)]
+pub struct Usage {
+    /// Claude Code's, from the usage cache in its `.claude.json`; absent when there is none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub claude: Option<CliUsage>,
+    /// Codex's, from the rate limits its newest rollouts recorded; absent when there are none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub codex: Option<CliUsage>,
+}
+
+/// One CLI's plan usage, as recorded at `as_of`; the numbers are the CLI's, never computed by ply.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+#[ts(optional_fields)]
+pub struct CliUsage {
+    /// When the CLI recorded these numbers; they may be hours old.
+    pub as_of: UnixSeconds,
+    /// The plan as the CLI names it (Codex's `plan_type`), when it records one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan: Option<String>,
+    /// The limit windows, never empty: shortest first, the all-models window before per-model ones of equal length.
+    pub windows: Vec<UsageWindow>,
+}
+
+/// One rate-limit window: how much of it is used and when it starts over.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+#[ts(optional_fields)]
+pub struct UsageWindow {
+    /// What the window is, for display: `"Session · 5h"`, `"Week · all models"`, `"Week · Opus"`, `"Week"`, `"2 d"`.
+    pub label: String,
+    /// Length of the window in minutes (300 is the 5-hour session, 10 080 the week), when known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub window_minutes: Option<u32>,
+    /// Percent of the limit used, 0–100 (more when the CLI reports an overrun).
+    pub used_percent: f64,
+    /// When the window starts over; may already be past when the record is old.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resets_at: Option<UnixSeconds>,
+    /// The models the sessions behind this record used, sorted (Codex's `turn_context.model`); empty when unknown.
+    pub models: Vec<String>,
 }

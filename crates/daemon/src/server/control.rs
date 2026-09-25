@@ -28,6 +28,7 @@ use crate::daemon::{Shared, unix_now};
 use crate::panes::launch;
 use crate::panes::pane::PaneCmd;
 use crate::panes::registry::{internal, is_live, refuse};
+use crate::usage::UsageSources;
 
 /// Responses queued towards one connection's writer.
 pub const RESPONSE_CAPACITY: usize = 64;
@@ -305,6 +306,10 @@ async fn dispatch(shared: &Arc<Shared>, call: Call) -> Result<Value, ErrorBody> 
         Call::SettingsGet(Empty {}) => ok(&shared.registry().settings()),
         Call::SettingsSet(p) => settings_set(shared, p.settings).await,
         Call::DaemonShutdown(_) => ok(&Empty {}),
+        Call::UsageGet(Empty {}) => {
+            let sources = UsageSources::from_env(&shared.login.base);
+            ok(&shared.usage.get(sources).await)
+        }
     }
 }
 
