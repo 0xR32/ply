@@ -138,7 +138,7 @@ measured numbers.
 
 ## Startup
 
-`bun run dev` (or the bundled app) connects to `run/plyd.sock`. If nothing
+`bun run dev` connects to `run/plyd.sock`. If nothing
 answers, `daemon-launcher.ts` starts plyd: with `PLY_HOME` set it runs the
 cargo-built `plyd --foreground` against that directory; without it, it calls
 `plyd install-agent`, which writes `~/Library/LaunchAgents/dev.ply.app.plyd.plist`

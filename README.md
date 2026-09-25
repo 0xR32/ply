@@ -80,7 +80,7 @@ macOS 13 or later on Apple Silicon, with:
   between the app and plyd, byte for byte.
 - [Agents](docs/agents.md): how Claude Code and Codex are launched and tracked, and the status state machine.
 - [Terminal](docs/terminal.md): libghostty-vt, input encoding and the React terminal view.
-- [Keybindings](docs/keybindings.md), [configuration](docs/configuration.md), [packaging](docs/packaging.md).
+- [Keybindings](docs/keybindings.md) and [configuration](docs/configuration.md).
 - [Development guide](docs/development.md): toolchain setup, the run directory and logs, running plyd in the
   foreground, how the gates work, and how to admit a dependency.
 - [Specification](docs/spec.html): the implementation specification the build started from.

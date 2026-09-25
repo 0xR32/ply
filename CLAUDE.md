@@ -119,9 +119,9 @@ object; there is no `<button>` (use `<div onClick>`); never nest `<text>` inside
 `<text>` — adjacent `<text>` siblings merge into one line, which is what the
 terminal rows rely on. Every host node costs about 0.01 ms per frame.
 
-**Fonts.** Geist and Geist Mono are registered by the bundle
-(`ATSApplicationFontsPath`); in `bun run dev` the app falls back to Menlo and the
-system font unless Geist is installed.
+**Fonts.** GPUIX has no font-loading API, so Geist and Geist Mono
+(`app/assets/fonts/`) are used only when installed in `~/Library/Fonts`;
+otherwise the app falls back to Menlo and the system font.
 
 **The comment hook.** A machine-level hook rejects comment blocks longer than one
 line (two with a tracking link). Doc comments state errors and safety inline
@@ -148,14 +148,13 @@ Toolchain: Rust 1.97.1 (`rust-toolchain.toml`), Zig 0.16.0, Bun 1.3.10, just.
 There is no remote; never push. `docs/development.md` walks through setup, the
 run directory and the logs.
 
-## Release
+## Personal use only
 
-`just bundle` builds `Ply.app` (the compiled app, `plyd`, `ply-hook`, the fonts)
-and signs it ad hoc; `.github/workflows/release.yml` carries Developer ID
-signing, notarisation and stapling from repository secrets. Nothing is
-distributed yet: the licence is undecided because gpui depends on the GPL-3.0
-crates `ztracing`, `zlog` and `ztracing_macro`. `docs/packaging.md` is the whole
-of it.
+ply is built and run from this checkout for one person's machine. There is no
+`.app` bundle, no code signing, no release workflow and no distribution, so
+packaging and licensing questions do not arise. Run it with `bun run dev` (or
+`bun app/src/main.tsx`) against a release `plyd` (`cargo build --release -p
+ply-daemon -p ply-hook`).
 
 ## Coding rules
 
@@ -220,7 +219,6 @@ GPUIX's test renderer (`@gpuix/react/testing`) and the mock daemon
 - `docs/terminal.md` — libghostty-vt, the engine options, input encoding, the React terminal view, measured numbers.
 - `docs/keybindings.md` — every binding, the reserved chords, how to add one.
 - `docs/configuration.md` — paths, `config.toml`, settings, environment variables, what a run writes to the machine.
-- `docs/packaging.md` — `Ply.app`, signing, the release workflow.
 - `docs/development.md` — setup, the gates, running plyd and the app, adding a dependency.
 - `docs/spec.html` — the implementation specification the build started from (6.0.0); where it and the code
   disagree, the code and the documents above win.
