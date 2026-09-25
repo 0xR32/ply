@@ -1,0 +1,9 @@
+{
+  "t": "req",
+  "id": 6,
+  "m": "pane.answer",
+  "p": {
+    "pane_id": 2,
+    "choice": 1
+  }
+}

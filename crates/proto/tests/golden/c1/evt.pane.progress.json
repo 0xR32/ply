@@ -1,0 +1,11 @@
+{
+  "t": "evt",
+  "e": "pane.progress",
+  "p": {
+    "pane_id": 2,
+    "progress": {
+      "done": 3,
+      "total": 5
+    }
+  }
+}

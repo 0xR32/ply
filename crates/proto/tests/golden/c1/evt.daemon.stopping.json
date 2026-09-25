@@ -1,0 +1,7 @@
+{
+  "t": "evt",
+  "e": "daemon.stopping",
+  "p": {
+    "kill_panes": true
+  }
+}

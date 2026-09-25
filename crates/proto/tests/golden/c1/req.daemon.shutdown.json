@@ -1,0 +1,8 @@
+{
+  "t": "req",
+  "id": 14,
+  "m": "daemon.shutdown",
+  "p": {
+    "kill_panes": false
+  }
+}

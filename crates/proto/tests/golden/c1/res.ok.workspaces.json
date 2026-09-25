@@ -1,0 +1,13 @@
+{
+  "t": "res",
+  "id": 1,
+  "ok": true,
+  "r": [
+    {
+      "id": 1,
+      "path": "/Users/example",
+      "name": "example",
+      "opened_at": 1790260000
+    }
+  ]
+}

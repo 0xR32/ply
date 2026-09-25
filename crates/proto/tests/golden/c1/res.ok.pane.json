@@ -1,0 +1,27 @@
+{
+  "t": "res",
+  "id": 4,
+  "ok": true,
+  "r": {
+    "id": 2,
+    "workspace_id": 1,
+    "tab_id": 1,
+    "position": 0,
+    "cli": "claude",
+    "cwd": "/Users/example/project",
+    "title": "claude",
+    "status": "running",
+    "detail": "Edit src/main.rs",
+    "progress": {
+      "done": 2,
+      "total": 5,
+      "current": "Write the tests"
+    },
+    "model_seen": "claude-example-model",
+    "worktree_seen": "feature-x",
+    "branch": "worktree-feature-x",
+    "session_ref": "00000000-0000-4000-8000-000000000000",
+    "created_at": 1790276000,
+    "last_activity_at": 1790276042
+  }
+}

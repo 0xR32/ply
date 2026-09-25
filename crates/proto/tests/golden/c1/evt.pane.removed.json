@@ -1,0 +1,7 @@
+{
+  "t": "evt",
+  "e": "pane.removed",
+  "p": {
+    "pane_id": 3
+  }
+}

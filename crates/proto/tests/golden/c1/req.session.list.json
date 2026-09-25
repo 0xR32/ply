@@ -1,0 +1,9 @@
+{
+  "t": "req",
+  "id": 8,
+  "m": "session.list",
+  "p": {
+    "workspace_id": 1,
+    "include_closed": true
+  }
+}

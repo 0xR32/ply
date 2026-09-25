@@ -15,6 +15,7 @@ check:
 
 test:
     cargo nextest run --workspace --locked --no-tests=pass
+    cargo test --doc --workspace --locked
     bun test ./app ./scripts
 
 # Licences, advisories and the INV-1/INV-3 crate bans.

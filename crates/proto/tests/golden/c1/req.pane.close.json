@@ -1,0 +1,9 @@
+{
+  "t": "req",
+  "id": 5,
+  "m": "pane.close",
+  "p": {
+    "pane_id": 2,
+    "kill": true
+  }
+}

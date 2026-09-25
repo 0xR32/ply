@@ -1,0 +1,17 @@
+{
+  "t": "evt",
+  "e": "pane.added",
+  "p": {
+    "id": 3,
+    "workspace_id": 1,
+    "tab_id": 1,
+    "position": 1,
+    "cli": "shell",
+    "cwd": "/Users/example",
+    "title": "zsh",
+    "status": "exited",
+    "exit_code": 0,
+    "created_at": 1790270000,
+    "closed_at": 1790276100
+  }
+}

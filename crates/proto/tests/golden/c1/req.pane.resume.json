@@ -1,0 +1,8 @@
+{
+  "t": "req",
+  "id": 7,
+  "m": "pane.resume",
+  "p": {
+    "pane_id": 2
+  }
+}

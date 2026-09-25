@@ -1,0 +1,15 @@
+{
+  "t": "req",
+  "id": 4,
+  "m": "pane.create",
+  "p": {
+    "workspace_id": 1,
+    "tab_id": 1,
+    "cli": "claude",
+    "cwd": "/Users/example/project",
+    "worktree": {
+      "name": "feature-x"
+    },
+    "prompt": "Explain the build"
+  }
+}

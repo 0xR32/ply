@@ -6,7 +6,7 @@
     "useIgnoreFile": true
   },
   "files": {
-    "includes": ["app/**", "scripts/**", "*.json", "!app/src/ipc/proto.gen.ts"]
+    "includes": ["app/**", "scripts/**", "*.json"]
   },
   "formatter": {
     "enabled": true,

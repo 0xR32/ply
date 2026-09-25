@@ -1,0 +1,14 @@
+{
+  "v": 1,
+  "pane_id": 2,
+  "cli": "claude",
+  "event": "Notification",
+  "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000000",
+    "transcript_path": "/Users/example/.claude/projects/-Users-example-project/00000000-0000-4000-8000-000000000000.jsonl",
+    "cwd": "/Users/example/project",
+    "hook_event_name": "Notification",
+    "message": "Claude needs your permission to use Bash",
+    "notification_type": "permission_prompt"
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "v": 1,
+  "pane_id": 3,
+  "cli": "codex",
+  "payload": {
+    "type": "agent-turn-complete",
+    "thread-id": "00000000-0000-4000-8000-00000000c0de",
+    "turn-id": "00000000-0000-4000-8000-00000000beef",
+    "cwd": "/Users/example/project",
+    "input-messages": [
+      "Explain the build"
+    ],
+    "last-assistant-message": "The build runs cargo, then bun."
+  }
+}

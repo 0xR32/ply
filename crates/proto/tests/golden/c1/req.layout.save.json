@@ -1,0 +1,33 @@
+{
+  "t": "req",
+  "id": 11,
+  "m": "layout.save",
+  "p": {
+    "workspace_id": 1,
+    "layout": {
+      "tabs": [
+        {
+          "id": 1,
+          "name": "project",
+          "position": 0,
+          "pane_ids": [
+            2,
+            3
+          ],
+          "focus_pane_id": 2,
+          "zoomed": false
+        },
+        {
+          "id": 4,
+          "name": "example",
+          "position": 1,
+          "pane_ids": [
+            5
+          ],
+          "zoomed": true
+        }
+      ],
+      "active_tab_id": 1
+    }
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "t": "req",
+  "id": 2,
+  "m": "workspace.open",
+  "p": {
+    "path": "/Users/example/project"
+  }
+}

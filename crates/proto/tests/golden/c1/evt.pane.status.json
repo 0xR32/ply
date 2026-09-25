@@ -1,0 +1,10 @@
+{
+  "t": "evt",
+  "e": "pane.status",
+  "p": {
+    "pane_id": 2,
+    "status": "waiting_permission",
+    "detail": "Edit GuideDot.tsx",
+    "at": 1790276000
+  }
+}

@@ -65,6 +65,23 @@ export function checkInv1NoNetwork(root: string, files: string[]): CheckResult {
   return res;
 }
 
+/** The `{ … }` bodies of every `struct` and `enum` in a Rust source, with their byte offsets. */
+export function typeBodies(text: string): { offset: number; text: string }[] {
+  const out: { offset: number; text: string }[] = [];
+  for (const m of text.matchAll(/\b(?:struct|enum)\s+\w+[^{;]*\{/g)) {
+    const open = m.index + m[0].length - 1;
+    let depth = 0;
+    for (let i = open; i < text.length; i++) {
+      if (text[i] === '{') depth++;
+      else if (text[i] === '}' && --depth === 0) {
+        out.push({ offset: open, text: text.slice(open, i + 1) });
+        break;
+      }
+    }
+  }
+  return out;
+}
+
 /** INV-2: C1 wire types carry no byte fields, and the app never opens a pty. */
 export function checkInv2NoPtyBytes(root: string, files: string[]): CheckResult {
   const res = ok();
@@ -75,16 +92,18 @@ export function checkInv2NoPtyBytes(root: string, files: string[]): CheckResult 
       'INV-2: crates/proto/src/{control,pane}.rs not written yet (WP2); C1 part skipped',
     );
   }
+  const bytes = /Vec<u8>|&\[u8\]|\[u8;|\bBytes\b|\bByteBuf\b|serde_bytes/g;
   for (const file of present) {
     const text = readText(root, file) ?? '';
-    const bytes = /Vec<u8>|&\[u8\]|\[u8;|\bBytes\b|\bByteBuf\b|serde_bytes/;
-    for (const hit of matchLines(text, bytes)) {
-      res.violations.push({
-        check: 'INV-2',
-        file,
-        line: hit.line,
-        message: `byte field \`${hit.match}\` in a C1 type (pty output never enters JavaScript)`,
-      });
+    for (const body of typeBodies(text)) {
+      for (const m of body.text.matchAll(bytes)) {
+        res.violations.push({
+          check: 'INV-2',
+          file,
+          line: text.slice(0, body.offset + m.index).split('\n').length,
+          message: `byte field \`${m[0]}\` in a C1 type (pty output never enters JavaScript)`,
+        });
+      }
     }
   }
   const pty = /\bBun\.Terminal\b|\bnode-pty\b|\bopenpty\b|\bforkpty\b|\bposix_openpt\b|\/dev\/ptmx/;

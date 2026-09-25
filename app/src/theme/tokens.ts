@@ -1,5 +1,7 @@
 // The only place a colour literal may appear in app/src (INV-5); values match the design canvas.
 
+import type { TerminalTheme } from '../ipc/proto.gen';
+
 const ground = '#0A0B10';
 const pane = '#11131A';
 const paneFocus = '#141722';
@@ -47,24 +49,9 @@ export const ansi16: readonly string[] = [
   '#FFFFFF',
 ];
 
-/** Terminal colours in the shape of C1 `theme.set` and the terminal view's `theme`; every value is opaque `#rrggbb`. */
-export interface TerminalTheme {
-  /** Exactly 16 entries, indexed by SGR slot. */
-  ansi: readonly string[];
-  fg: string;
-  /** Painted once by the terminal body; cells whose bg is the default are not painted again. */
-  bg: string;
-  cursor: string;
-  /** Text drawn over a block cursor. */
-  cursorText: string;
-  /** Opaque: already blended over `bg`, because C1 carries no alpha. */
-  selectionBg: string;
-  selectionFg: string;
-}
-
 /** The palette plyd and every terminal view use: cursor = accent, selection = accent at 25 % over `term`. */
 export const terminalTheme: TerminalTheme = {
-  ansi: ansi16,
+  ansi: [...ansi16],
   fg: text,
   bg: term,
   cursor: accent,

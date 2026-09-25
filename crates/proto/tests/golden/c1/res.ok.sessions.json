@@ -1,0 +1,21 @@
+{
+  "t": "res",
+  "id": 8,
+  "ok": true,
+  "r": [
+    {
+      "pane_id": 3,
+      "workspace_id": 1,
+      "cli": "codex",
+      "cwd": "/Users/example/project",
+      "title": "codex",
+      "status": "exited",
+      "session_ref": "00000000-0000-4000-8000-00000000c0de",
+      "model_seen": "gpt-example",
+      "exit_code": 0,
+      "created_at": 1790270000,
+      "closed_at": 1790276100,
+      "last_activity_at": 1790276090
+    }
+  ]
+}

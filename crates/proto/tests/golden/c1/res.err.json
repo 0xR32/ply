@@ -1,0 +1,9 @@
+{
+  "t": "res",
+  "id": 4,
+  "ok": false,
+  "err": {
+    "code": "cli_not_found",
+    "msg": "claude is not on PATH"
+  }
+}

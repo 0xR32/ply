@@ -1,0 +1,10 @@
+{
+  "t": "evt",
+  "e": "pane.status",
+  "p": {
+    "pane_id": 3,
+    "status": "exited",
+    "exit_code": 130,
+    "at": 1790276100
+  }
+}

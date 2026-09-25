@@ -1,5 +1,26 @@
 # INV-16 admission list. Numbers come from `bun scripts/check-deps.ts --refresh`; see docs/development.md.
 
+[cargo.serde]
+repo = "serde-rs/serde"
+stars = 10831
+last_commit = "2026-09-22"
+contributors_5plus = 23
+checked = "2026-09-25"
+
+[cargo.serde_json]
+repo = "serde-rs/json"
+stars = 5638
+last_commit = "2026-08-08"
+contributors_5plus = 16
+checked = "2026-09-25"
+
+[cargo.ts-rs]
+repo = "Aleph-Alpha/ts-rs"
+stars = 1884
+last_commit = "2026-08-30"
+contributors_5plus = 8
+checked = "2026-09-25"
+
 [npm."@biomejs/biome"]
 repo = "biomejs/biome"
 stars = 25856

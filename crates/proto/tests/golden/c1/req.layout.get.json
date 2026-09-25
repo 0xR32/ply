@@ -1,0 +1,8 @@
+{
+  "t": "req",
+  "id": 10,
+  "m": "layout.get",
+  "p": {
+    "workspace_id": 1
+  }
+}

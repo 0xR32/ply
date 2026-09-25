@@ -38,6 +38,8 @@ jobs:
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - name: nextest
         run: cargo nextest run --workspace --locked --no-tests=pass
+      - name: doctests
+        run: cargo test --doc --workspace --locked
       - name: cargo-deny
         run: cargo deny check
       - name: rustdoc

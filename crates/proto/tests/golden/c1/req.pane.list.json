@@ -1,0 +1,8 @@
+{
+  "t": "req",
+  "id": 3,
+  "m": "pane.list",
+  "p": {
+    "workspace_id": 1
+  }
+}

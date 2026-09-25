@@ -1,0 +1,33 @@
+{
+  "t": "req",
+  "id": 9,
+  "m": "theme.set",
+  "p": {
+    "palette": {
+      "ansi": [
+        "#0A0B10",
+        "#F07A6A",
+        "#7FD4B0",
+        "#F2B35B",
+        "#8AB4FF",
+        "#B4A5FF",
+        "#86CDBB",
+        "#E6E8EF",
+        "#8D93A4",
+        "#F49B8F",
+        "#9EDEC3",
+        "#F5C581",
+        "#B3CEFF",
+        "#D6CEFF",
+        "#A3D9CB",
+        "#FFFFFF"
+      ],
+      "fg": "#E6E8EF",
+      "bg": "#0C0E14",
+      "cursor": "#8AB4FF",
+      "cursorText": "#0C0E14",
+      "selectionBg": "#2C384F",
+      "selectionFg": "#E6E8EF"
+    }
+  }
+}

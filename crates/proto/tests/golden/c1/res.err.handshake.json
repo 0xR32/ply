@@ -1,0 +1,9 @@
+{
+  "t": "res",
+  "id": 0,
+  "ok": false,
+  "err": {
+    "code": "version_mismatch",
+    "msg": "plyd speaks C1 version 1, the app sent 2"
+  }
+}

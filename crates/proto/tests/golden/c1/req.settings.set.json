@@ -1,0 +1,16 @@
+{
+  "t": "req",
+  "id": 13,
+  "m": "settings.set",
+  "p": {
+    "settings": {
+      "accent": "sand",
+      "option_as_meta": "left",
+      "keep_awake_while_running": true,
+      "use_ply_colours_in_claude": true,
+      "codex_plan_tool": false,
+      "scrollback_lines": 10000,
+      "font_size": 12.5
+    }
+  }
+}

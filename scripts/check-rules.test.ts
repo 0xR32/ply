@@ -5,6 +5,7 @@ import { dirname, join } from 'node:path';
 import {
   checkAppLayers,
   checkInv1NoNetwork,
+  checkInv2NoPtyBytes,
   checkInv4KeyHandlers,
   checkInv5Palette,
   checkInv7Worktrees,
@@ -47,6 +48,16 @@ describe('check-rules', () => {
     });
     const v = checkInv4KeyHandlers(root, files).violations;
     expect(v.map((x) => x.file)).toEqual(['app/src/features/tabs/tab-bar.tsx']);
+  });
+
+  test('INV-2 rejects byte fields in C1 types but not byte-typed function parameters', () => {
+    const { root, files } = repo({
+      'crates/proto/src/control.rs':
+        'pub struct A {\n    pub ids: Vec<u64>,\n}\npub fn decode(line: &[u8]) {}\npub enum B {\n    Raw(Vec<u8>),\n}\n',
+      'crates/proto/src/pane.rs': 'pub struct P {\n    pub bytes: [u8; 4],\n}\n',
+    });
+    const v = checkInv2NoPtyBytes(root, files).violations.map((x) => `${x.file}:${x.line}`);
+    expect(v).toEqual(['crates/proto/src/control.rs:6', 'crates/proto/src/pane.rs:2']);
   });
 
   test('INV-1 rejects network APIs in app/', () => {

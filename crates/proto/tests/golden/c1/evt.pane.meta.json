@@ -1,0 +1,11 @@
+{
+  "t": "evt",
+  "e": "pane.meta",
+  "p": {
+    "pane_id": 2,
+    "model": "claude-example-model",
+    "worktree": "feature-x",
+    "cwd": "/Users/example/project/.claude/worktrees/feature-x",
+    "branch": "worktree-feature-x"
+  }
+}
