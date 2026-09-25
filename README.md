@@ -45,8 +45,9 @@ app/                              the React app (src/) and bundled fonts (assets
 vendor/libghostty-vt              ghostty 44f2a44, pristine (vendor.json, patches.md)
 scripts/                          repository gates: check-rules, check-deps, check-pr, gen
 deps.allow.toml                   every admitted dependency with its INV-16 numbers
-docs/spec                          the specification
-docs/development.md               toolchain, run directory, logs, gates, adding a dependency
+docs/                             one document per subject (control channel, screen protocol, agents, terminal, …)
+ARCHITECTURE.md                   processes, wire boundaries, module map, layering
+CLAUDE.md                         rules for agents working in this repository
 ```
 
 ## Prerequisites
@@ -74,6 +75,12 @@ macOS 13 or later on Apple Silicon, with:
 
 ## Documentation
 
-- [Specification](docs/spec/ply-spec.html): stack, architecture, protocols, keymap, invariants and the work packages.
+- [Architecture](ARCHITECTURE.md): the three processes, the C1/C2/C3 boundaries, the module map and the layering rules.
+- [Control channel](docs/control-channel.md) and [screen protocol](docs/screen-protocol.md): the two protocols
+  between the app and plyd, byte for byte.
+- [Agents](docs/agents.md): how Claude Code and Codex are launched and tracked, and the status state machine.
+- [Terminal](docs/terminal.md): libghostty-vt, input encoding and the React terminal view.
+- [Keybindings](docs/keybindings.md), [configuration](docs/configuration.md), [packaging](docs/packaging.md).
 - [Development guide](docs/development.md): toolchain setup, the run directory and logs, running plyd in the
   foreground, how the gates work, and how to admit a dependency.
+- [Specification](docs/spec.html): the implementation specification the build started from.
