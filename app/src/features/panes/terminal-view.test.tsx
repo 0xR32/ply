@@ -427,6 +427,33 @@ describe('TerminalView: input', () => {
   });
 });
 
+describe('TerminalView: find (⌘F)', () => {
+  test('finds in the lines held, selects the newest match, steps with ↑ and closes with esc', async () => {
+    const m = await mount();
+    try {
+      await m.deliver([screen(['alpha beta', 'beta gamma', 'delta'])]);
+      pressed(m, 'cmd-f');
+      await settle(m.renderer, () => m.renderer.findByTestId('terminal-find') !== undefined);
+      const input = m.renderer.findByType('input')[0];
+      if (!input) throw new Error('no find input');
+      m.renderer.nativeSimulateKeystrokes(input.id, 'b e t a');
+      await settle(m.renderer);
+      expect(m.renderer.getAllText().join(' ')).toContain('2/2');
+      m.renderer.nativeSimulateKeystrokes(input.id, 'up');
+      await settle(m.renderer);
+      expect(m.renderer.getAllText().join(' ')).toContain('1/2');
+      m.renderer.nativeSimulateKeystrokes(input.id, 'escape');
+      await settle(m.renderer, () => m.renderer.findByTestId('terminal-find') === undefined);
+      expect(m.sent().filter((f) => f.kind === 'key')).toEqual([]);
+      pressed(m, 'cmd-c');
+      await settle(m.renderer, () => m.fake.clipboard.writes.length === 1);
+      expect(m.fake.clipboard.writes).toEqual(['beta']);
+    } finally {
+      m.unmount();
+    }
+  });
+});
+
 describe('R-R16: a 4-pane tab of 50 × 160 recorded agent screens', () => {
   test('stays under 2 000 host nodes', async () => {
     const fake = fakeTerminalHost();

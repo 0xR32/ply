@@ -130,6 +130,7 @@ function FindBar({
   onQuery,
   onStep,
   onClose,
+  onOwnKey,
   theme,
 }: {
   matches: number;
@@ -137,6 +138,8 @@ function FindBar({
   onQuery: (q: string) => void;
   onStep: (delta: number) => void;
   onClose: () => void;
+  /** Marks a key the find field handled, so the terminal skips the same event when it bubbles up. */
+  onOwnKey: () => void;
   theme: TerminalTheme;
 }) {
   const [query, setQuery] = useState('');
@@ -170,6 +173,7 @@ function FindBar({
         }}
         onSubmit={() => onStep(-1)}
         onKeyDown={(e) => {
+          onOwnKey();
           if (e.key === 'escape') onClose();
           else if (e.key === 'up') onStep(-1);
           else if (e.key === 'down') onStep(1);
@@ -257,6 +261,7 @@ export function TerminalView({
   const [find, setFind] = useState<{ matches: FindMatch[]; active: number } | null>(null);
   const drag = useRef<{ unit: SelectionUnit } | null>(null);
   const wheel = useRef(0);
+  const findKey = useRef(false);
   const lastMouse = useRef<{ col: number; row: number } | null>(null);
 
   const grid = { width: cell.width, height: cell.height, cols: replica.cols, rows: replica.rows };
@@ -298,6 +303,11 @@ export function TerminalView({
   };
 
   const onKeyDown = (e: EventPayload) => {
+    // JS handlers cannot stop propagation, so a key the find field already handled arrives here next.
+    if (findKey.current) {
+      findKey.current = false;
+      return;
+    }
     if (!ownsKeys()) return;
     if (e.modifiers?.cmd) {
       const keys = keysOfEvent(e);
@@ -313,7 +323,7 @@ export function TerminalView({
     if (frame) session.sendKey(frame);
   };
   const onKeyUp = (e: EventPayload) => {
-    if (!ownsKeys() || e.modifiers?.cmd) return;
+    if (!ownsKeys() || e.modifiers?.cmd || find) return;
     const frame = keyFrame(e, 'release', optionAsMeta);
     if (frame) session.sendKey(frame);
   };
@@ -590,6 +600,9 @@ export function TerminalView({
             const active = (find.active + delta + n) % n;
             setFind({ ...find, active });
             revealMatch(session, find.matches[active]);
+          }}
+          onOwnKey={() => {
+            findKey.current = true;
           }}
           onClose={() => {
             setFind(null);
