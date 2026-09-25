@@ -414,6 +414,10 @@ Scrollback lives in plyd; the client fetches the rows it wants to show.
 - A page never exceeds one frame. 1 000 rows of a wide pane do not fit 1 MiB,
   so plyd stops at the last row that fits; the client asks again from the first
   row it is still missing.
+- Every FETCH_HISTORY is answered. When plyd cannot read the scrollback for a
+  page it logs why and sends an empty HISTORY at the request's `start`, so the
+  client stops waiting (the app marks that start exhausted until the next
+  Snapshot).
 - `styles_added` must be applied even when the client discards the rows: a page
   cut to fit can name styles of rows it left out, and later frames use those
   ids without sending them again.

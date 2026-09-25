@@ -198,9 +198,27 @@ pub async fn resume(shared: &Arc<Shared>, pane_id: PaneId) -> MethodResult<Pane>
         .begin_resume(pane_id, PaneStatus::Starting, unix_now())?;
     tracing::info!(pane_id, session = ?pane.session_ref, "resuming the pane");
     let resumed = relaunch(shared, &pane, &handle).await;
-    shared
+    let close = shared
         .registry()
         .end_resume(pane_id, resumed.is_ok(), unix_now());
+    if close {
+        tracing::info!(
+            pane_id,
+            "the resume failed after a close was asked for; closing the pane"
+        );
+        let closed = shared.registry().close_pane(pane_id, unix_now());
+        match closed {
+            Ok(_) => {
+                if handle.send(PaneCmd::Stop).await.is_err() {
+                    tracing::debug!(pane_id, "the pane task had stopped");
+                }
+                remove_pane_dir(pane_id, &shared.paths.pane_dir(pane_id));
+            }
+            Err(e) => {
+                tracing::warn!(pane_id, error = %e.msg, "cannot close the pane after its failed resume");
+            }
+        }
+    }
     shared.update_power();
     resumed?;
     let reg = shared.registry();

@@ -442,7 +442,7 @@ use the same vocabulary. The table lives in
 | `running`, `idle` | `InputRequested` | Codex OSC 9 question or plan prompt · a Claude Notification that is neither `permission_prompt` nor `idle_prompt` (R46) | `waiting_input` |
 | `waiting_permission` | `CallSettled`, same call | Claude PostToolUse, PostToolUseFailure or PermissionDenied | `running` |
 | `waiting_permission`, `waiting_input` | `KeyTyped` | any key typed in the pane | `running` |
-| `running` | `TurnComplete` | Claude Stop or StopFailure · Codex notify for the bound thread · Codex OSC 9 of any other body · Codex rollout `task_complete` or `turn_aborted` for the current turn | `idle` |
+| `running`, `waiting_permission` without a pending call | `TurnComplete` | Claude Stop or StopFailure · Codex notify for the bound thread · Codex OSC 9 of any other body · Codex rollout `task_complete` or `turn_aborted` for the current turn | `idle` |
 | `running` (Claude) | `QuietTimeout` | the pty silent and no hook for 5 s | `idle` |
 | any | the process exits | pty EOF | `exited(code)` |
 | any live status, after a plyd restart | the process is gone | plyd's start | `lost` |
@@ -459,6 +459,12 @@ Transitions not in the table are ignored and counted.
 - **Detail.** `PermissionRequested` carries the tool name (Claude) or the OSC 9
   body (Codex); `InputRequested` the notification's message or body. The detail
   travels in `pane.status`.
+- **A late permission prompt does not outlive its turn.** Claude's
+  `permission_prompt` Notification can arrive after the call it asked about
+  settled, putting the pane back into `waiting_permission` with no pending call;
+  the turn's Stop then still makes it `idle`. A wait whose call is still pending
+  ignores `TurnComplete`
+  (`a_turn_ends_a_wait_for_permission_that_has_no_pending_call`).
 
 - **SessionEnd** changes nothing (Ruling R47). Claude fires it for `/clear` and
   an in-session `/resume` while the process keeps running, so it is logged and
@@ -544,12 +550,16 @@ panes come back `lost`. Right after its sockets are bound, plyd reopens every
   reported one — reopens as a fresh login shell in its last directory
   (spec 11.3), at plyd's start without a click. An agent pane becomes a shell
   pane from then on: `cli` is `shell` in its row, in `session.list` and in the
-  returned `Pane`. Only when that reopening fails (the directory is gone, no
-  palette arrived) does such a pane stay `lost`.
+  returned `Pane`, and plyd announces the new record with `pane.added`. Only
+  when that reopening fails (the directory is gone, no palette arrived) does
+  such a pane stay `lost`.
 
 The settings file is regenerated with the current settings, and `launch.json`
 records the new spawn, so a pane resumes again after the next restart. The pane
-leaves `lost` at once; a second `pane.resume` while one runs is refused. The app
+leaves `lost` at once; a second `pane.resume` while one runs is refused. A
+`pane.close {kill:true}` while it runs is kept until the pane adopts the new
+process, which it then stops, and closes the pane at once when the resume fails
+(`a_close_with_kill_during_a_resume_stops_the_resumed_process_and_closes_the_pane`). The app
 offers the action on every lost pane: the Resume button of the strip under it
 and a "Resume <pane>" palette command. The screen is not restored: plyd does
 not keep screens across its own restarts, so a resumed pane starts on an empty

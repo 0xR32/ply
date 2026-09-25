@@ -348,6 +348,39 @@ fn an_exiting_shell_reports_its_code_on_c1_and_c2() {
 }
 
 #[test]
+fn an_unwritable_config_toml_is_reported_but_the_palette_and_settings_still_apply() {
+    let sb = Sandbox::new("cfg-ro");
+    std::fs::create_dir_all(sb.ply_home.join("config.toml.tmp")).unwrap();
+    let _plyd = sb.start();
+    let mut c = Control::connect(&sb.control_socket()).unwrap();
+    let refused = c
+        .call("theme.set", json!({"palette": common::theme()}))
+        .unwrap_err();
+    assert_eq!(refused.code, ErrorCode::Internal, "{}", refused.msg);
+    let started = Instant::now();
+    let ws = c.call("workspace.list", json!({})).unwrap()[0]["id"]
+        .as_u64()
+        .unwrap();
+    let pane = sb.shell(&mut c, ws);
+    assert!(
+        started.elapsed() < Duration::from_secs(2),
+        "the spawn did not wait for a palette"
+    );
+    let mut settings = c.call("settings.get", json!({})).unwrap();
+    settings["scrollback_lines"] = json!(2000);
+    let refused = c
+        .call("settings.set", json!({"settings": settings}))
+        .unwrap_err();
+    assert_eq!(refused.code, ErrorCode::Internal);
+    assert_eq!(
+        c.call("settings.get", json!({})).unwrap()["scrollback_lines"],
+        2000
+    );
+    c.call("pane.close", json!({"pane_id": pane, "kill": true}))
+        .unwrap();
+}
+
+#[test]
 fn a_restart_reopens_a_shell_by_itself_and_keeps_the_settings() {
     let sb = Sandbox::new("restart");
     let mut plyd = sb.start();

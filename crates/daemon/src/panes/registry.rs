@@ -219,10 +219,9 @@ impl Registry {
         self.config.settings.clone()
     }
 
-    /// Replaces the settings and writes `config.toml`; fails with `internal` if the file cannot be written.
-    pub fn set_settings(&mut self, settings: Settings) -> MethodResult<()> {
+    /// Replaces the settings in memory, where they apply at once; [`Registry::save_config`] writes them.
+    pub fn set_settings(&mut self, settings: Settings) {
         self.config.settings = settings;
-        self.save_config()
     }
 
     /// The last `theme.set` palette.
@@ -230,13 +229,13 @@ impl Registry {
         self.config.palette.as_ref()
     }
 
-    /// Stores the palette in `config.toml`; fails with `internal` if the file cannot be written.
-    pub fn set_palette(&mut self, theme: TerminalTheme) -> MethodResult<()> {
+    /// Keeps the palette in memory, where it applies at once; [`Registry::save_config`] writes it.
+    pub fn set_palette(&mut self, theme: TerminalTheme) {
         self.config.palette = Some(theme);
-        self.save_config()
     }
 
-    fn save_config(&self) -> MethodResult<()> {
+    /// Writes the settings and the palette to `config.toml`; fails with `internal` (logged) when the file cannot be written.
+    pub fn save_config(&self) -> MethodResult<()> {
         self.config
             .save(&self.config_path)
             .map_err(|e| internal("cannot write config.toml", &e))
@@ -493,14 +492,17 @@ impl Registry {
         Ok(entry.pane.clone())
     }
 
-    /// Ends a `pane.resume`; a failed one puts the pane back to `lost`.
-    pub fn end_resume(&mut self, id: PaneId, started: bool, now: UnixSeconds) {
-        if let Some(entry) = self.panes.get_mut(&id) {
-            entry.resuming = false;
-        }
+    /// Ends a `pane.resume`; a failed one is `lost` again, and `true` means a `pane.close {kill:true}` during it wants the pane closed now (no process will exit to close it).
+    pub fn end_resume(&mut self, id: PaneId, started: bool, now: UnixSeconds) -> bool {
+        let Some(entry) = self.panes.get_mut(&id) else {
+            return false;
+        };
+        entry.resuming = false;
+        let close = !started && entry.close_on_exit;
         if !started {
             self.set_status(id, PaneStatus::Lost, None, now);
         }
+        close
     }
 
     /// Marks that the pane closes once its process has exited (`pane.close {kill:true}`).
@@ -655,7 +657,7 @@ impl Registry {
         }));
     }
 
-    /// Makes the pane run `cli` from now on, titled `title`; `pane.resume` reopens a pane without a session as a shell.
+    /// Makes the pane run `cli` from now on, titled `title`, and announces the whole record again with `pane.added` (no other event carries `cli`); `pane.resume` reopens a pane without a session as a shell.
     pub fn set_cli(&mut self, id: PaneId, cli: Cli, title: &str) {
         let Some(entry) = self.panes.get_mut(&id) else {
             return;
@@ -665,7 +667,11 @@ impl Registry {
         entry.pane.progress = None;
         entry.pane.model_seen = None;
         let pane = entry.pane.clone();
+        let announced = entry.announced;
         self.store(&pane);
+        if announced {
+            self.emit(Event::PaneAdded(Box::new(pane)));
+        }
     }
 
     fn emit_meta(&self, pane: &Pane) {
@@ -708,20 +714,32 @@ impl Registry {
         Ok(entry.handle)
     }
 
-    /// The workspace's tabs in bar order with their panes in position order.
-    /// Fails with `not_found` for an unknown workspace.
+    /// The workspace's tabs in bar order with their announced panes (as `pane.list` has them) in position order; a tab holding none is left out; `not_found` for an unknown workspace.
     pub fn layout(&self, workspace_id: u64) -> MethodResult<Layout> {
         self.require_workspace(workspace_id)?;
         let tabs = self
             .tabs_of(workspace_id)
             .into_iter()
-            .map(|t| Tab {
-                id: t.row.id,
-                name: t.row.name.clone(),
-                position: t.row.position,
-                pane_ids: t.panes.clone(),
-                focus_pane_id: t.row.focus_pane_id,
-                zoomed: t.row.zoomed,
+            .filter_map(|t| {
+                let pane_ids: Vec<PaneId> = t
+                    .panes
+                    .iter()
+                    .copied()
+                    .filter(|id| self.panes.get(id).is_some_and(|e| e.announced))
+                    .collect();
+                let focus_pane_id = t
+                    .row
+                    .focus_pane_id
+                    .filter(|f| pane_ids.contains(f))
+                    .or_else(|| pane_ids.first().copied());
+                (!pane_ids.is_empty()).then(|| Tab {
+                    id: t.row.id,
+                    name: t.row.name.clone(),
+                    position: t.row.position,
+                    pane_ids,
+                    focus_pane_id,
+                    zoomed: t.row.zoomed,
+                })
             })
             .collect::<Vec<_>>();
         let active_tab_id = self
@@ -970,8 +988,11 @@ mod tests {
         }
     }
 
+    /// A shell pane clients know, as a restored one is (no event).
     fn shell(reg: &mut Registry, tab: Option<u64>, cwd: &str) -> Pane {
-        reg.insert_pane(&new_pane(tab, cwd), 10).unwrap()
+        let pane = reg.insert_pane(&new_pane(tab, cwd), 10).unwrap();
+        reg.panes.get_mut(&pane.id).unwrap().announced = true;
+        pane
     }
 
     #[test]
@@ -1084,14 +1105,51 @@ mod tests {
     }
 
     #[test]
-    fn a_pane_is_listed_only_once_announced() {
+    fn a_pane_is_listed_and_laid_out_only_once_announced() {
         let (mut reg, _) = registry();
-        let a = shell(&mut reg, None, "/Users/example");
+        let a = reg
+            .insert_pane(&new_pane(None, "/Users/example"), 10)
+            .unwrap();
         assert!(reg.panes_of(1).unwrap().is_empty(), "not yet announced");
+        assert!(
+            reg.layout(1).unwrap().tabs.is_empty(),
+            "its new tab neither"
+        );
         assert!(reg.entry(a.id).is_some(), "but known to plyd itself");
         let (tx, _rx) = mpsc::channel(1);
-        reg.announce(a.id, tx);
+        reg.announce(a.id, tx.clone());
         assert_eq!(reg.panes_of(1).unwrap().len(), 1);
+        let b = reg
+            .insert_pane(&new_pane(Some(a.tab_id), "/Users/example"), 10)
+            .unwrap();
+        let layout = reg.layout(1).unwrap();
+        assert_eq!(layout.tabs.len(), 1);
+        assert_eq!(layout.tabs[0].pane_ids, [a.id], "b is still spawning");
+        assert_eq!(layout.active_tab_id, Some(a.tab_id));
+        reg.announce(b.id, tx);
+        assert_eq!(reg.layout(1).unwrap().tabs[0].pane_ids, [a.id, b.id]);
+    }
+
+    #[test]
+    fn a_pane_reopened_as_a_shell_is_announced_again_whole() {
+        let (mut reg, mut rx) = registry();
+        let mut new = new_pane(None, "/Users/example");
+        new.cli = Cli::Claude;
+        let a = reg.insert_pane(&new, 10).unwrap();
+        reg.set_cli(a.id, Cli::Shell, "zsh");
+        assert!(
+            rx.try_recv().is_err(),
+            "an unannounced pane is not announced by it"
+        );
+        let (tx, _handle) = mpsc::channel(1);
+        reg.announce(a.id, tx);
+        let _added = rx.try_recv().unwrap();
+        reg.set_cli(a.id, Cli::Shell, "zsh");
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(Event::PaneAdded(p)) if p.id == a.id && p.cli == Cli::Shell && p.title == "zsh"
+        ));
+        assert_eq!(reg.sessions(1, false).unwrap()[0].cli, Cli::Shell);
     }
 
     #[test]

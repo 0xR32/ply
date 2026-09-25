@@ -23,7 +23,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use ply_agents::LaunchSpec;
-use ply_proto::data::{Exit, Frame, MAX_FRAME_LEN};
+use ply_proto::data::{Exit, FetchHistory, Frame, History, MAX_FRAME_LEN};
 use ply_proto::hook::HookEnvelope;
 use ply_proto::pane::{AgentCli, Cli, OptionAsMeta, PaneId, PaneStatus, Rgb};
 use ply_term::{
@@ -180,6 +180,7 @@ pub fn spawn_task(shared: Arc<Shared>, seed: PaneSeed) -> mpsc::Sender<PaneCmd> 
         exit_reported: seed.exited.is_some(),
         exit_grace: None,
         kill_at: None,
+        kill_pending: false,
         writes: WriteQueue::default(),
         cadence: Cadence::default(),
         sync: SyncHold::default(),
@@ -266,6 +267,7 @@ struct PaneTask {
     exit_reported: bool,
     exit_grace: Option<Instant>,
     kill_at: Option<Instant>,
+    kill_pending: bool,
     writes: WriteQueue,
     cadence: Cadence,
     sync: SyncHold,
@@ -421,6 +423,13 @@ impl PaneTask {
         if let Some(cwd) = cwd {
             branch::lookup(&self.shared, self.id, cwd);
         }
+        if std::mem::take(&mut self.kill_pending) {
+            tracing::info!(
+                pane_id = self.id,
+                "stopping the resumed process the pane was closed for"
+            );
+            self.kill(Instant::now());
+        }
     }
 
     fn key_typed(&mut self, enter: bool, now: Instant) {
@@ -460,7 +469,10 @@ impl PaneTask {
             PaneCmd::SetOptionAsMeta(option) => self.engine.set_option_as_meta(option),
             PaneCmd::Kill => self.kill(now),
             PaneCmd::Launch(spec) => self.prepare(&spec),
-            PaneCmd::LaunchFailed => self.agent = None,
+            PaneCmd::LaunchFailed => {
+                self.agent = None;
+                self.kill_pending = false;
+            }
             PaneCmd::Start(started) => {
                 self.adopt(*started);
                 tracing::info!(pane_id = self.id, "pane process adopted");
@@ -482,6 +494,12 @@ impl PaneTask {
             return;
         }
         let Some(process) = &self.process else {
+            // A `pane.resume` is starting the process this close is meant for; adopt() applies the kill.
+            self.kill_pending = true;
+            tracing::debug!(
+                pane_id = self.id,
+                "kill before the process is adopted; kept for it"
+            );
             return;
         };
         if let Err(e) = process.signal_group(Signal::HUP) {
@@ -617,14 +635,9 @@ impl PaneTask {
             }
             Frame::FetchHistory(f) => {
                 if let Some(client) = self.clients.iter_mut().find(|c| c.id == client_id) {
-                    match client.builder.fetch_history(&mut self.engine, &f) {
-                        Ok(history) => {
-                            send(self.id, client, &Frame::History(history));
-                        }
-                        Err(e) => {
-                            tracing::warn!(pane_id = self.id, client = client_id, error = %e, "cannot read the scrollback");
-                        }
-                    }
+                    let built = client.builder.fetch_history(&mut self.engine, &f);
+                    let history = history_answer(self.id, client_id, &f, built);
+                    send(self.id, client, &Frame::History(history));
                 }
                 self.idle.rearm(now);
             }
@@ -1032,6 +1045,23 @@ impl PaneTask {
     }
 }
 
+/// The HISTORY answering `request`: the page, or an empty one at its `start` when it could not be built, so the client stops waiting for it (it marks that start exhausted until its next Snapshot).
+fn history_answer(
+    pane_id: PaneId,
+    client: u64,
+    request: &FetchHistory,
+    built: ply_term::Result<History>,
+) -> History {
+    built.unwrap_or_else(|e| {
+        tracing::warn!(pane_id, client, start = request.start, error = %e, "cannot read the scrollback; answering an empty page");
+        History {
+            start: request.start,
+            lines: Vec::new(),
+            styles_added: Vec::new(),
+        }
+    })
+}
+
 /// The text an OSC 52 write sets: its `text/plain` part as UTF-8, or empty for a write that clears the clipboard.
 fn clipboard_text(write: &ClipboardWrite) -> Option<String> {
     if write.contents.is_empty() {
@@ -1124,6 +1154,32 @@ mod tests {
             None
         );
         assert_eq!(clipboard_text(&write(vec![part("image/png", b"x")])), None);
+    }
+
+    #[test]
+    fn a_history_page_that_cannot_be_built_is_answered_empty_at_its_start() {
+        let request = FetchHistory {
+            start: 1_000,
+            count: 50,
+        };
+        let failed = Err(ply_term::Error::Ghostty {
+            call: "ghostty_terminal_grid_ref",
+            code: -4,
+        });
+        assert_eq!(
+            history_answer(1, 2, &request, failed),
+            History {
+                start: 1_000,
+                lines: Vec::new(),
+                styles_added: Vec::new()
+            }
+        );
+        let page = History {
+            start: 1_010,
+            lines: Vec::new(),
+            styles_added: Vec::new(),
+        };
+        assert_eq!(history_answer(1, 2, &request, Ok(page.clone())), page);
     }
 
     #[test]

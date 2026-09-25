@@ -16,7 +16,7 @@
 //! | `waiting_permission`, `waiting_input` | KeyTyped (any key typed in the pane, R17) | `running` |
 //! | `running` (Claude) | QuietTimeout (silent pty, no hook for 5 s, R17) | `idle` |
 //! | `waiting_permission` | CallSettled for the pending call (PostToolUse, PostToolUseFailure, PermissionDenied) | `running` |
-//! | `running` | TurnComplete (Claude Stop · StopFailure · Codex notify · OSC 9 turn complete, R27 · rollout `task_complete` or `turn_aborted`) | `idle` |
+//! | `running`, `waiting_permission` without a pending call | TurnComplete (Claude Stop · StopFailure · Codex notify · OSC 9 turn complete, R27 · rollout `task_complete` or `turn_aborted`) | `idle` |
 //! | any | the process exits (pty end-of-file) | `exited(code)` |
 //!
 //! SessionEnd changes nothing ([`Step::SessionEnded`], Ruling R47): Claude fires it for `/clear` and an in-session
@@ -130,7 +130,12 @@ impl StatusMachine {
             {
                 self.to(Running, None)
             }
-            StatusSignal::TurnComplete if s == Running => self.to(Idle, None),
+            // A late `permission_prompt` Notification re-enters waiting_permission with no call; the turn's end still counts.
+            StatusSignal::TurnComplete
+                if s == Running || (s == WaitingPermission && self.pending.is_none()) =>
+            {
+                self.to(Idle, None)
+            }
             StatusSignal::SessionEnded { .. } => Step::SessionEnded,
             _ => self.ignore(),
         }
@@ -439,6 +444,43 @@ mod tests {
         for cli in BOTH {
             row(cli, &StatusSignal::TurnComplete, &[Running], Idle);
         }
+    }
+
+    #[test]
+    fn a_turn_ends_a_wait_for_permission_that_has_no_pending_call() {
+        let late_prompt = StatusSignal::PermissionRequested {
+            call: None,
+            detail: Some("Claude needs your permission to use Write".into()),
+        };
+        let mut m = at(AgentCli::Claude, WaitingPermission);
+        assert!(matches!(
+            m.apply(&StatusSignal::CallSettled(call("Write"))),
+            Step::To {
+                status: Running,
+                ..
+            }
+        ));
+        assert!(matches!(
+            m.apply(&late_prompt),
+            Step::To {
+                status: WaitingPermission,
+                ..
+            }
+        ));
+        assert_eq!(
+            m.apply(&StatusSignal::TurnComplete),
+            Step::To {
+                status: Idle,
+                detail: None
+            },
+            "Stop after a late permission_prompt leaves the pane your turn, not amber"
+        );
+        let mut pending = at(AgentCli::Claude, WaitingPermission);
+        assert_eq!(
+            pending.apply(&StatusSignal::TurnComplete),
+            Step::Ignored,
+            "a dialog whose call is still pending keeps waiting"
+        );
     }
 
     #[test]

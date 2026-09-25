@@ -249,6 +249,49 @@ fn a_codex_pane_lost_mid_turn_resumes_idle_without_replaying_its_past_turns() {
 }
 
 #[test]
+fn a_close_with_kill_during_a_resume_stops_the_resumed_process_and_closes_the_pane() {
+    let sb = Sandbox::new("rs-kill");
+    install(&sb);
+    hook_program();
+    let mut plyd = sb.start();
+    let (mut c, ws) = sb.control();
+    let claude = create(&mut c, ws, json!({"cli": "claude", "cwd": sb.home}));
+    wait_listed(
+        &mut c,
+        ws,
+        claude,
+        "session_ref",
+        &json!(claude_session(claude)),
+    );
+    drop(c);
+    plyd.child.kill().unwrap();
+    plyd.child.wait().unwrap();
+    // Without a stored palette the resume waits for theme.set, which holds it before its process starts.
+    std::fs::remove_file(sb.ply_home.join("config.toml")).unwrap();
+    let _plyd = sb.start();
+    let mut resumer = Control::connect(&sb.control_socket()).unwrap();
+    let resuming =
+        std::thread::spawn(move || resumer.call("pane.resume", json!({"pane_id": claude})));
+    let mut c = Control::connect(&sb.control_socket()).unwrap();
+    wait_listed(&mut c, ws, claude, "status", &json!("starting"));
+    c.call("pane.close", json!({"pane_id": claude, "kill": true}))
+        .unwrap();
+    c.call("theme.set", json!({"palette": common::theme()}))
+        .unwrap();
+    let resumed = resuming.join().unwrap().unwrap();
+    assert_eq!(resumed["id"], claude, "the resume started a process");
+    let removed = c.wait_event(
+        WAIT,
+        |e| matches!(e, Event::PaneRemoved(r) if r.pane_id == claude),
+    );
+    assert!(
+        removed.is_some(),
+        "the kill waited for the resumed process and closed the pane"
+    );
+    assert_eq!(listed(&mut c, ws, claude), Value::Null);
+}
+
+#[test]
 fn f3_closed_sessions_keep_status_times_and_exit_codes_across_app_and_plyd_restarts() {
     let sb = Sandbox::new("f3");
     install(&sb);

@@ -213,7 +213,7 @@ A failed spawn leaves no pane, tab or directory behind. A shell pane starts
 | `kill` | Pane | What happens |
 |---|---|---|
 | `false` | live (any status but `exited`, `lost`) | `pane_alive`; nothing changes. |
-| `true` | live | Answers `{}` at once. plyd sends SIGHUP to the process group and, 2 s later, SIGKILL to the whole group, even when its leader has already exited (a member that ignored SIGHUP would keep the pty open). When the leader has exited: `pane.status` (`exited`), `pane.exit`, then `pane.removed`. |
+| `true` | live | Answers `{}` at once. plyd sends SIGHUP to the process group and, 2 s later, SIGKILL to the whole group, even when its leader has already exited (a member that ignored SIGHUP would keep the pty open). When the leader has exited: `pane.status` (`exited`), `pane.exit`, then `pane.removed`. During a `pane.resume` (the pane is `starting` before its process exists) the kill waits for the process and stops it as soon as the pane adopts it; when that resume fails instead, the pane is closed at once. |
 | either | `exited` or `lost` | Closed now: `closed_at` is stored, the pane leaves its tab (a tab with no pane left is deleted), `run/panes/<id>/` is removed and `pane.removed` is broadcast. |
 
 A closed pane's record stays in the database and is returned by
@@ -237,7 +237,8 @@ spec is rebuilt through its adapter with the pane's `session_ref` as the session
 to resume (`claude --resume <id>`, `codex resume <thread>`), in the stored
 working directory and with the stored worktree option; a pane without a
 session id (a shell, or an agent whose CLI never reported one) reopens as a
-fresh login shell in its last directory and is a `shell` pane from then on;
+fresh login shell in its last directory and is a `shell` pane from then on,
+announced again with `pane.added` (the whole record, `cli: shell`);
 plyd does that by itself at its start (Ruling R50), so such a pane is `lost`
 only when that reopening failed.
 Waits for a palette like `pane.create`. `spawn_failed` when `launch.json` is
@@ -253,16 +254,19 @@ only the open ones. `not_found` for an unknown workspace.
 
 ### `theme.set`
 
-Stores `palette` in `config.toml` and applies it to every pane's terminal,
-which answers OSC 4, 10, 11 and 12 and the colour-scheme query from it
-(`docs/terminal.md`). A spawn waiting for a palette proceeds. The app sends it
-on every connect, before anything else that could spawn, and again whenever the
-accent changes.
+Applies `palette` to every pane's terminal, which answers OSC 4, 10, 11 and 12
+and the colour-scheme query from it (`docs/terminal.md`), and then stores it in
+`config.toml`. A spawn waiting for a palette proceeds. When `config.toml` cannot
+be written the palette is in force all the same (until plyd stops), and the
+failure is logged and answered `internal`. The app sends it on every connect,
+before anything else that could spawn, and again whenever the accent changes.
 
 ### `layout.get`
 
 The workspace's tabs in bar order, each with its panes in position order, its
-focused pane and its zoom, and `active_tab_id`. `active_tab_id` is kept in
+focused pane and its zoom, and `active_tab_id`. Like `pane.list` it shows only
+panes `pane.added` announced: a pane whose spawn still runs is left out, and so
+is a tab that holds nothing else. `active_tab_id` is kept in
 memory only (schema v1 has no column for it), so it survives app restarts but
 not plyd restarts; it is absent when unknown.
 
@@ -286,7 +290,9 @@ event; `pane.list` and `layout.get` show the result.
 ### `settings.get` and `settings.set`
 
 `settings.get` returns the stored `Settings`. `settings.set` replaces all of
-them (every field is required) and writes `config.toml`. A changed
+them (every field is required) and then writes `config.toml`; as with
+`theme.set`, a write that fails leaves the new settings in force and is
+answered `internal`. A changed
 `option_as_meta` is pushed to every pane's key encoder at once, and the
 keep-awake assertion is re-evaluated. The other fields take effect where
 `docs/configuration.md` says.
@@ -321,7 +327,7 @@ is connected is dropped; a client learns the current state from `pane.list`,
 
 | Event | Payload | When |
 |---|---|---|
-| `pane.added` | a `Pane` | A pane was created, by any client (`pane.create`). Panes restored at plyd's start are not announced. |
+| `pane.added` | a `Pane` | A pane was created, by any client (`pane.create`), or a known pane's record changed as a whole: a lost pane reopened as a fresh shell (R50) is announced again with `cli: shell`, and a client replaces its record. Panes restored at plyd's start are not announced. |
 | `pane.removed` | `{pane_id}` | A pane was closed (`pane.close`, or a `kill:true` close whose process has now exited). |
 | `pane.status` | `{pane_id, status, detail?, exit_code?, at}` | The pane's status or its detail changed. `exit_code` is present exactly when `status` is `exited`; `at` is when plyd observed the change. An unchanged status and detail send nothing. |
 | `pane.progress` | `{pane_id, progress?}` | The agent's plan changed; no `progress` hides the bar. At most 4 a second per pane; the last value of a burst is never dropped. |
@@ -413,7 +419,7 @@ protocol change.
 | `invalid_state` | The pane's state does not allow the request: `pane.answer` without a dialog, `pane.resume` on a pane that is not `lost`, a spawn with no palette after 5 s. | `pane.answer`, `pane.resume`, `pane.create` |
 | `spawn_failed` | The process could not start: pty, exec, the pane files or a missing launch spec. | `pane.create`, `pane.resume` |
 | `shutting_down` | plyd is stopping and takes no new work. | `pane.create`, `pane.resume` |
-| `internal` | Anything else, such as a failed SQLite or `config.toml` write; the details are in plyd's log. | any method |
+| `internal` | Anything else, such as a failed SQLite or `config.toml` write (`theme.set` and `settings.set` have applied their values by then); the details are in plyd's log. | any method |
 
 The app's client adds two codes of its own, never sent by plyd: `disconnected`
 (the connection dropped, or the request was made while not connected) and
@@ -540,6 +546,7 @@ are allowed for those two pairs.
   `a_live_pane_closes_only_with_kill_and_its_session_is_kept`,
   `an_exiting_shell_reports_its_code_on_c1_and_c2`,
   `a_restart_reopens_a_shell_by_itself_and_keeps_the_settings`,
+  `an_unwritable_config_toml_is_reported_but_the_palette_and_settings_still_apply`,
   `a_second_plyd_refuses_to_start`.
 - `crates/daemon/src/panes/registry.rs` unit tests (layout, closing, event
   order) and `crates/daemon/src/server/control.rs`

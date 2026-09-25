@@ -364,12 +364,13 @@ async fn answer(shared: &Shared, p: PaneAnswerParams) -> Result<Value, ErrorBody
     }
 }
 
+/// Applies the palette everywhere before writing `config.toml`, so an unwritable file never keeps spawns waiting; its failure is answered `internal` afterwards.
 async fn theme_set(shared: &Shared, p: ThemeSetParams) -> Result<Value, ErrorBody> {
     let palette = Palette::from_theme(&p.palette);
-    let handles = {
+    let (handles, saved) = {
         let mut reg = shared.registry();
-        reg.set_palette(p.palette)?;
-        reg.handles()
+        reg.set_palette(p.palette);
+        (reg.handles(), reg.save_config())
     };
     shared.palette.send_replace(Some(palette.clone()));
     for (pane_id, handle) in handles {
@@ -381,15 +382,17 @@ async fn theme_set(shared: &Shared, p: ThemeSetParams) -> Result<Value, ErrorBod
             tracing::debug!(pane_id, "the pane task had stopped before the new palette");
         }
     }
+    saved?;
     ok(&Empty {})
 }
 
+/// Like [`theme_set`]: the settings apply at once, and a failed `config.toml` write is answered `internal` afterwards.
 async fn settings_set(shared: &Shared, settings: Settings) -> Result<Value, ErrorBody> {
-    let (old, handles) = {
+    let (old, handles, saved) = {
         let mut reg = shared.registry();
         let old = reg.settings();
-        reg.set_settings(settings.clone())?;
-        (old, reg.handles())
+        reg.set_settings(settings.clone());
+        (old, reg.handles(), reg.save_config())
     };
     if old.option_as_meta != settings.option_as_meta {
         for (pane_id, handle) in handles {
@@ -403,6 +406,7 @@ async fn settings_set(shared: &Shared, settings: Settings) -> Result<Value, Erro
         }
     }
     shared.update_power();
+    saved?;
     ok(&Empty {})
 }
 

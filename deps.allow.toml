@@ -9,13 +9,6 @@ checked = "2026-09-25"
 exception = "R35"
 note = "single-maintainer but foundational, actively maintained and ubiquitous; named by the spec (9.1) for binaries' main.rs only"
 
-[cargo.libc]
-repo = "rust-lang/libc"
-stars = 2611
-last_commit = "2026-09-23"
-contributors_5plus = 209
-checked = "2026-09-25"
-
 [cargo.notify]
 repo = "notify-rs/notify"
 stars = 3457

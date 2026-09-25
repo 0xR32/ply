@@ -44,8 +44,10 @@ not find a plyd started that way.
 The settings of C1's `settings.get` and `settings.set`, plus the palette of the
 last `theme.set`. plyd is its only reader and writer: it reads the file once at
 startup and rewrites all of it on every `settings.set` and `theme.set`, to
-`config.toml.tmp` and then renamed over the old file. The app gets the values
-over C1.
+`config.toml.tmp` and then renamed over the old file. The new values apply
+before the write, so a file that cannot be written (a full disk, a directory in
+the way) costs only persistence: plyd logs it, answers the request `internal`,
+and runs on the new values until it stops. The app gets the values over C1.
 
 ```toml
 accent = "blue"
