@@ -102,6 +102,73 @@ fn a_client_that_stops_acking_gets_a_forced_snapshot_after_3_s() {
 }
 
 #[test]
+fn a_client_that_never_acks_is_disconnected_after_30_s() {
+    let sb = Sandbox::new("noack");
+    let _plyd = sb.start();
+    let (mut c, ws) = sb.control();
+    let pane = sb.shell(&mut c, ws);
+    let (mut d, first) = Data::attach(&sb.data_socket(), pane, 80, 24).unwrap();
+    assert!(matches!(first, Frame::Snapshot(_)));
+    let attached = Instant::now();
+    let closed = loop {
+        match d.recv(Duration::from_secs(1)) {
+            Ok(_) if attached.elapsed() < Duration::from_secs(45) => {}
+            Ok(_) => panic!("still connected after 45 s without an Ack"),
+            Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => break attached.elapsed(),
+            Err(e) => panic!("{e}"),
+        }
+    };
+    assert!(
+        closed >= Duration::from_millis(29_500) && closed < Duration::from_secs(35),
+        "disconnected after {closed:?}"
+    );
+    let mut again = sb.attach_ready(pane);
+    again.input(b"echo still-$((6*7))\r").unwrap();
+    assert!(
+        again.pump_until(WAIT, |d| d.shows("still-42")).unwrap(),
+        "the pane serves the next client"
+    );
+}
+
+#[test]
+fn a_synchronized_update_holds_frames_until_it_ends_or_150_ms_pass() {
+    let sb = Sandbox::new("sync");
+    let _plyd = sb.start();
+    let (mut c, ws) = sb.control();
+    let pane = sb.shell(&mut c, ws);
+    let mut d = sb.attach_ready(pane);
+    d.input(b"A=HALF; B=DONE\r").unwrap();
+    d.settle(Duration::from_millis(300)).unwrap();
+    d.input(b"printf '\\033[?2026h%s-%s' \"$A\" \"$B\"; sleep 0.05; printf '\\r\\033[K%s-%s\\033[?2026l\\n' \"$B\" \"$A\"\r")
+        .unwrap();
+    let deadline = Instant::now() + WAIT;
+    while !d.shows("DONE-HALF") {
+        assert!(Instant::now() < deadline, "{:?}", d.screen());
+        if let Some(frame) = d.recv(Duration::from_millis(200)).unwrap() {
+            d.apply(&frame, true).unwrap();
+            assert!(
+                !d.shows("HALF-DONE"),
+                "a frame showed the update's intermediate state: {:?}",
+                d.screen()
+            );
+        }
+    }
+    d.settle(Duration::from_millis(200)).unwrap();
+    let sent = Instant::now();
+    d.input(b"printf '\\033[?2026h%s-LATE' \"$B\"; sleep 3; printf '\\033[?2026l'\r")
+        .unwrap();
+    assert!(
+        d.pump_until(Duration::from_millis(2500), |d| d.shows("DONE-LATE"))
+            .unwrap(),
+        "plyd ends a held update after 150 ms: {:?}",
+        d.screen()
+    );
+    assert!(sent.elapsed() < Duration::from_millis(2500));
+    c.call("pane.close", json!({"pane_id": pane, "kill": true}))
+        .unwrap();
+}
+
+#[test]
 fn an_osc_11_query_is_answered_with_the_palette_background() {
     let sb = Sandbox::new("osc");
     let _plyd = sb.start();
@@ -144,6 +211,37 @@ fn an_osc_52_write_reaches_every_attached_client() {
         ["hello ply"],
         "every attached client gets it"
     );
+}
+
+#[test]
+fn a_typed_key_logs_its_p2_latency_at_the_pty_write() {
+    let sb = Sandbox::new("p2");
+    let _plyd = sb.start();
+    let (mut c, ws) = sb.control();
+    let pane = sb.shell(&mut c, ws);
+    let mut d = sb.attach_ready(pane);
+    d.send(&Frame::Key(ply_proto::data::KeyEvent {
+        key: 0,
+        mods: ply_proto::data::Mods::empty(),
+        consumed_mods: ply_proto::data::Mods::empty(),
+        action: ply_proto::data::KeyAction::Press,
+        composing: false,
+        unshifted_codepoint: 'q' as u32,
+        text: "q".to_owned(),
+    }))
+    .unwrap();
+    let logged = || {
+        std::fs::read_dir(&sb.root).unwrap().any(|f| {
+            let path = f.unwrap().path();
+            path.extension().is_some_and(|e| e == "stderr")
+                && std::fs::read_to_string(&path).is_ok_and(|log| {
+                    log.lines().any(|l| {
+                        l.contains("P2: key frame to pty write") && l.contains("latency_us")
+                    })
+                })
+        })
+    };
+    assert!(eventually(WAIT, logged), "no P2 line in plyd's debug log");
 }
 
 #[test]
@@ -336,6 +434,19 @@ fn handshakes_check_versions_and_panes() {
     let (_, refused) = Data::attach_v(&sb.data_socket(), 9, 1, 80, 24).unwrap();
     assert!(
         matches!(refused, Frame::AttachRefused(r) if r.reason == RefuseReason::VersionMismatch)
+    );
+    let mut future = std::os::unix::net::UnixStream::connect(sb.data_socket()).unwrap();
+    let payload = [&2u16.to_le_bytes()[..], &[0xAB; 28]].concat();
+    let mut wire = u32::try_from(payload.len()).unwrap().to_le_bytes().to_vec();
+    wire.push(ply_proto::data::kind::ATTACH);
+    wire.extend_from_slice(&payload);
+    future.write_all(&wire).unwrap();
+    let answer = ply_proto::data::FrameReader::new(future)
+        .read_frame()
+        .unwrap();
+    assert!(
+        matches!(&answer, Some(Frame::AttachRefused(r)) if r.reason == RefuseReason::VersionMismatch),
+        "an ATTACH of another version and layout is a version mismatch: {answer:?}"
     );
 
     let (mut c, ws) = sb.control();

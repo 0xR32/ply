@@ -303,7 +303,9 @@ version 1 (nothing had been released), so `C2_VERSION` is still 1.
 ## Attaching
 
 1. The client connects and sends ATTACH.
-2. plyd refuses a bad first frame, another version, an unknown pane or a grid
+2. plyd reads `v` from the payload's first two bytes before decoding the rest,
+   so a client of another version is told reason 1 whatever its ATTACH looks
+   like. It refuses a bad first frame, another version, an unknown pane or a grid
    whose Snapshot could not fit one frame (7 bytes a cell plus 7 a row, with
    64 KiB kept for styles, within `MAX_FRAME_LEN`; `Geometry::fits_one_frame`)
    with ATTACH_REFUSED and closes. A refused size is never recorded.
@@ -500,8 +502,15 @@ End to end, `crates/daemon/tests/lifecycle.rs` checks that a shell survives
 detach and re-attach with the same screen
 (`a_shell_survives_detach_and_reattach_with_the_same_screen`), that a client
 that stops acking gets exactly four Deltas and then a Snapshot
-(`a_client_that_stops_acking_gets_a_forced_snapshot_after_3_s`), and that the
-refusals carry their reasons (`handshakes_check_versions_and_panes`);
+(`a_client_that_stops_acking_gets_a_forced_snapshot_after_3_s`), that one that
+never acks is disconnected after 30 s
+(`a_client_that_never_acks_is_disconnected_after_30_s`), that a DEC 2026 update
+shows no intermediate state and is ended by plyd after 150 ms
+(`a_synchronized_update_holds_frames_until_it_ends_or_150_ms_pass`), that an
+OSC 52 write reaches every attached client
+(`an_osc_52_write_reaches_every_attached_client`), and that the refusals carry
+their reasons, an ATTACH of another version and layout included
+(`handshakes_check_versions_and_panes`);
 `crates/daemon/tests/idle.rs` checks that an idle pane sends no frame. The
 publisher's rules have unit tests in `crates/daemon/src/publisher.rs`, and the
 Delta rules in `crates/term/tests/delta.rs`.

@@ -36,7 +36,7 @@ use crate::branch;
 use crate::daemon::{Shared, unix_now};
 use crate::osc::{decode_osc7, is_enter, osc9_bodies};
 use crate::panes::agent::Agent;
-use crate::pty::{Geometry, PaneProcess, PtyChannels};
+use crate::pty::{Geometry, PaneProcess, PtyChannels, PtyWrite};
 use crate::publisher::{AckOutcome, Cadence, ClientWindow, IdleTimer, SyncHold};
 
 /// Commands a pane task accepts; the channel is bounded ([`COMMAND_CAPACITY`]).
@@ -53,15 +53,17 @@ pub enum PaneCmd {
     },
     /// The client's connection ended.
     Detach {
-        /// The client.
+        /// The id the connection attached with; an unknown id is ignored.
         client: u64,
     },
     /// A client frame after ATTACH: input, RESIZE, FETCH_HISTORY or ACK.
     Frame {
-        /// The client.
+        /// The id the connection attached with; frames of a detached client are dropped.
         client: u64,
-        /// The decoded frame.
+        /// A client kind other than ATTACH (the data server refuses the rest before this).
         frame: Frame,
+        /// When the data server decoded it; a KEY's bytes carry it to the pty writer for the P2 probe.
+        received: Instant,
     },
     /// Bytes for the pty as they are (`pane.answer` digits).
     Write(Vec<u8>),
@@ -88,7 +90,7 @@ pub enum PaneCmd {
 /// A spawned process with its pty channels, handed to a pane task.
 #[derive(Debug)]
 pub struct Started {
-    /// The process.
+    /// The spawned child, the leader of its own process group, which `Kill` signals.
     pub process: PaneProcess,
     /// Its output, input and exit channels.
     pub channels: PtyChannels,
@@ -123,7 +125,7 @@ const ACTIVITY_WRITE_INTERVAL: Duration = Duration::from_secs(5);
 /// Everything a pane task starts from.
 #[derive(Debug)]
 pub struct PaneSeed {
-    /// The pane.
+    /// The pane's id, which is also its C2 `pane_id` and its row in `panes`.
     pub id: PaneId,
     /// Its program, for the default title.
     pub cli: Cli,
@@ -211,12 +213,12 @@ struct Client {
 
 #[derive(Debug, Default)]
 struct WriteQueue {
-    chunks: VecDeque<Vec<u8>>,
+    chunks: VecDeque<PtyWrite>,
     bytes: usize,
 }
 
 impl WriteQueue {
-    fn push(&mut self, pane_id: PaneId, bytes: Vec<u8>) {
+    fn push(&mut self, pane_id: PaneId, bytes: Vec<u8>, key_at: Option<Instant>) {
         if bytes.is_empty() {
             return;
         }
@@ -229,12 +231,12 @@ impl WriteQueue {
             return;
         }
         self.bytes += bytes.len();
-        self.chunks.push_back(bytes);
+        self.chunks.push_back(PtyWrite { bytes, key_at });
     }
 
-    fn pop(&mut self) -> Option<Vec<u8>> {
+    fn pop(&mut self) -> Option<PtyWrite> {
         let chunk = self.chunks.pop_front()?;
-        self.bytes -= chunk.len();
+        self.bytes -= chunk.bytes.len();
         Some(chunk)
     }
 
@@ -260,7 +262,7 @@ struct PaneTask {
     clients: Vec<Client>,
     process: Option<PaneProcess>,
     output: Option<mpsc::Receiver<Vec<u8>>>,
-    input: Option<mpsc::Sender<Vec<u8>>>,
+    input: Option<mpsc::Sender<PtyWrite>>,
     exit: Option<oneshot::Receiver<i32>>,
     exit_code: Option<i32>,
     exit_reported: bool,
@@ -294,7 +296,7 @@ async fn wait_exit(rx: &mut Option<oneshot::Receiver<i32>>) -> Option<i32> {
     }
 }
 
-async fn reserve(tx: Option<mpsc::Sender<Vec<u8>>>) -> Option<mpsc::OwnedPermit<Vec<u8>>> {
+async fn reserve(tx: Option<mpsc::Sender<PtyWrite>>) -> Option<mpsc::OwnedPermit<PtyWrite>> {
     match tx {
         Some(tx) => tx.reserve_owned().await.ok(),
         None => std::future::pending().await,
@@ -435,7 +437,11 @@ impl PaneTask {
                 self.engine.reset_mouse_buttons();
                 tracing::debug!(pane_id = self.id, client, "client detached");
             }
-            PaneCmd::Frame { client, frame } => self.on_frame(client, frame, now),
+            PaneCmd::Frame {
+                client,
+                frame,
+                received,
+            } => self.on_frame(client, frame, received, now),
             PaneCmd::Write(bytes) => {
                 let enter = is_enter(&bytes);
                 self.write(bytes);
@@ -508,6 +514,11 @@ impl PaneTask {
     }
 
     fn write(&mut self, bytes: Vec<u8>) {
+        self.write_key(bytes, None);
+    }
+
+    /// Queues `bytes` for the pty; `key_at` is set for a KEY frame's bytes (the P2 probe).
+    fn write_key(&mut self, bytes: Vec<u8>, key_at: Option<Instant>) {
         if self.input.is_none() {
             tracing::debug!(
                 pane_id = self.id,
@@ -516,7 +527,7 @@ impl PaneTask {
             );
             return;
         }
-        self.writes.push(self.id, bytes);
+        self.writes.push(self.id, bytes, key_at);
     }
 
     fn attach(&mut self, id: u64, geometry: Geometry, out: mpsc::Sender<Vec<u8>>, now: Instant) {
@@ -583,7 +594,7 @@ impl PaneTask {
         self.after_change(now);
     }
 
-    fn on_frame(&mut self, client_id: u64, frame: Frame, now: Instant) {
+    fn on_frame(&mut self, client_id: u64, frame: Frame, received: Instant, now: Instant) {
         match frame {
             Frame::InputRaw(bytes) => {
                 let enter = is_enter(&bytes);
@@ -641,7 +652,7 @@ impl PaneTask {
                 match encode_input(&mut self.engine, input) {
                     Ok(Encoded::Bytes(bytes)) => {
                         let enter = is_enter(&bytes);
-                        self.write(bytes);
+                        self.write_key(bytes, key.then_some(received));
                         if key {
                             self.key_typed(enter, now);
                         }
@@ -1118,12 +1129,12 @@ mod tests {
     #[test]
     fn the_write_queue_caps_pending_input() {
         let mut q = WriteQueue::default();
-        q.push(1, vec![0; MAX_PENDING_INPUT]);
-        q.push(1, vec![1]);
+        q.push(1, vec![0; MAX_PENDING_INPUT], None);
+        q.push(1, vec![1], None);
         assert_eq!(q.chunks.len(), 1, "input beyond the cap is dropped");
-        assert_eq!(q.pop().map(|c| c.len()), Some(MAX_PENDING_INPUT));
+        assert_eq!(q.pop().map(|c| c.bytes.len()), Some(MAX_PENDING_INPUT));
         assert!(q.is_empty());
-        q.push(1, vec![2]);
+        q.push(1, vec![2], Some(Instant::now()));
         assert_eq!(q.bytes, 1);
     }
 }

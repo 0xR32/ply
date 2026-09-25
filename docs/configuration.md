@@ -157,7 +157,8 @@ gui/<uid> <plist>` (an agent that is already loaded is fine) and `launchctl
 kickstart gui/<uid>/dev.ply.app.plyd`. `--dry-run` prints the plist and the
 commands and writes nothing. It refuses to run under `PLY_HOME`, which a
 LaunchAgent would not see. plyd is the only writer of the plist
-(`crates/daemon/src/launchd.rs`).
+(`crates/daemon/src/launchd.rs`). Its tests run the same steps with a recording
+runner in place of `launchctl` (`install_with`), so they never touch launchd.
 
 The agent is `Label` `dev.ply.app.plyd` with plyd as its only argument,
 `RunAtLoad` false (it does not start at login; the app starts it), `KeepAlive`

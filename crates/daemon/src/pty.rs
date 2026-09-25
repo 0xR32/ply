@@ -4,23 +4,28 @@
 //! `ptsname`, the slave opened `RDWR|NOCTTY|CLOEXEC`), sets the window size on the master, and starts the child with
 //! `Command::env_clear()` and exactly the environment it is given, the slave as stdin/stdout/stderr, and a
 //! `pre_exec` hook that makes the child a session leader (`setsid`) with the pty as its controlling terminal
-//! (`TIOCSCTTY`). That hook is the audited `unsafe` block: it runs in the forked child, after std has dup2'd the
-//! slave onto fd 0, and calls only the async-signal-safe `setsid(2)` and `ioctl(2)`, allocating nothing and taking
-//! no lock. The parent's slave handles are closed right after the spawn so the master sees end-of-file when
+//! (`TIOCSCTTY`) and closes every descriptor from 3 up that is not close-on-exec, so nothing plyd or a library opened
+//! without `CLOEXEC` leaks into the pane's program (the close-on-exec ones, std's exec-error pipe among them, close
+//! at exec anyway). The bound of that loop, the highest descriptor open in plyd, is read from `/dev/fd` before the
+//! fork. That hook is the audited `unsafe` block: it runs in the forked child, after std has dup2'd the slave onto
+//! fd 0, and calls only the async-signal-safe `setsid(2)`, `ioctl(2)`, `fcntl(2)` and `close(2)`, allocating nothing
+//! and taking no lock. The parent's slave handles are closed right after the spawn so the master sees end-of-file when
 //! the session ends. Three dedicated std threads per pane do the blocking work: a reader feeding pty output into a
 //! bounded channel of [`OUTPUT_CHANNEL_CAPACITY`] chunks, a writer draining a bounded input channel into the master
-//! (so a child that stops reading never blocks plyd's pane task), and a waiter reaping the child and reporting its
+//! (so a child that stops reading never blocks plyd's pane task; a write that carries a key's arrival time logs the P2
+//! latency, KEY frame received to `write(2)` done, at debug level), and a waiter reaping the child and reporting its
 //! exit code (a signal death is 128 + signal). The child is its own process group, so [`PaneProcess::signal_group`]
 //! reaches everything it started in the foreground.
 
 use std::collections::BTreeMap;
 use std::io;
-use std::os::fd::OwnedFd;
+use std::os::fd::{BorrowedFd, OwnedFd, RawFd};
 use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::sync::Arc;
 use std::thread;
+use std::time::Instant;
 
 use ply_proto::pane::PaneId;
 use rustix::fs::{Mode, OFlags, open};
@@ -43,6 +48,12 @@ pub const READ_CHUNK: usize = 64 * 1024;
 
 /// Exit code reported when the child could not be waited for.
 pub const EXIT_UNKNOWN: i32 = -1;
+
+/// Descriptors above the highest one seen before the fork that the child still checks, for ones other threads open meanwhile.
+const FD_MARGIN: RawFd = 64;
+
+/// The bound used when `/dev/fd` cannot be listed.
+const FD_FALLBACK_MAX: RawFd = 1023;
 
 /// Bytes of a Snapshot besides its rows: sequence, size, cursor, modes, scrollback count and base, row count.
 const SNAPSHOT_HEAD_BYTES: usize = 34;
@@ -112,13 +123,22 @@ pub struct PaneProcess {
     master: Arc<OwnedFd>,
 }
 
+/// One write for the pty, in order with the others.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PtyWrite {
+    /// The bytes, written whole.
+    pub bytes: Vec<u8>,
+    /// When the KEY frame these bytes encode reached plyd; the writer logs the time to `write(2)` (P2).
+    pub key_at: Option<Instant>,
+}
+
 /// The pane task's ends of the three threads.
 #[derive(Debug)]
 pub struct PtyChannels {
     /// pty output in arrival order; closes at end-of-file (the session ended and every slave handle closed).
     pub output: mpsc::Receiver<Vec<u8>>,
-    /// Bytes for the pty, written in order; dropping it ends the writer thread.
-    pub input: mpsc::Sender<Vec<u8>>,
+    /// Writes for the pty, in order; dropping it ends the writer thread.
+    pub input: mpsc::Sender<PtyWrite>,
     /// The exit code once the child is reaped; 128 + signal for a signal death, [`EXIT_UNKNOWN`] if waiting failed.
     pub exit: oneshot::Receiver<i32>,
 }
@@ -189,6 +209,7 @@ pub fn spawn_pane(spec: &SpawnSpec<'_>) -> Result<(PaneProcess, PtyChannels)> {
                 source,
             })
     };
+    let last_fd = highest_open_fd(spec.pane_id).saturating_add(FD_MARGIN);
     let mut cmd = Command::new(program);
     cmd.args(&spec.argv[1..])
         .env_clear()
@@ -197,12 +218,19 @@ pub fn spawn_pane(spec: &SpawnSpec<'_>) -> Result<(PaneProcess, PtyChannels)> {
         .stdin(stdio(&slave)?)
         .stdout(stdio(&slave)?)
         .stderr(Stdio::from(slave));
-    // SAFETY: runs in the forked child; setsid(2) and ioctl(2) are async-signal-safe and fd 0 is already the slave.
+    // SAFETY: runs in the forked child; setsid, ioctl, fcntl and close are async-signal-safe, fd 0 is already the slave, and only descriptors the child owns and nothing references any more are closed.
     #[allow(unsafe_code)]
     unsafe {
-        cmd.pre_exec(|| {
+        cmd.pre_exec(move || {
             rustix::process::setsid()?;
             rustix::process::ioctl_tiocsctty(rustix::stdio::stdin())?;
+            for fd in 3..=last_fd {
+                let leaks = rustix::io::fcntl_getfd(BorrowedFd::borrow_raw(fd))
+                    .is_ok_and(|flags| !flags.contains(FdFlags::CLOEXEC));
+                if leaks {
+                    rustix::io::close(fd);
+                }
+            }
             Ok(())
         });
     }
@@ -245,6 +273,20 @@ pub fn spawn_pane(spec: &SpawnSpec<'_>) -> Result<(PaneProcess, PtyChannels)> {
     ))
 }
 
+/// The highest descriptor open in plyd now, from `/dev/fd`; [`FD_FALLBACK_MAX`] when it cannot be listed.
+fn highest_open_fd(pane_id: PaneId) -> RawFd {
+    match std::fs::read_dir("/dev/fd") {
+        Ok(entries) => entries
+            .filter_map(|e| e.ok()?.file_name().to_str()?.parse::<RawFd>().ok())
+            .max()
+            .unwrap_or(2),
+        Err(e) => {
+            tracing::warn!(pane_id, error = %e, "cannot list /dev/fd; checking descriptors up to {FD_FALLBACK_MAX}");
+            FD_FALLBACK_MAX
+        }
+    }
+}
+
 fn start_thread(
     role: &'static str,
     pane_id: PaneId,
@@ -284,9 +326,9 @@ fn read_loop(pane_id: PaneId, master: &OwnedFd, tx: &mpsc::Sender<Vec<u8>>) {
     tracing::debug!(pane_id, "pty reader finished");
 }
 
-fn write_loop(pane_id: PaneId, master: &OwnedFd, mut rx: mpsc::Receiver<Vec<u8>>) {
-    while let Some(bytes) = rx.blocking_recv() {
-        let mut rest = bytes.as_slice();
+fn write_loop(pane_id: PaneId, master: &OwnedFd, mut rx: mpsc::Receiver<PtyWrite>) {
+    while let Some(w) = rx.blocking_recv() {
+        let mut rest = w.bytes.as_slice();
         while !rest.is_empty() {
             match write(master, rest) {
                 Ok(n) => rest = &rest[n..],
@@ -296,6 +338,14 @@ fn write_loop(pane_id: PaneId, master: &OwnedFd, mut rx: mpsc::Receiver<Vec<u8>>
                     return;
                 }
             }
+        }
+        if let Some(at) = w.key_at {
+            tracing::debug!(
+                pane_id,
+                latency_us = at.elapsed().as_micros(),
+                bytes = w.bytes.len(),
+                "P2: key frame to pty write"
+            );
         }
     }
 }
@@ -320,7 +370,10 @@ fn wait_loop(pane_id: PaneId, mut child: Child, tx: oneshot::Sender<i32>) {
 
 #[cfg(test)]
 mod tests {
+    use std::os::fd::AsRawFd;
     use std::time::Duration;
+
+    use rustix::io::fcntl_getfd;
 
     use super::*;
 
@@ -452,6 +505,43 @@ mod tests {
         assert_eq!(ch.exit.await.unwrap(), 0);
         let err = process.signal_group(Signal::KILL).unwrap_err();
         assert!(is_no_such_process(&err), "{err}");
+    }
+
+    #[tokio::test]
+    async fn descriptors_without_close_on_exec_do_not_leak_into_the_child() {
+        let file = std::fs::File::open("/dev/null").unwrap();
+        let leaky = rustix::io::fcntl_dupfd_cloexec(&file, 200).unwrap();
+        fcntl_setfd(&leaky, FdFlags::empty()).unwrap();
+        let kept = rustix::io::fcntl_dupfd_cloexec(&file, 210).unwrap();
+        let (leaky_fd, kept_fd) = (leaky.as_raw_fd(), kept.as_raw_fd());
+        let script = format!(
+            "for fd in {leaky_fd} {kept_fd}; do if [ -e /dev/fd/$fd ]; then echo open-$fd; else echo shut-$fd; fi; done"
+        );
+        let argv: Vec<String> = vec!["/bin/sh".into(), "-c".into(), script];
+        let env = env();
+        let spec = SpawnSpec {
+            pane_id: 5,
+            argv: &argv,
+            env: &env,
+            cwd: Path::new("/"),
+            geometry: Geometry {
+                cols: 80,
+                rows: 24,
+                cell_width_px: 0,
+                cell_height_px: 0,
+            },
+        };
+        let (_process, mut ch) = spawn_pane(&spec).unwrap();
+        let text = collect(&mut ch).await;
+        assert!(text.contains(&format!("shut-{leaky_fd}")), "{text}");
+        assert!(
+            text.contains(&format!("shut-{kept_fd}")),
+            "close-on-exec: {text}"
+        );
+        assert!(
+            fcntl_getfd(&leaky).is_ok(),
+            "the parent's descriptor stays open"
+        );
     }
 
     #[test]

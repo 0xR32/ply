@@ -2,7 +2,9 @@
 //!
 //! The first frame must be ATTACH with [`ply_proto::C2_VERSION`], the id of an open pane and a grid whose Snapshot
 //! fits one frame ([`crate::pty::Geometry::fits_one_frame`]); anything else is answered with ATTACH_REFUSED (reason
-//! and a readable message) and the connection closes. After ATTACH the
+//! and a readable message) and the connection closes. The version is read from the ATTACH payload's first two bytes
+//! before the rest is decoded, so a client of another version whose ATTACH has another layout is still told
+//! `version_mismatch`. After ATTACH the
 //! connection has two halves: a reader that decodes client frames (length-capped at
 //! [`ply_proto::data::MAX_FRAME_LEN`] before any allocation) and hands them to the pane task, and a writer that
 //! drains the frames the pane task encoded for this client. The pane task decides what is sent and when; a client
@@ -43,6 +45,17 @@ pub async fn read_frame<R: AsyncRead + Unpin>(
     r: &mut R,
     buf: &mut Vec<u8>,
 ) -> Result<Option<Frame>, ply_proto::Error> {
+    match read_payload(r, buf).await? {
+        Some(kind) => Frame::decode(kind, buf).map(Some),
+        None => Ok(None),
+    }
+}
+
+/// Reads one frame's payload into `buf` and returns its kind, undecoded; `Ok(None)` at a clean end of stream; errors as [`read_frame`].
+async fn read_payload<R: AsyncRead + Unpin>(
+    r: &mut R,
+    buf: &mut Vec<u8>,
+) -> Result<Option<u8>, ply_proto::Error> {
     let mut header = [0u8; HEADER_LEN];
     if r.read(&mut header[..1]).await? == 0 {
         return Ok(None);
@@ -55,14 +68,36 @@ pub async fn read_frame<R: AsyncRead + Unpin>(
     }
     buf.resize(len, 0);
     r.read_exact(buf).await?;
-    Frame::decode(header[4], buf).map(Some)
+    Ok(Some(header[4]))
+}
+
+/// The C2 version an ATTACH payload names, from its first two bytes, whatever the rest looks like.
+fn attach_version(kind: u8, payload: &[u8]) -> Option<u16> {
+    match (kind, payload) {
+        (ply_proto::data::kind::ATTACH, [lo, hi, ..]) => Some(u16::from_le_bytes([*lo, *hi])),
+        _ => None,
+    }
 }
 
 async fn connection(stream: UnixStream, shared: Arc<Shared>) {
     let client = shared.next_client_id();
     let (mut rd, mut wr) = stream.into_split();
     let mut buf = Vec::new();
-    let attach = match read_frame(&mut rd, &mut buf).await {
+    let first = match read_payload(&mut rd, &mut buf).await {
+        Ok(Some(kind)) => {
+            if let Some(v) = attach_version(kind, &buf)
+                && let Err(e) = ply_proto::version::check_version("C2", ply_proto::C2_VERSION, v)
+            {
+                tracing::warn!(client, error = %e, "C2 version mismatch");
+                refuse(&mut wr, None, RefuseReason::VersionMismatch, &e.to_string()).await;
+                return;
+            }
+            Frame::decode(kind, &buf).map(Some)
+        }
+        Ok(None) => Ok(None),
+        Err(e) => Err(e),
+    };
+    let attach = match first {
         Ok(Some(Frame::Attach(attach))) => attach,
         Ok(Some(other)) => {
             tracing::warn!(
@@ -93,17 +128,6 @@ async fn connection(stream: UnixStream, shared: Arc<Shared>) {
         }
     };
     let pane_id = attach.pane_id;
-    if let Err(e) = ply_proto::version::check_version("C2", ply_proto::C2_VERSION, attach.v) {
-        tracing::warn!(client, pane_id, error = %e, "C2 version mismatch");
-        refuse(
-            &mut wr,
-            Some(pane_id),
-            RefuseReason::VersionMismatch,
-            &e.to_string(),
-        )
-        .await;
-        return;
-    }
     let geometry = Geometry {
         cols: attach.cols,
         rows: attach.rows,
@@ -193,7 +217,13 @@ async fn read_loop(
     loop {
         match read_frame(&mut rd, &mut buf).await {
             Ok(Some(frame)) if frame.is_from_client() && !matches!(frame, Frame::Attach(_)) => {
-                if handle.send(PaneCmd::Frame { client, frame }).await.is_err() {
+                let received = std::time::Instant::now();
+                let cmd = PaneCmd::Frame {
+                    client,
+                    frame,
+                    received,
+                };
+                if handle.send(cmd).await.is_err() {
                     break;
                 }
             }
@@ -239,5 +269,24 @@ async fn refuse(
     }
     if let Err(e) = wr.shutdown().await {
         tracing::debug!(?pane_id, error = %e, "cannot shut the C2 connection down");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_attach_version_is_read_from_the_first_two_bytes_of_any_layout() {
+        assert_eq!(
+            attach_version(ply_proto::data::kind::ATTACH, &[2, 0]),
+            Some(2)
+        );
+        assert_eq!(
+            attach_version(ply_proto::data::kind::ATTACH, &[1, 0, 9, 9, 9]),
+            Some(1)
+        );
+        assert_eq!(attach_version(ply_proto::data::kind::ATTACH, &[1]), None);
+        assert_eq!(attach_version(ply_proto::data::kind::ACK, &[2, 0]), None);
     }
 }

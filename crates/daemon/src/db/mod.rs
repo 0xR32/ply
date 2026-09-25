@@ -23,18 +23,18 @@ const MIGRATIONS: &[(i64, &str)] = &[(1, include_str!("migrations/0001_init.sql"
 const PANE_COLUMNS: &str = "id, workspace_id, tab_id, position, cli, cwd, model_seen, worktree_seen, exit_code, \
      last_activity_at, session_ref, title, status, created_at, closed_at";
 
-/// One `tabs` row.
+/// One `tabs` row as stored; C1 `Tab` is built from it and the tab's open panes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TabRow {
-    /// Tab id.
+    /// SQLite rowid, the C1 `Tab.id`; ignored on insert, which assigns it.
     pub id: u64,
-    /// Owning workspace.
+    /// The `workspaces.id` the tab belongs to; a tab never moves between workspaces.
     pub workspace_id: u64,
-    /// Display name.
+    /// Label in the tab bar; ply names a new tab after its first pane's directory.
     pub name: String,
     /// 0-based order in the tab bar.
     pub position: u32,
-    /// Focused pane of the tab.
+    /// The focused pane as `layout.save` last stored it (else the tab's first pane); `None` while the tab has none.
     pub focus_pane_id: Option<PaneId>,
     /// Whether the focused pane fills the tab.
     pub zoomed: bool,
@@ -47,8 +47,7 @@ pub struct Db {
 }
 
 impl Db {
-    /// Opens or creates the database at `path` (WAL journal) and migrates it.
-    /// Fails with [`Error::SchemaTooNew`] for a newer database, else [`Error::Db`].
+    /// Opens or creates the database at `path` (WAL journal, `synchronous=NORMAL`) and migrates it; errors: [`Error::SchemaTooNew`] for a newer database, else [`Error::Db`].
     pub fn open(path: &Path) -> Result<Self> {
         let conn = Connection::open(path)?;
         conn.pragma_update(None, "journal_mode", "WAL")?;
@@ -57,8 +56,7 @@ impl Db {
         Self::init(conn)
     }
 
-    /// A migrated database in memory, for tests.
-    /// Fails with [`Error::Db`] only if SQLite does.
+    /// A migrated database in memory, for tests; errors: [`Error::Db`] only if SQLite does.
     pub fn open_in_memory() -> Result<Self> {
         Self::init(Connection::open_in_memory()?)
     }
@@ -347,7 +345,7 @@ fn pane_of(r: &Row<'_>) -> Result<Pane> {
     })
 }
 
-/// The stored session record of a pane.
+/// A pane as `session.list` reports it: the stored columns, without the live-only progress and branch.
 pub fn session_of(p: Pane) -> Session {
     Session {
         pane_id: p.id,
@@ -366,7 +364,7 @@ pub fn session_of(p: Pane) -> Session {
     }
 }
 
-/// The `panes.cli` value of a CLI.
+/// The `panes.cli` column value, which is also the CLI's C1 wire name.
 pub fn cli_str(cli: Cli) -> &'static str {
     match cli {
         Cli::Claude => "claude",

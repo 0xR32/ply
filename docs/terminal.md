@@ -162,12 +162,17 @@ screens do not survive a plyd restart).
 `crates/daemon/src/pty.rs` opens a pty pair with rustix, starts the child with a
 cleared environment (`docs/agents.md` lists it), the slave as its stdin, stdout
 and stderr, and one audited `pre_exec` block that makes it a session leader
-with the pty as its controlling terminal (`setsid`, `TIOCSCTTY`). Three std
-threads per pane do the blocking work:
+with the pty as its controlling terminal (`setsid`, `TIOCSCTTY`) and closes
+every descriptor from 3 up that is not close-on-exec, so nothing plyd or a
+library opened without `CLOEXEC` reaches the pane's program; the loop's bound,
+the highest descriptor open in plyd (from `/dev/fd`, plus a margin of 64), is
+computed before the fork. Three std threads per pane do the blocking work:
 
 - a **reader** that reads up to 64 KiB at a time into a channel of 64 chunks;
 - a **writer** that drains a channel of 64 writes into the master, so a child
-  that stops reading its input never blocks plyd;
+  that stops reading its input never blocks plyd; a write that encodes a KEY
+  frame carries the frame's arrival time and logs the P2 latency (`P2: key
+  frame to pty write`, `latency_us`) at debug level;
 - a **waiter** that reaps the child and reports its exit code (128 + signal for
   a signal death).
 
