@@ -26,6 +26,7 @@ hash. Never run `zig build` by hand inside the cached source: without the flags 
 |---|---|
 | `just check` (default) | `cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo doc --workspace --no-deps` with warnings as errors, `scripts/check-rules.ts`, `scripts/check-deps.ts`, `biome check`, `tsc -p app`, `tsc -p scripts` |
 | `just test` | `cargo nextest run --workspace`, the doctests (`cargo test --doc`) and `bun test ./app ./scripts` |
+| `just e2e` | `cargo build --release -p ply-daemon -p ply-hook`, then `PLY_E2E=1 bun test ./app/e2e`: journeys J1–J6 on the full app (`bun app/src/main.tsx` under GPUIX's stdio automation) with a throwaway `PLY_HOME` and `HOME` and the fake CLIs; needs a GUI session and opens windows without focus. Without `PLY_E2E=1` the journeys skip, so `just test` stays window-free |
 | `just deny` | `cargo deny check` (licences, advisories, banned crates) |
 | `just gen` | `bun scripts/gen.ts`: runs ply-proto's `export_bindings` test with `PLY_GEN_OUT`, formats the ts-rs output with Biome and writes `app/src/ipc/proto.gen.ts` (`--check` compares instead) |
 | `just dev` | `bun --hot app/src/main.tsx` |
@@ -155,6 +156,11 @@ writes one `<dir>/*.bytes` stream to its pty at N × 4 KiB/s, looping. It prints
 PLY_HOME=/tmp/ply-dev target/debug/plyd --replay "$PWD/crates/term/tests/fixtures" --speed 10 --panes 6
 PLY_HOME=/tmp/ply-dev PLY_DEMO_ATTACH=<printed ids> PLY_TERMINAL_STATS=1 bun app/src/dev/terminal-demo.tsx
 ```
+
+The commissioning numbers are measured on the full app instead: `app/e2e/perf.ts` (`p1`, `p2`, `idle`, `p5`, `soak`)
+drives `bun app/src/main.tsx` with its own sandbox, and `docs/perf.md` lists the runs and their results. In the full
+app `PLY_TERMINAL_STATS=1` also turns on GPUIX's frame overlay and logs a `frame stats` line (GPUI draw times and
+main-thread stalls) every second.
 
 The TypeScript C2 codec is pinned to ply-proto's by `crates/proto/tests/golden/c2/*.bin`: after an intended layout
 change, regenerate them with `PLY_BLESS=1 cargo test -p ply-proto --test golden_c2` and update

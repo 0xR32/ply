@@ -70,6 +70,7 @@ macOS 13 or later on Apple Silicon, with:
 | `cargo build --workspace` | builds every crate, including `plyd` and `ply-hook` |
 | `just check` | rustfmt, clippy `-D warnings`, rustdoc, check-rules, check-deps, Biome, tsc |
 | `just test` | `cargo nextest run` and `bun test` |
+| `just e2e` | journeys J1–J6 on the full app against the release `plyd` and fake CLIs (opens windows, unfocused) |
 | `just deny` | cargo-deny: licences, advisories, the HTTP-client and gpui bans |
 | `bun run gen` | regenerates `app/src/ipc/proto.gen.ts` from ply-proto |
 
@@ -83,4 +84,6 @@ macOS 13 or later on Apple Silicon, with:
 - [Keybindings](docs/keybindings.md) and [configuration](docs/configuration.md).
 - [Development guide](docs/development.md): toolchain setup, the run directory and logs, running plyd in the
   foreground, how the gates work, and how to admit a dependency.
+- [Performance and commissioning](docs/perf.md): the journeys, P1–P5 and F1–F4 measured against their targets,
+  the real-CLI runs and the soak, and how to rerun them.
 - [Specification](docs/spec.html): the implementation specification the build started from.

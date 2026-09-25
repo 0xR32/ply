@@ -151,6 +151,7 @@ cargo run -p ply-daemon --example ply-cli      # the command-line C1/C2 test cli
 ```
 just check      # fmt, clippy -D warnings, cargo doc -D warnings, check-rules, check-deps, biome, tsc
 just test       # cargo nextest, doctests, bun test
+just e2e        # journeys J1–J6 on the full app and the release plyd (opens windows, unfocused)
 just deny       # licences, advisories, the HTTP-client and gpui bans
 just gen        # regenerate app/src/ipc/proto.gen.ts
 just fonts      # copy the Geist TTFs into ~/Library/Fonts (writes outside the checkout)
@@ -232,6 +233,8 @@ GPUIX's test renderer (`@gpuix/react/testing`) and the mock daemon
 - `docs/keybindings.md` — every binding, the reserved chords, how to add one.
 - `docs/configuration.md` — paths, `config.toml`, settings, environment variables, what a run writes to the machine.
 - `docs/development.md` — setup, the gates, running plyd and the app, adding a dependency.
+- `docs/perf.md` — the commissioning evidence: journeys J1–J6, P1–P5 and F1–F4 against their targets, the real-CLI
+  runs and the soak, with the commands that measured them.
 - `docs/spec.html` — the implementation specification the build started from (6.0.0); where it and the code
   disagree, the code and the documents above win.
 
