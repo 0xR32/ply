@@ -15,6 +15,10 @@ parallel cargo builds and test runs (load average 3–5 on 8 cores for most runs
 9 at the start of P1), so
 the frame numbers are those of a busy machine, not a quiet one.
 
+The runs predate two later changes: the needs-you strip now answers Yes (`1`) and No (Esc) only (b0389ca), and a
+tab holds at most four panes laid out as columns, then quadrants (8f51326). Where a row below names Yes/Always/No or
+the main-plus-stack layout, that is what was measured then.
+
 ## Results against the targets
 
 | ID | Criterion (spec 1.2) | Target | Measured | Verdict |
