@@ -86,4 +86,3 @@ macOS 13 or later on Apple Silicon, with:
   foreground, how the gates work, and how to admit a dependency.
 - [Performance and commissioning](docs/perf.md): the journeys, P1–P5 and F1–F4 measured against their targets,
   the real-CLI runs and the soak, and how to rerun them.
-- [Specification](docs/spec.html): the implementation specification the build started from.

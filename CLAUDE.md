@@ -240,8 +240,6 @@ GPUIX's test renderer (`@gpuix/react/testing`) and the mock daemon
 - `docs/development.md` — setup, the gates, running plyd and the app, adding a dependency.
 - `docs/perf.md` — the commissioning evidence: journeys J1–J6, P1–P5 and F1–F4 against their targets, the real-CLI
   runs and the soak, with the commands that measured them.
-- `docs/spec.html` — the implementation specification the build started from (6.0.0); where it and the code
-  disagree, the code and the documents above win.
 
 ## What lives elsewhere
 
