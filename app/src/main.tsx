@@ -3,6 +3,7 @@ import { render } from '@gpuix/react';
 import { version } from '../package.json';
 import { App } from './app/App';
 import { FrameStats } from './app/frame-stats';
+import { StartZoomed } from './app/start-zoomed';
 import { createControlClient } from './ipc/control-client';
 import { createDaemonStarter } from './ipc/daemon-launcher';
 import { log } from './ipc/log';
@@ -40,6 +41,7 @@ const frameStats = process.env.PLY_TERMINAL_STATS === '1';
 render(
   <>
     <App store={store} />
+    <StartZoomed />
     {frameStats ? <FrameStats /> : null}
   </>,
   {

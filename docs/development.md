@@ -147,6 +147,7 @@ PLY_HOME=/tmp/ply-dev PLY_DEMO_PANES=4 PLY_DEMO_INPUT='yes | head -c 50000000' P
 | `PLY_DEMO_WIDTH`, `PLY_DEMO_HEIGHT` | the window size (default 1280 × 800); attaching sizes the pane to the view |
 | `PLY_TERMINAL_STATS=1` | GPUIX's frame overlay, a decode/render line in each pane, and a timing line in the app log every 2 s |
 | `PLY_WINDOW_FOCUS=0` | open the window without taking focus |
+| `PLY_WINDOW_ZOOM=0` | keep the opening size (1280 × 800) instead of zooming the window to fill its screen; the journeys set it |
 
 For the P1 bench a debug plyd replays the recorded agent streams into live panes: `plyd --replay <dir> [--speed N]
 [--panes K]` asks the running plyd of `PLY_HOME` for K shell panes (default 6) and makes each `exec` a feeder that

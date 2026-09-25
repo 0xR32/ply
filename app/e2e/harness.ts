@@ -81,6 +81,7 @@ export class Sandbox {
     delete env.NODE_ENV;
     env.PLY_HOME = this.plyHome;
     env.PLY_WINDOW_FOCUS = '0';
+    env.PLY_WINDOW_ZOOM = '0';
     if (this.fakes) {
       env.HOME = this.home;
       env.SHELL = '/bin/sh';
