@@ -28,6 +28,11 @@ function summary(values: number[], unit: string, digits = 2): string {
 
 async function launchApp(sb: Sandbox, env: Record<string, string> = {}): Promise<AppProcess> {
   const app = await AppProcess.launch(sb.env(env), join(sb.root, 'app.stderr'));
+  void app.child.exited.then((code) =>
+    console.log(
+      `  (${new Date().toISOString()} the app exited: code ${code}, ${app.child.signalCode ?? 'no signal'})`,
+    ),
+  );
   await until(
     async () => (await app.has('pane-grid')) || (await app.has('pane-grid-empty')),
     'the app to load',
@@ -392,7 +397,10 @@ async function p5(switches: number): Promise<void> {
       const t = i % 4;
       const t0 = performance.now();
       await run.app.automation.call('keystrokes', { keys: `cmd-${t + 1}` });
-      await until(() => shows(tabs[t] as Pane[]), `tab ${t + 1} painted`, 5_000);
+      // `until` sleeps 20 ms between checks, too coarse for a 50 ms target; one getPaintedText is under 1 ms.
+      while (!(await shows(tabs[t] as Pane[]))) {
+        if (performance.now() - t0 > 5_000) throw new Error(`tab ${t + 1} never painted`);
+      }
       times.push(performance.now() - t0);
       await Bun.sleep(150);
     }

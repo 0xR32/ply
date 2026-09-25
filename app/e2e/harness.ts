@@ -2,6 +2,7 @@ import {
   appendFileSync,
   chmodSync,
   copyFileSync,
+  cpSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -11,7 +12,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { type App, connectStdio, type TreeNode } from '@gpuix/react/automation';
 import { type ControlClient, createControlClient } from '../src/ipc/control-client';
 import type { Layout, Pane } from '../src/ipc/proto.gen';
@@ -124,10 +125,17 @@ export class Sandbox {
     return existsSync(path) ? readFileSync(path, 'utf8').trim().split('\n') : [];
   }
 
-  /** Stops plyd and deletes the sandbox; end every app first, or its launcher starts plyd again. */
+  /** Stops plyd and deletes the sandbox (copied into `$PLY_E2E_KEEP` first when set); end every app first, or its launcher starts plyd again. */
   async remove(): Promise<void> {
     await this.stopPlyd();
     if (this.fakes) Bun.spawnSync(['pkill', '-f', this.root]);
+    const keep = process.env.PLY_E2E_KEEP;
+    if (keep) {
+      cpSync(this.root, join(keep, basename(this.root)), {
+        recursive: true,
+        filter: (src) => !/\.(sock|cmd)$/.test(src),
+      });
+    }
     rmSync(this.root, { recursive: true, force: true });
   }
 }
