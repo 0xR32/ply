@@ -830,3 +830,45 @@ fn codex_rollout_reports_the_model_and_the_plan_in_both_shapes() {
     );
     assert_eq!(e.listed(id)["model_seen"], "gpt-example");
 }
+
+#[test]
+fn codex_home_from_the_login_shell_reaches_the_pane_and_its_rollout_tailer() {
+    let sb = Sandbox::new("cx-home");
+    install(&sb);
+    hook_program();
+    let profile = std::fs::read_to_string(sb.home.join(".profile")).unwrap();
+    std::fs::write(
+        sb.home.join(".profile"),
+        format!("{profile}CODEX_HOME=\"$HOME/codex-alt\"\nexport CODEX_HOME\n"),
+    )
+    .unwrap();
+    let _plyd = sb.start();
+    let (mut c, ws) = sb.control();
+    let id = c
+        .call(
+            "pane.create",
+            json!({"workspace_id": ws, "cli": "codex", "cwd": sb.home}),
+        )
+        .unwrap()["id"]
+        .as_u64()
+        .unwrap();
+    let fake = Fake::ready(&sb, id);
+    fake.send("session");
+    let bound = eventually(WAIT, || {
+        let panes = c.call("pane.list", json!({"workspace_id": ws})).unwrap();
+        panes[0]["session_ref"] == json!(codex_thread(id))
+    });
+    assert!(
+        bound,
+        "the tailer followed $CODEX_HOME/sessions of the login shell"
+    );
+    assert!(
+        find_file(
+            &sb.home.join("codex-alt/sessions"),
+            &format!("{}.jsonl", codex_thread(id))
+        )
+        .is_some(),
+        "the fake wrote under the CODEX_HOME it was given"
+    );
+    assert!(!sb.home.join(".codex").exists());
+}

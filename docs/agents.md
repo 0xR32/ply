@@ -69,9 +69,16 @@ CLI:
 `TMPDIR`, `LANG`, the `LC_*` locale variables, `SSH_AUTH_SOCK` and
 `__CF_USER_TEXT_ENCODING` from plyd's own environment when set; `LANG` as
 `en_US.UTF-8` when plyd has none; `SHELL` (the resolved login shell); `PATH`
-(the login shell's); `TERM=xterm-256color` and `COLORTERM=truecolor`; and the
-launch spec's additions below. Nothing else of plyd's leaks through
-(`a_pane_gets_only_plyds_allow_listed_environment`).
+(the login shell's); the variables of Ruling R52 that the login shell exports
+— `CODEX_HOME`, `CLAUDE_CONFIG_DIR`, the proxy variables in both cases,
+`SSL_CERT_FILE`, `SSL_CERT_DIR`, `NODE_EXTRA_CA_CERTS`, `LANG`, `LC_ALL`,
+`LC_CTYPE` (`docs/configuration.md`) and never another, so no API key an rc
+file exports; `TERM=xterm-256color` and `COLORTERM=truecolor`; and the launch
+spec's additions below. Nothing else of plyd's leaks through
+(`a_pane_gets_only_plyds_allow_listed_environment`,
+`the_probe_passes_on_only_the_captured_variables_the_shell_exports`). A Codex
+pane's rollouts are followed under the `CODEX_HOME` it runs with
+(`codex_home_from_the_login_shell_reaches_the_pane_and_its_rollout_tailer`).
 
 **`launch.json`** is the spawn as stored for `pane.resume` (`LaunchSpec` in
 `crates/agents/src/adapter.rs`, strict JSON):

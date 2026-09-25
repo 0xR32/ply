@@ -5,11 +5,14 @@
 //! shell's `PATH` as an interactive login shell sees it (`$SHELL -l -i -c`, [`PATH_PROBE_TIMEOUT`] at most, stdin from
 //! `/dev/null`): zsh reads `.zshrc` only when interactive, and that is where installers put `~/.local/bin`, home of the
 //! `claude` and `codex` binaries (Ruling R42). A shell that fails or hangs interactively is asked again as a plain
-//! login shell (`-l -c`); the log says which one answered. Children start from a cleared environment
-//! (`env_clear`) with only [`LoginEnv::base`]: a short allow-list of plyd's own variables (home, user, temp dir,
-//! locale, SSH agent), `SHELL`, the login `PATH`, `TERM=xterm-256color` and `COLORTERM=truecolor`, plus the launch
-//! spec's additions. `LANG` defaults to `en_US.UTF-8` when plyd has none, because a CLI in the C locale draws no
-//! UTF-8. Nothing here reads or writes the CLIs' own configuration (INV-8).
+//! login shell (`-l -c`); the log says which one answered. The same probe reports the [`CAPTURED`] variables the shell
+//! exports (Ruling R52: the CLIs' homes, proxies, CA certificates, locale), and nothing else, so no API key an rc
+//! file sets ever reaches plyd; when no shell answers, plyd's own values of them are used. Children start from a
+//! cleared environment (`env_clear`) with only [`LoginEnv::base`]: a short allow-list of plyd's own variables (home,
+//! user, temp dir, locale, SSH agent), `SHELL`, the login `PATH`, the captured variables, `TERM=xterm-256color` and
+//! `COLORTERM=truecolor`, plus the launch spec's additions. `LANG` defaults to `en_US.UTF-8` when neither plyd nor
+//! the shell has one, because a CLI in the C locale draws no UTF-8. Nothing here reads or writes the CLIs' own
+//! configuration (INV-8).
 
 use std::collections::BTreeMap;
 use std::os::unix::fs::PermissionsExt;
@@ -51,8 +54,37 @@ const PASSTHROUGH: &[&str] = &[
     "__CF_USER_TEXT_ENCODING",
 ];
 
+/// The variables the login-shell probe reports when the shell exports them, and passes to every pane (Ruling R52).
+pub const CAPTURED: &[&str] = &[
+    "CODEX_HOME",
+    "CLAUDE_CONFIG_DIR",
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "NO_PROXY",
+    "ALL_PROXY",
+    "http_proxy",
+    "https_proxy",
+    "no_proxy",
+    "all_proxy",
+    "SSL_CERT_FILE",
+    "SSL_CERT_DIR",
+    "NODE_EXTRA_CA_CERTS",
+    "LANG",
+    "LC_ALL",
+    "LC_CTYPE",
+];
+
 const PATH_BEGIN: &str = "__PLY_PATH_BEGIN__";
 const PATH_END: &str = "__PLY_PATH_END__";
+const VAR_BEGIN: &str = "__PLY_VAR__";
+const VAR_END: &str = "__PLY_VAR_END__";
+
+/// What the login-shell probe reported: its `PATH` and the [`CAPTURED`] variables it exports.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct ShellReport {
+    path: String,
+    vars: BTreeMap<String, String>,
+}
 
 /// The login shell and the base environment of every pane process; resolved once, then read-only.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -70,18 +102,24 @@ impl LoginEnv {
         let own: BTreeMap<String, String> = std::env::vars().collect();
         let shell = login_shell(&own).await;
         let mut base = base_env(&own, &shell);
-        let path = match login_path(&shell, &base).await {
-            Some(path) => path,
+        base.extend(captured(&own));
+        let report = match login_path(&shell, &base).await {
+            Some(report) => report,
             None => {
                 let path = own
                     .get("PATH")
                     .cloned()
                     .unwrap_or_else(|| FALLBACK_PATH.to_owned());
-                tracing::warn!(shell = %shell.display(), %path, "the login shell reported no PATH; using plyd's");
-                path
+                tracing::warn!(shell = %shell.display(), %path, "the login shell reported no PATH; using plyd's PATH and variables");
+                ShellReport {
+                    path,
+                    vars: BTreeMap::new(),
+                }
             }
         };
-        base.insert("PATH".to_owned(), path);
+        tracing::info!(variables = ?report.vars.keys().collect::<Vec<_>>(), "variables taken from the login shell");
+        base.extend(report.vars);
+        base.insert("PATH".to_owned(), report.path);
         Self { shell, base }
     }
 
@@ -114,6 +152,14 @@ pub fn which_in(path: &str, name: &str) -> Option<PathBuf> {
 
 fn is_executable(path: &Path) -> bool {
     std::fs::metadata(path).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+}
+
+/// The [`CAPTURED`] variables of `env`, and no others.
+fn captured(env: &BTreeMap<String, String>) -> BTreeMap<String, String> {
+    CAPTURED
+        .iter()
+        .filter_map(|k| env.get(*k).map(|v| ((*k).to_owned(), v.clone())))
+        .collect()
 }
 
 fn base_env(own: &BTreeMap<String, String>, shell: &Path) -> BTreeMap<String, String> {
@@ -171,7 +217,7 @@ async fn login_shell(own: &BTreeMap<String, String>) -> PathBuf {
     PathBuf::from(FALLBACK_SHELL)
 }
 
-async fn login_path(shell: &Path, base: &BTreeMap<String, String>) -> Option<String> {
+async fn login_path(shell: &Path, base: &BTreeMap<String, String>) -> Option<ShellReport> {
     login_path_within(shell, base, PATH_PROBE_TIMEOUT).await
 }
 
@@ -179,7 +225,7 @@ async fn login_path_within(
     shell: &Path,
     base: &BTreeMap<String, String>,
     timeout: Duration,
-) -> Option<String> {
+) -> Option<ShellReport> {
     for (flags, mode) in [
         (&["-l", "-i", "-c"][..], "interactive login"),
         (&["-l", "-c"][..], "login"),
@@ -202,12 +248,18 @@ async fn shell_path(
     base: &BTreeMap<String, String>,
     flags: &[&str],
     timeout: Duration,
-) -> Option<String> {
+) -> Option<ShellReport> {
     let fish = shell.file_name().is_some_and(|n| n == "fish");
+    let names = CAPTURED.join(" ");
+    // printenv answers only for exported variables, which are what the CLIs would see in a terminal.
     let script = if fish {
-        format!("printf '\\n{PATH_BEGIN}%s{PATH_END}\\n' (string join : $PATH)")
+        format!(
+            "printf '\\n{PATH_BEGIN}%s{PATH_END}\\n' (string join : $PATH); for v in {names}; if set val (/usr/bin/printenv $v); printf '\\n{VAR_BEGIN}%s=%s{VAR_END}\\n' $v \"$val\"; end; end"
+        )
     } else {
-        format!("printf '\\n{PATH_BEGIN}%s{PATH_END}\\n' \"$PATH\"")
+        format!(
+            "printf '\\n{PATH_BEGIN}%s{PATH_END}\\n' \"$PATH\"; for v in {names}; do if val=$(/usr/bin/printenv \"$v\"); then printf '\\n{VAR_BEGIN}%s=%s{VAR_END}\\n' \"$v\" \"$val\"; fi; done"
+        )
     };
     let mut cmd = Command::new(shell);
     cmd.args(flags)
@@ -222,7 +274,22 @@ async fn shell_path(
         cmd.current_dir(home);
     }
     let out = run_within(cmd, shell, timeout).await?;
-    marked_path(&out)
+    report(&out)
+}
+
+/// The `PATH` between the last begin marker and its end marker, and the [`CAPTURED`] variables marked after it.
+fn report(out: &str) -> Option<ShellReport> {
+    let path = marked_path(out)?;
+    let (_, after) = out.rsplit_once(PATH_BEGIN)?;
+    let vars = after
+        .split(VAR_BEGIN)
+        .skip(1)
+        .filter_map(|marked| marked.split_once(VAR_END))
+        .filter_map(|(pair, _)| pair.split_once('='))
+        .filter(|(name, _)| CAPTURED.contains(name))
+        .map(|(name, value)| (name.to_owned(), value.to_owned()))
+        .collect();
+    Some(ShellReport { path, vars })
 }
 
 /// The text between the last begin marker and the end marker after it; `.zshrc` output around it is ignored.
@@ -316,8 +383,41 @@ mod tests {
             "case \"$*\" in *-i*) echo 'rc noise'; PATH=/example/interactive:/bin ;; *) PATH=/example/login:/bin ;; esac\nexport PATH\n{RUN_LAST_ARG}"
         );
         let (shell, base) = fake_shell("interactive", &body);
-        let path = login_path_within(&shell, &base, Duration::from_secs(5)).await;
+        let path = login_path_within(&shell, &base, Duration::from_secs(5))
+            .await
+            .map(|r| r.path);
         assert_eq!(path.as_deref(), Some("/example/interactive:/bin"));
+    }
+
+    #[tokio::test]
+    async fn the_probe_passes_on_only_the_captured_variables_the_shell_exports() {
+        let body = format!(
+            "export CODEX_HOME=/example/codex-home https_proxy=http://proxy.example:3128 OPENAI_API_KEY=example-secret\nNO_PROXY=not-exported\nPATH=/example/bin:/bin\nexport PATH\n{RUN_LAST_ARG}"
+        );
+        let (shell, base) = fake_shell("captured", &body);
+        let report = login_path_within(&shell, &base, Duration::from_secs(5))
+            .await
+            .unwrap();
+        assert_eq!(report.path, "/example/bin:/bin");
+        assert_eq!(
+            report.vars.get("CODEX_HOME").map(String::as_str),
+            Some("/example/codex-home")
+        );
+        assert_eq!(
+            report.vars.get("https_proxy").map(String::as_str),
+            Some("http://proxy.example:3128")
+        );
+        assert_eq!(
+            report.vars.get("LANG").map(String::as_str),
+            Some(DEFAULT_LANG),
+            "the locale plyd gave the probe comes back"
+        );
+        assert!(!report.vars.contains_key("OPENAI_API_KEY"), "never a key");
+        assert!(
+            !report.vars.contains_key("NO_PROXY"),
+            "a shell variable that is not exported"
+        );
+        assert!(report.vars.keys().all(|k| CAPTURED.contains(&k.as_str())));
     }
 
     #[tokio::test]
@@ -327,7 +427,9 @@ mod tests {
         );
         let (shell, base) = fake_shell("hanging", &body);
         let started = std::time::Instant::now();
-        let path = login_path_within(&shell, &base, Duration::from_millis(500)).await;
+        let path = login_path_within(&shell, &base, Duration::from_millis(500))
+            .await
+            .map(|r| r.path);
         assert_eq!(path.as_deref(), Some("/example/login:/bin"));
         assert!(
             started.elapsed() < Duration::from_secs(5),
@@ -341,6 +443,15 @@ mod tests {
         assert_eq!(marked_path(&out).as_deref(), Some("/a:/b"));
         assert_eq!(marked_path(&format!("{PATH_BEGIN}{PATH_END}")), None);
         assert_eq!(marked_path("no markers"), None);
+        let out = format!(
+            "{VAR_BEGIN}CODEX_HOME=/noise{VAR_END}\n{PATH_BEGIN}/a{PATH_END}\n{VAR_BEGIN}CLAUDE_CONFIG_DIR=/a=b{VAR_END}\n{VAR_BEGIN}AWS_SECRET_ACCESS_KEY=x{VAR_END}\n{VAR_BEGIN}broken\n"
+        );
+        let report = report(&out).unwrap();
+        assert_eq!(
+            report.vars,
+            BTreeMap::from([("CLAUDE_CONFIG_DIR".to_owned(), "/a=b".to_owned())]),
+            "only captured names after the PATH, split at the first ="
+        );
     }
 
     #[tokio::test]
@@ -352,7 +463,7 @@ mod tests {
             )]),
             Path::new("/bin/sh"),
         );
-        let path = login_path(Path::new("/bin/sh"), &base).await.unwrap();
+        let path = login_path(Path::new("/bin/sh"), &base).await.unwrap().path;
         assert!(path.split(':').any(|d| d == "/bin"), "{path}");
     }
 }
