@@ -7,6 +7,8 @@ import {
   isLost,
   isTabFull,
   nextWaitingPane,
+  type PaneDirection,
+  paneNeighbour,
   panePlace,
   paneTitle,
   resumeHow,
@@ -66,6 +68,17 @@ function resumeItems(state: AppState): PaletteItem[] {
   );
 }
 
+const DIRECTIONS: readonly PaneDirection[] = ['left', 'right', 'up', 'down'];
+
+/** "Pane left/right/up/down" (Ruling R58), only for directions with a spatial neighbour to move to. */
+function directionItems(state: AppState, tab: ReturnType<typeof selectActiveTab>): PaletteItem[] {
+  const focused = selectFocusedPane(state);
+  if (!focused) return [];
+  return DIRECTIONS.filter((dir) => paneNeighbour(tab, focused.id, dir) !== undefined).map((dir) =>
+    command(`pane.${dir}`, `Pane ${dir}`, 'in this tab', 'dim'),
+  );
+}
+
 function commands(state: AppState): PaletteItem[] {
   const home = state.env.home;
   const tab = selectActiveTab(state);
@@ -100,6 +113,7 @@ function commands(state: AppState): PaletteItem[] {
     command('pane.zoom', tab?.zoomed ? 'Unzoom pane' : 'Zoom pane', 'fill the tab, toggle', 'dim'),
     command('pane.next', 'Next pane', 'in this tab', 'dim'),
     command('pane.prev', 'Previous pane', 'in this tab', 'dim'),
+    ...directionItems(state, tab),
     command('tab.next', 'Next tab', '', 'dim'),
     command('tab.prev', 'Previous tab', '', 'dim'),
     command(

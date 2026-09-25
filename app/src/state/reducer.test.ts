@@ -4,9 +4,11 @@ import { type AppState, reduce } from './reducer';
 import {
   FULL_TAB_NOTICE,
   formatElapsed,
+  gridShape,
   isLost,
   isTabFull,
   nextWaitingPane,
+  paneNeighbour,
   resumeHow,
   selectCliCounts,
   selectWaitingCount,
@@ -465,5 +467,69 @@ describe('selectors', () => {
     expect(selectWaitingCount(state)).toBe(1);
     expect(selectCliCounts(state)).toEqual({ claude: 1, codex: 1, shell: 1 });
     expect(nextWaitingPane(state)).toBe(2);
+  });
+
+  test('gridShape lays out ≤3 panes as one row and 4 as quadrants (R56)', () => {
+    expect(gridShape(1)).toEqual({ columns: 1, rows: 1 });
+    expect(gridShape(2)).toEqual({ columns: 2, rows: 1 });
+    expect(gridShape(3)).toEqual({ columns: 3, rows: 1 });
+    expect(gridShape(4)).toEqual({ columns: 2, rows: 2 });
+  });
+
+  test('paneNeighbour moves spatially with no wrap-around, in every layout (R58)', () => {
+    const tab = (pane_ids: number[]) => ({ pane_ids });
+    for (const dir of ['left', 'right', 'up', 'down'] as const) {
+      expect(paneNeighbour(tab([1]), 1, dir)).toBeUndefined();
+    }
+    expect(paneNeighbour(tab([1, 2]), 1, 'right')).toBe(2);
+    expect(paneNeighbour(tab([1, 2]), 2, 'left')).toBe(1);
+    expect(paneNeighbour(tab([1, 2]), 1, 'left')).toBeUndefined();
+    expect(paneNeighbour(tab([1, 2]), 2, 'right')).toBeUndefined();
+    expect(paneNeighbour(tab([1, 2]), 1, 'up')).toBeUndefined();
+    expect(paneNeighbour(tab([1, 2]), 1, 'down')).toBeUndefined();
+    expect(paneNeighbour(tab([1, 2, 3]), 2, 'left')).toBe(1);
+    expect(paneNeighbour(tab([1, 2, 3]), 2, 'right')).toBe(3);
+    expect(paneNeighbour(tab([1, 2, 3]), 3, 'right')).toBeUndefined();
+    expect(paneNeighbour(tab([1, 2, 3]), 1, 'up')).toBeUndefined();
+    // 1 top-left, 2 top-right, 3 bottom-left, 4 bottom-right
+    const q = tab([1, 2, 3, 4]);
+    expect(paneNeighbour(q, 1, 'right')).toBe(2);
+    expect(paneNeighbour(q, 1, 'down')).toBe(3);
+    expect(paneNeighbour(q, 2, 'left')).toBe(1);
+    expect(paneNeighbour(q, 2, 'right')).toBeUndefined();
+    expect(paneNeighbour(q, 2, 'down')).toBe(4);
+    expect(paneNeighbour(q, 3, 'up')).toBe(1);
+    expect(paneNeighbour(q, 3, 'right')).toBe(4);
+    expect(paneNeighbour(q, 4, 'left')).toBe(3);
+    expect(paneNeighbour(q, 4, 'up')).toBe(2);
+    expect(paneNeighbour(q, 4, 'right')).toBeUndefined();
+    expect(paneNeighbour(q, 4, 'down')).toBeUndefined();
+    expect(paneNeighbour(q, 99, 'left')).toBeUndefined();
+    expect(paneNeighbour(undefined, 1, 'left')).toBeUndefined();
+  });
+});
+
+describe('⌘← ⌘→ ⌘↑ ⌘↓ (R58)', () => {
+  test('move focus to the spatial neighbour, do nothing at an edge, and the zoom follows', () => {
+    const four = () =>
+      makeState([0, 1, 2, 3].map((i) => makePane({ id: i + 1, position: i, cli: 'shell' })));
+    expect(run(four(), { type: 'command', id: 'pane.left' }).tabs[0]?.focus_pane_id).toBe(1);
+    const right = run(four(), { type: 'command', id: 'pane.right' });
+    expect(right.tabs[0]?.focus_pane_id).toBe(2);
+    const down = run(right, { type: 'command', id: 'pane.down' });
+    expect(down.tabs[0]?.focus_pane_id).toBe(4);
+    const zoomed = run(four(), { type: 'command', id: 'pane.zoom' });
+    expect(zoomed.tabs[0]?.zoomed).toBe(true);
+    const zoomedMoved = run(zoomed, { type: 'command', id: 'pane.right' });
+    expect(zoomedMoved.tabs[0]).toMatchObject({ zoomed: true, focus_pane_id: 2 });
+    expect(visiblePaneIds(zoomedMoved.tabs[0])).toEqual([2]);
+  });
+
+  test('one pane or no spatial neighbour: the key does nothing', () => {
+    const one = makeState([makePane({ id: 1 })]);
+    expect(run(one, { type: 'command', id: 'pane.right' })).toBe(one);
+    const two = makeState([makePane({ id: 1 }), makePane({ id: 2, position: 1 })]);
+    expect(run(two, { type: 'command', id: 'pane.up' })).toBe(two);
+    expect(run(two, { type: 'command', id: 'pane.right' }).tabs[0]?.focus_pane_id).toBe(2);
   });
 });

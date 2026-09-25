@@ -1,5 +1,6 @@
 import { createTestRoot, type TestRenderer } from '@gpuix/react/testing';
 import type { ReactNode } from 'react';
+import { windowKeyListeners } from '../keymap/dispatcher';
 import { ChromeThemeContext, chromeFonts, createChromeTheme } from '../theme/chrome';
 import type { Tab, Workspace } from './actions';
 import { type AppState, initialState, type PaneState } from './reducer';
@@ -73,14 +74,17 @@ export interface Mounted {
   rerender: (node: ReactNode) => void;
 }
 
-/** Renders `node` in GPUIX's test renderer under a store holding `state` (or the given store). */
+/** Renders `node` under a store holding `state` (or the given store); `withKeymap` also installs the real dispatcher, for tests that press ⌘ chords. */
 export function mountWithStore(
   node: ReactNode,
   state: AppState | Store,
   size: { width: number; height: number } = { width: 1440, height: 900 },
+  withKeymap = false,
 ): Mounted {
   const store = 'dispatch' in state ? state : createStore(state);
-  const { render, renderer, unmount } = createTestRoot(size);
+  const { render, renderer, unmount } = createTestRoot(
+    withKeymap ? { ...size, ...windowKeyListeners(store) } : size,
+  );
   const wrap = (child: ReactNode) => {
     const s = store.getState();
     const theme = createChromeTheme(

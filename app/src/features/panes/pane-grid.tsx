@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react';
 import { commandKeyLabel } from '../../keymap/keymap';
 import type { ConnectionState } from '../../state/actions';
-import { selectActiveTab, visiblePaneIds } from '../../state/selectors';
+import { gridShape, selectActiveTab, visiblePaneIds } from '../../state/selectors';
 import { useAppSelector, useDispatch } from '../../state/store';
 import { useChrome } from '../../theme/chrome';
 import { tokens } from '../../theme/tokens';
@@ -79,12 +79,6 @@ function EmptyTab() {
       </div>
     </Centered>
   );
-}
-
-/** Columns and rows of the grid for `count` panes (Ruling R56): side by side up to three, a 2 × 2 grid of quadrants at four. */
-export function gridShape(count: number): { columns: number; rows: number } {
-  if (count <= 3) return { columns: Math.max(count, 1), rows: 1 };
-  return { columns: 2, rows: Math.ceil(count / 2) };
 }
 
 /** The main area: the active tab's panes as equal columns up to three and quadrants at four, in position order (only the focused pane while zoomed). */

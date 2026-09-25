@@ -119,6 +119,34 @@ describe.if(hasNativeTestRenderer)('PaneGrid', () => {
     });
   }
 
+  test('⌘→ moves focus to the next column, exactly as clicking it does (R58)', () => {
+    const { store, renderer, unmount } = mountWithStore(grid, panesIn(2), undefined, true);
+    try {
+      renderer.flush();
+      expect(store.getState().tabs[0]?.focus_pane_id).toBe(1);
+      renderer.simulateKeystrokes('cmd-right');
+      renderer.flush();
+      expect(store.getState().tabs[0]?.focus_pane_id).toBe(2);
+      renderer.simulateKeystrokes('cmd-right');
+      renderer.flush();
+      expect(store.getState().tabs[0]?.focus_pane_id).toBe(2);
+    } finally {
+      unmount();
+    }
+  });
+
+  test('⌘↓ moves focus from the top-left to the bottom-left quadrant, in four panes (R58)', () => {
+    const { store, renderer, unmount } = mountWithStore(grid, panesIn(4), undefined, true);
+    try {
+      renderer.flush();
+      renderer.simulateKeystrokes('cmd-down');
+      renderer.flush();
+      expect(store.getState().tabs[0]?.focus_pane_id).toBe(3);
+    } finally {
+      unmount();
+    }
+  });
+
   test('4 panes form equal quadrants: top-left, top-right, bottom-left, bottom-right', () => {
     const { renderer, unmount } = mountWithStore(grid, panesIn(4), { width: W, height: H });
     try {

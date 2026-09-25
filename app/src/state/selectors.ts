@@ -111,6 +111,37 @@ export function visiblePaneIds(tab: Tab | undefined): readonly number[] {
   return tab.pane_ids;
 }
 
+/** Columns and rows of the grid for `count` panes (Ruling R56): side by side up to three, a 2 × 2 grid of quadrants at four. */
+export function gridShape(count: number): { columns: number; rows: number } {
+  if (count <= 3) return { columns: Math.max(count, 1), rows: 1 };
+  return { columns: 2, rows: Math.ceil(count / 2) };
+}
+
+/** A direction ⌘← ⌘→ ⌘↑ ⌘↓ moves focus in (Ruling R58). */
+export type PaneDirection = 'left' | 'right' | 'up' | 'down';
+
+/** The spatial neighbour of `paneId` in `direction` from `gridShape` over the tab's full pane list, so zoom follows to it; `undefined` at an edge or with one pane, never wrapping (R58). */
+export function paneNeighbour(
+  tab: Pick<Tab, 'pane_ids'> | undefined,
+  paneId: number,
+  direction: PaneDirection,
+): number | undefined {
+  if (!tab) return undefined;
+  const ids = tab.pane_ids;
+  const index = ids.indexOf(paneId);
+  if (index < 0) return undefined;
+  const { columns, rows } = gridShape(ids.length);
+  const row = Math.floor(index / columns);
+  const col = index % columns;
+  const targetRow = direction === 'up' ? row - 1 : direction === 'down' ? row + 1 : row;
+  const targetCol = direction === 'left' ? col - 1 : direction === 'right' ? col + 1 : col;
+  if (targetRow < 0 || targetRow >= rows || targetCol < 0 || targetCol >= columns) {
+    return undefined;
+  }
+  const targetIndex = targetRow * columns + targetCol;
+  return targetIndex < ids.length ? ids[targetIndex] : undefined;
+}
+
 /** The tab-bar dot of a tab: amber if any pane needs you, accent if any runs, mint when all are done or shells. */
 export type TabDot = 'waiting' | 'running' | 'done' | 'idle';
 

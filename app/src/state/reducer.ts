@@ -16,6 +16,8 @@ import {
   isAlive,
   isTabFull,
   nextWaitingPane,
+  type PaneDirection,
+  paneNeighbour,
   selectActiveTab,
   tabName,
 } from './selectors';
@@ -342,6 +344,15 @@ function runCommand(state: AppState, id: CommandId): AppState {
     case 'pane.next': {
       if (!tab) return state;
       const next = cycle(tab.pane_ids, tab.focus_pane_id, id === 'pane.next' ? 1 : -1);
+      return next === undefined ? state : focusPane(state, next);
+    }
+    case 'pane.left':
+    case 'pane.right':
+    case 'pane.up':
+    case 'pane.down': {
+      const focusId = tab?.focus_pane_id;
+      if (!tab || focusId === undefined) return state;
+      const next = paneNeighbour(tab, focusId, id.slice('pane.'.length) as PaneDirection);
       return next === undefined ? state : focusPane(state, next);
     }
     case 'tab.prev':

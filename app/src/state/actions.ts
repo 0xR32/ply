@@ -50,6 +50,10 @@ export type CommandId =
   | `tab.go.${TabDigit}`
   | 'pane.prev'
   | 'pane.next'
+  | 'pane.left'
+  | 'pane.right'
+  | 'pane.up'
+  | 'pane.down'
   | 'tab.prev'
   | 'tab.next'
   | 'pane.zoom'

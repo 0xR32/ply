@@ -192,6 +192,23 @@ describe.if(hasNativeTestRenderer)('journeys, keyboard only', () => {
     expect(j.renderer.findByTestId('pane-2-waiting')).toBeUndefined();
   });
 
+  test('⌘← in the new-pane form’s directory field does not move panes (R58)', async () => {
+    const j = await start('demo');
+    const before = focusedId(j.store.getState());
+    await j.keys('cmd-n');
+    await j.until((s) => s.overlay?.kind === 'new-pane', 'the new-pane form');
+    await j.keys('tab');
+    const automation = await connectTest(j.renderer);
+    await automation.getByTestId('new-pane-dir').fill('~/code/ply');
+    await j.keys('cmd-left');
+    await Bun.sleep(20);
+    j.renderer.flush();
+    expect(j.store.getState().overlay?.kind).toBe('new-pane');
+    expect(focusedId(j.store.getState())).toBe(before);
+    await j.keys('escape');
+    await j.until((s) => s.overlay === null, 'the form to close');
+  });
+
   test('⌘⇧W on a live pane asks first, ⏎ closes it and ⌘W stays the window’s', async () => {
     const j = await start('demo');
     await j.keys('cmd-w');

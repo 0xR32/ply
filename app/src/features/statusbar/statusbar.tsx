@@ -26,7 +26,7 @@ function hints(zoomed: boolean): Hint[] {
     { keys: k('pane.nextWaiting'), label: 'Next waiting', command: 'pane.nextWaiting' },
     { keys: k('pane.zoom'), label: zoomed ? 'Unzoom' : 'Zoom', command: 'pane.zoom' },
     { keys: `${k('tab.go.1')}–9`, label: 'Tabs', command: null },
-    { keys: `${k('pane.prev')} ${k('pane.next')}`, label: 'Panes', command: 'pane.next' },
+    { keys: `${k('pane.left')} ${k('pane.right')}`, label: 'Panes', command: 'pane.next' },
   ];
 }
 

@@ -24,6 +24,7 @@ unless an overlay is open.
 | ⌘J | `pane.nextWaiting` | Focuses the next pane that needs you (`waiting_permission` or `waiting_input`) after the focused one, across every tab in tab order; says "Nothing needs you" when none does. |
 | ⌘1 – ⌘9 | `tab.go.1` – `tab.go.9` | Shows tab n, if there is one. |
 | ⌘[ / ⌘] | `pane.prev` / `pane.next` | Previous / next pane in this tab, wrapping. |
+| ⌘← / ⌘→ / ⌘↑ / ⌘↓ | `pane.left` / `pane.right` / `pane.up` / `pane.down` | Focuses the spatially adjacent pane (Ruling R58): in columns ←/→ move and ↑/↓ do nothing; in the four-pane quadrants ←/→ move within the row and ↑/↓ within the column. No wrap-around, and one pane means no neighbour either way. While zoomed, the zoom follows: the neighbour becomes the zoomed pane. |
 | ⌘⇧[ / ⌘⇧] | `tab.prev` / `tab.next` | Previous / next tab, wrapping. |
 | ⌘⏎ | `pane.zoom` | Zooms or unzooms the focused pane. |
 | ⌘D | `pane.terminalHere` | Opens a shell pane in the focused pane's working directory (the workspace's directory when no pane has focus), in this tab. |
