@@ -1,0 +1,12 @@
+{
+  "session_id": "00000000-0000-4000-8000-000000000000",
+  "transcript_path": "/Users/example/.claude/projects/-Users-example-ply-scratch-s2b-project4/00000000-0000-4000-8000-000000000000.jsonl",
+  "cwd": "/Users/example/ply-scratch/s2b/project4",
+  "scratchpad_dir": "/private/tmp/example-sandbox/-Users-example-ply-scratch-s2b-project4/00000000-0000-4000-8000-000000000000/scratchpad",
+  "hook_event_name": "SessionStart",
+  "source": "resume",
+  "seconds_since_last_response": 108,
+  "context_tokens": 42823,
+  "prompt_cache_likely_expired": false,
+  "estimated_cache_write_usd": 0.3426
+}

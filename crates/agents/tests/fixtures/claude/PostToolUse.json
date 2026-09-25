@@ -1,0 +1,27 @@
+{
+  "session_id": "00000000-0000-4000-8000-000000000000",
+  "transcript_path": "/Users/example/.claude/projects/-Users-example-ply-scratch-s2b-project2/00000000-0000-4000-8000-000000000000.jsonl",
+  "cwd": "/Users/example/ply-scratch/s2b/project2",
+  "scratchpad_dir": "/private/tmp/example-sandbox/-Users-example-ply-scratch-s2b-project2/00000000-0000-4000-8000-000000000000/scratchpad",
+  "prompt_id": "00000000-0000-4000-8000-000000000001",
+  "permission_mode": "default",
+  "effort": {
+    "level": "xhigh"
+  },
+  "hook_event_name": "PostToolUse",
+  "tool_name": "Write",
+  "tool_input": {
+    "file_path": "/Users/example/ply-scratch/s2b/project2/b.txt",
+    "content": "hi\n"
+  },
+  "tool_response": {
+    "type": "create",
+    "filePath": "/Users/example/ply-scratch/s2b/project2/b.txt",
+    "content": "hi\n",
+    "structuredPatch": [],
+    "originalFile": null,
+    "userModified": false
+  },
+  "tool_use_id": "toolu_example1",
+  "duration_ms": 32
+}

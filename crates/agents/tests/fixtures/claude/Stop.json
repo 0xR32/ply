@@ -1,0 +1,16 @@
+{
+  "session_id": "00000000-0000-4000-8000-000000000000",
+  "transcript_path": "/Users/example/.claude/projects/-Users-example-ply-scratch-s2b-project2/00000000-0000-4000-8000-000000000000.jsonl",
+  "cwd": "/Users/example/ply-scratch/s2b/project2",
+  "scratchpad_dir": "/private/tmp/example-sandbox/-Users-example-ply-scratch-s2b-project2/00000000-0000-4000-8000-000000000000/scratchpad",
+  "prompt_id": "00000000-0000-4000-8000-000000000001",
+  "permission_mode": "default",
+  "effort": {
+    "level": "xhigh"
+  },
+  "hook_event_name": "Stop",
+  "stop_hook_active": false,
+  "last_assistant_message": "I can't use TodoWrite because it isn't available in this session; searching the deferred tools for it found nothing.\n\nYou also haven't said what the 2 steps should cover, since `b.txt` is already done. Tell me the task and I'll write the 2-step plan here as a checklist and work through it.",
+  "background_tasks": [],
+  "session_crons": []
+}

@@ -8,6 +8,9 @@ publish.workspace = true
 
 [dependencies]
 ply-proto.workspace = true
+serde.workspace = true
+serde_json = { workspace = true, features = ["raw_value"] }
+thiserror.workspace = true
 
 [lints]
 workspace = true

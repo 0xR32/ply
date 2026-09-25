@@ -11,6 +11,11 @@ name = "ply-hook"
 path = "src/main.rs"
 
 [dependencies]
+serde_json = { workspace = true, features = ["raw_value"] }
+
+[dev-dependencies]
+ply-proto.workspace = true
+serde_json.workspace = true
 
 [lints]
 workspace = true

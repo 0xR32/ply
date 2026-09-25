@@ -1,0 +1,3 @@
+Codex wants to edit a.txt
+Codex wants to edit a.txt
+Created [a.txt](/example/workspace/a.txt) containing `hi`.

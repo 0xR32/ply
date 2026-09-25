@@ -23,6 +23,9 @@ name = "ply-agents"
 version = "0.1.0"
 dependencies = [
  "ply-proto",
+ "serde",
+ "serde_json",
+ "thiserror",
 ]
 
 [[package]]
@@ -37,6 +40,10 @@ dependencies = [
 [[package]]
 name = "ply-hook"
 version = "0.1.0"
+dependencies = [
+ "ply-proto",
+ "serde_json",
+]
 
 [[package]]
 name = "ply-proto"

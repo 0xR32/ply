@@ -1,0 +1,11 @@
+{
+  "type": "agent-turn-complete",
+  "thread-id": "00000000-0000-7000-8000-000000000027",
+  "turn-id": "00000000-0000-7000-8000-000000000028",
+  "cwd": "/example/workspace",
+  "client": "codex-tui",
+  "input-messages": [
+    "[scrubbed: 446 chars]"
+  ],
+  "last-assistant-message": "{\"title\":\"Create a.txt with hi\"}"
+}

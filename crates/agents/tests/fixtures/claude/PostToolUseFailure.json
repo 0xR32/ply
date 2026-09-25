@@ -1,0 +1,20 @@
+{
+  "session_id": "00000000-0000-4000-8000-000000000000",
+  "transcript_path": "/Users/example/.claude/projects/-Users-example-ply-scratch-s2b-project4/00000000-0000-4000-8000-000000000000.jsonl",
+  "cwd": "/Users/example/ply-scratch/s2b/project4",
+  "scratchpad_dir": "/private/tmp/example-sandbox/-Users-example-ply-scratch-s2b-project4/00000000-0000-4000-8000-000000000000/scratchpad",
+  "prompt_id": "00000000-0000-4000-8000-000000000001",
+  "permission_mode": "auto",
+  "effort": {
+    "level": "xhigh"
+  },
+  "hook_event_name": "PostToolUseFailure",
+  "tool_name": "Read",
+  "tool_input": {
+    "file_path": "/Users/example/ply-scratch/s2b/project4/definitely-does-not-exist-xyz.txt"
+  },
+  "tool_use_id": "toolu_example2",
+  "error": "File does not exist. Note: your current working directory is /Users/example/ply-scratch/s2b/project4.",
+  "is_interrupt": false,
+  "duration_ms": 5
+}

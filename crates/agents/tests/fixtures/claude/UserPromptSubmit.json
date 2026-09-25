@@ -1,0 +1,10 @@
+{
+  "session_id": "00000000-0000-4000-8000-000000000000",
+  "transcript_path": "/Users/example/.claude/projects/-Users-example-ply-scratch-s2b-project2/00000000-0000-4000-8000-000000000000.jsonl",
+  "cwd": "/Users/example/ply-scratch/s2b/project2",
+  "scratchpad_dir": "/private/tmp/example-sandbox/-Users-example-ply-scratch-s2b-project2/00000000-0000-4000-8000-000000000000/scratchpad",
+  "prompt_id": "00000000-0000-4000-8000-000000000001",
+  "permission_mode": "default",
+  "hook_event_name": "UserPromptSubmit",
+  "prompt": "create a file named b.txt containing hi"
+}
