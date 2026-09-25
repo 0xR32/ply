@@ -2,12 +2,14 @@
 //!
 //! [`run`] expects the caller to hold the [`crate::lock::InstanceLock`]; it prepares the run directory, opens the
 //! database (refusing a newer schema), loads `config.toml`, resolves the login shell, gives every stored open pane a
-//! task, replaces stale socket files and serves until `daemon.shutdown` or SIGTERM, SIGINT or SIGHUP. There is no
+//! task (a pane whose process ran at the last stop comes back `lost`), replaces stale socket files and serves C1, C2
+//! and C3 until `daemon.shutdown` or SIGTERM, SIGINT or SIGHUP. There is no
 //! idle exit (spec 11.3): with no client connected plyd keeps every pane running. On the way out it broadcasts
 //! `daemon.stopping`, stops the panes' processes when asked to (`kill_panes`), removes its sockets and returns; the
 //! processes of panes it did not stop lose their pty with plyd and come back as `lost` after the next start.
 
-use std::path::PathBuf;
+use std::collections::HashSet;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -29,7 +31,7 @@ use crate::panes::registry::Registry;
 use crate::paths::Paths;
 use crate::power::KeepAwake;
 use crate::pty::Geometry;
-use crate::server::{control, data};
+use crate::server::{control, data, hooks};
 
 /// C1 events buffered per connected client before a slow one is dropped.
 pub const EVENT_CAPACITY: usize = 1024;
@@ -74,6 +76,7 @@ pub struct Shared {
     power: KeepAwake,
     shutdown: watch::Sender<Option<bool>>,
     next_client: AtomicU64,
+    rollouts: Mutex<HashSet<PathBuf>>,
 }
 
 impl Shared {
@@ -101,6 +104,31 @@ impl Shared {
         match self.geometry.lock() {
             Ok(mut g) => *g = geometry,
             Err(poisoned) => *poisoned.into_inner() = geometry,
+        }
+    }
+
+    /// Marks `path` as followed by a pane's tailer; false when another pane already follows it.
+    pub fn claim_rollout(&self, path: &Path) -> bool {
+        self.claimed().insert(path.to_path_buf())
+    }
+
+    /// Whether some pane's tailer follows `path`.
+    pub fn rollout_claimed(&self, path: &Path) -> bool {
+        self.claimed().contains(path)
+    }
+
+    /// Ends a [`Shared::claim_rollout`].
+    pub fn release_rollout(&self, path: &Path) {
+        self.claimed().remove(path);
+    }
+
+    fn claimed(&self) -> MutexGuard<'_, HashSet<PathBuf>> {
+        match self.rollouts.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => {
+                tracing::error!("the rollout claims were poisoned; continuing with their state");
+                poisoned.into_inner()
+            }
         }
     }
 
@@ -189,18 +217,22 @@ pub async fn run(options: Options) -> Result<()> {
         power: KeepAwake::new(options.keep_awake),
         shutdown,
         next_client: AtomicU64::new(1),
+        rollouts: Mutex::new(HashSet::new()),
     });
     launch::restore(&shared);
 
     let control_listener = bind(&shared.paths.control_socket())?;
     let data_listener = bind(&shared.paths.data_socket())?;
+    let hook_listener = bind(&shared.paths.hook_socket())?;
     tracing::info!(
         control = %shared.paths.control_socket().display(),
         data = %shared.paths.data_socket().display(),
+        hooks = %shared.paths.hook_socket().display(),
         "plyd is serving"
     );
     let control_task = tokio::spawn(control::serve(control_listener, Arc::clone(&shared)));
     let data_task = tokio::spawn(data::serve(data_listener, Arc::clone(&shared)));
+    let hook_task = tokio::spawn(hooks::serve(hook_listener, Arc::clone(&shared)));
 
     let kill_panes = wait_for_stop(&shared).await?;
     tracing::info!(kill_panes, "plyd is stopping");
@@ -218,6 +250,7 @@ pub async fn run(options: Options) -> Result<()> {
     tokio::time::sleep(Duration::from_millis(100)).await;
     control_task.abort();
     data_task.abort();
+    hook_task.abort();
     let handles = shared.registry().handles();
     for (_, handle) in handles {
         if handle.send(PaneCmd::Stop).await.is_err() {
@@ -225,7 +258,11 @@ pub async fn run(options: Options) -> Result<()> {
         }
     }
     shared.power.set(false);
-    for sock in [shared.paths.control_socket(), shared.paths.data_socket()] {
+    for sock in [
+        shared.paths.control_socket(),
+        shared.paths.data_socket(),
+        shared.paths.hook_socket(),
+    ] {
         if let Err(e) = std::fs::remove_file(&sock) {
             tracing::warn!(socket = %sock.display(), error = %e, "cannot remove the socket");
         }
@@ -234,7 +271,7 @@ pub async fn run(options: Options) -> Result<()> {
     Ok(())
 }
 
-fn bind(path: &std::path::Path) -> Result<UnixListener> {
+fn bind(path: &Path) -> Result<UnixListener> {
     match std::fs::remove_file(path) {
         Ok(()) => tracing::debug!(socket = %path.display(), "removed a stale socket"),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}

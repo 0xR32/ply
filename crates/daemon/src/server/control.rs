@@ -224,6 +224,15 @@ pub async fn read_line<R: AsyncBufRead + Unpin>(
     r: &mut R,
     out: &mut Vec<u8>,
 ) -> std::io::Result<bool> {
+    read_line_max(r, out, MAX_LINE_BYTES).await
+}
+
+/// [`read_line`] with the cap `max` bytes (newline included) instead of C1's.
+pub async fn read_line_max<R: AsyncBufRead + Unpin>(
+    r: &mut R,
+    out: &mut Vec<u8>,
+    max: usize,
+) -> std::io::Result<bool> {
     loop {
         let buf = r.fill_buf().await?;
         if buf.is_empty() {
@@ -239,10 +248,10 @@ pub async fn read_line<R: AsyncBufRead + Unpin>(
         };
         out.extend_from_slice(&buf[..take]);
         r.consume(take);
-        if out.len() > MAX_LINE_BYTES {
+        if out.len() > max {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
-                format!("a C1 line passed the {MAX_LINE_BYTES}-byte cap"),
+                format!("a line passed the {max}-byte cap"),
             ));
         }
         if done {

@@ -11,12 +11,13 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
 
+use ply_agents::SessionMeta;
 use ply_proto::control::{
-    ErrorBody, ErrorCode, Event, PaneExit, PaneMeta, PaneRemoved, PaneStatusChanged,
+    ErrorBody, ErrorCode, Event, PaneExit, PaneMeta, PaneProgress, PaneRemoved, PaneStatusChanged,
 };
 use ply_proto::pane::{
-    Cli, Layout, Pane, PaneId, PaneStatus, Session, Settings, Tab, TerminalTheme, UnixSeconds,
-    Workspace,
+    Cli, Layout, Pane, PaneId, PaneStatus, Progress, Session, Settings, Tab, TerminalTheme,
+    UnixSeconds, Workspace,
 };
 use tokio::sync::{broadcast, mpsc};
 
@@ -573,23 +574,87 @@ impl Registry {
         }
     }
 
-    /// Records a reported working directory and broadcasts `pane.meta`.
-    pub fn set_cwd(&mut self, id: PaneId, cwd: &str) {
+    /// Records a reported working directory (OSC 7) and broadcasts `pane.meta`; returns whether it changed.
+    pub fn set_cwd(&mut self, id: PaneId, cwd: &str) -> bool {
+        let Some(entry) = self.panes.get_mut(&id) else {
+            return false;
+        };
+        if entry.pane.cwd == cwd {
+            return false;
+        }
+        entry.pane.cwd = cwd.to_owned();
+        entry.pane.branch = None;
+        let pane = entry.pane.clone();
+        self.store(&pane);
+        self.emit_meta(&pane);
+        true
+    }
+
+    /// Records what the session reports (spec 6.5, `pane.meta` per Ruling R4); returns whether the directory changed.
+    pub fn set_meta(&mut self, id: PaneId, meta: &SessionMeta) -> bool {
+        let Some(entry) = self.panes.get_mut(&id) else {
+            return false;
+        };
+        let before = entry.pane.clone();
+        let p = &mut entry.pane;
+        if meta.session_ref.is_some() {
+            p.session_ref.clone_from(&meta.session_ref);
+        }
+        if meta.model.is_some() {
+            p.model_seen.clone_from(&meta.model);
+        }
+        let moved = meta.cwd.as_ref().is_some_and(|cwd| *cwd != p.cwd);
+        if let Some(cwd) = &meta.cwd {
+            p.cwd.clone_from(cwd);
+            p.worktree_seen.clone_from(&meta.worktree);
+        }
+        if moved {
+            p.branch = None;
+        }
+        if *p == before {
+            return false;
+        }
+        let pane = p.clone();
+        self.store(&pane);
+        self.emit_meta(&pane);
+        moved
+    }
+
+    /// Records the git branch of `cwd` (display only, never stored) and broadcasts `pane.meta`, unless the pane moved on.
+    pub fn set_branch(&mut self, id: PaneId, cwd: &str, branch: Option<String>) {
         let Some(entry) = self.panes.get_mut(&id) else {
             return;
         };
-        if entry.pane.cwd == cwd {
+        if entry.pane.cwd != cwd || entry.pane.branch == branch {
             return;
         }
-        entry.pane.cwd = cwd.to_owned();
+        entry.pane.branch = branch;
         let pane = entry.pane.clone();
-        self.store(&pane);
-        self.emit(Event::PaneMeta(PaneMeta {
+        self.emit_meta(&pane);
+    }
+
+    /// Records the plan progress (kept in memory only; schema v1 has no column) and broadcasts `pane.progress`.
+    pub fn set_progress(&mut self, id: PaneId, progress: Option<Progress>) {
+        let Some(entry) = self.panes.get_mut(&id) else {
+            return;
+        };
+        if entry.pane.progress == progress {
+            return;
+        }
+        entry.pane.progress.clone_from(&progress);
+        self.emit(Event::PaneProgress(PaneProgress {
             pane_id: id,
-            model: pane.model_seen,
-            worktree: pane.worktree_seen,
-            cwd: pane.cwd,
-            branch: None,
+            progress,
+        }));
+    }
+
+    fn emit_meta(&self, pane: &Pane) {
+        self.emit(Event::PaneMeta(PaneMeta {
+            pane_id: pane.id,
+            model: pane.model_seen.clone(),
+            worktree: pane.worktree_seen.clone(),
+            cwd: pane.cwd.clone(),
+            branch: pane.branch.clone(),
         }));
     }
 

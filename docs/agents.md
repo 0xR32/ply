@@ -18,30 +18,31 @@ session comes from four sources the CLIs produce themselves:
 beyond reading the files it is handed. `crates/hook` (`ply-hook`) is the
 forwarder. plyd (`crates/daemon`) launches the CLIs and owns the status machine.
 
-## What this build does
+## How plyd feeds them
 
-The launch, the per-pane files, the version check, `ply-hook` and every parser
-in ply-agents are in place and tested. plyd does not yet feed them: there is no
-listener on `run/hook.sock`, OSC 9 notifications are only logged
-(`crates/daemon/src/panes/pane.rs`, `on_effects`), rollouts are not tailed, and
-no signal changes a pane's status. So an agent pane stays `starting` until its
-process exits, `pane.progress` is never sent, and `pane.meta` carries only the
-working directory the program reports through OSC 7.
-
-The work package that wires them (WP6b) owns these files, none of which exist
-yet:
+Each agent process has one `AgentSession` (`ply_agents::Adapter::new_session`)
+and one status machine, owned by its pane's task
+(`crates/daemon/src/panes/agent.rs`) and prepared from the launch spec before
+the process spawns, so a hook the CLI fires at once already finds them:
 
 | File | Owns |
 |---|---|
-| `crates/daemon/src/server/hooks.rs` | the C3 server on `run/hook.sock` |
-| `crates/daemon/src/panes/state.rs` | the status machine below; transitions not in its table are ignored and counted |
+| `crates/daemon/src/server/hooks.rs` | the C3 server on `run/hook.sock`: one line per `ply-hook` run (1 MiB, 2 s), decoded strictly and handed to the pane's task; an envelope for an unknown pane, a shell or the other CLI is logged and dropped, and nothing is ever answered |
+| `crates/daemon/src/panes/state.rs` | the status machine below, and the `pane.progress` rate limit |
 | `crates/daemon/src/tail.rs` | C4: finding and tailing a Codex pane's rollout |
-| `crates/daemon/src/osc.rs` | routing OSC 7 and OSC 9 from the engine to the pane's session |
+| `crates/daemon/src/osc.rs` | OSC 7 paths, OSC 9 bodies, and which input counts as a key typed |
+| `crates/daemon/src/branch.rs` | the branch label |
 
-`ply_agents::Adapter::new_session` gives plyd one `AgentSession` per agent pane;
-plyd will hand it every `AgentEvent` (`Hook`, `Osc9`, `RolloutLine`,
-`KeyTyped`, `FirstOutput`) and apply the `AdapterSignal`s it returns
-(`crates/agents/src/adapter.rs`).
+The pane task hands the session every `AgentEvent`
+(`crates/agents/src/adapter.rs`): `Hook` for each C3 envelope, `RolloutLine`
+for each tailed line, `Osc9` for each OSC 9 body the engine reports (OSC 777
+carries a title and is some other program's), `FirstOutput` for the process's
+first pty byte, and `KeyTyped` for every key typed — a KEY frame that encoded to
+bytes, INPUT_RAW, or a `pane.answer` digit — with `enter` when those bytes
+submit a line (a carriage return, or `CSI 13 u` in the kitty protocol). It
+applies the `AdapterSignal`s it gets back: status signals to the machine
+(`pane.status`), `Progress` through the rate limit (`pane.progress`), `Meta` to
+the pane's row (`pane.meta`), and `FindRollout` to the tailer.
 
 ## Launching a pane
 
@@ -298,16 +299,23 @@ without buffering it (inline images can be that large).
 **Finding a pane's rollout.** Before any notify, the rollout is the newest file
 created at or after the pane's spawn whose `session_meta.cwd` equals the pane's
 working directory (`pick_rollout_by_cwd`). After a notify, it is the file whose
-name carries that notify's thread id (`rollout_thread_id`). A resumed pane is
-bound to its thread from the start. The tailing itself is `tail.rs` (WP6b).
+name carries that notify's thread id (`rollout_thread_id`). A resumed pane
+follows only its own thread's file, wherever it is under `sessions/`, and two
+panes never follow the same file. `tail.rs` runs one std thread per Codex
+process: it wakes on FSEvents for `sessions/` once the directory exists (plyd
+never creates it) and polls besides, every 250 ms until it follows a file and
+every second after; it reads the file from the start by offset and hands the
+pane task every complete line. It only ever reads under `$CODEX_HOME`.
 
 ## Progress
 
 Progress is the agent's own plan, never ply's guess: `{done, total, current?}`
 with `done` the completed items, `total` all items and `current` the text of
 the first item in progress (`crates/agents/src/plan.rs`). An empty plan, or no
-plan source yet, hides the bar. plyd is to send `pane.progress` at most 4 times a
-second per pane.
+plan source yet, hides the bar. plyd sends `pane.progress` at most 4 times a
+second per pane: a change after a quiet 250 ms goes out at once, and the last
+value of a burst when the interval ends. Progress is kept in memory only (schema
+v1 has no column for it); `pane.list` carries it.
 
 **Claude Code** (`crates/agents/src/claude/progress.rs`), from PostToolUse
 payloads only:
@@ -357,9 +365,12 @@ It is display and session record only: `worktree_seen` is the only worktree
 column ply keeps (INV-7). The model is shown exactly as reported; with none
 reported the pane header shows only the CLI name.
 
-The branch label is to come from `git rev-parse --abbrev-ref HEAD` in the
-pane's directory, run when the directory changes, display only and never
-stored (WP6b). In this build it is always absent.
+The branch label comes from `git rev-parse --abbrev-ref HEAD` in the pane's
+directory (`crates/daemon/src/branch.rs`), run on its own task at spawn and
+whenever the directory changes, with the pane's base environment, stdin from
+`/dev/null` and a 2 s limit; outside a repository, without git or on any failure
+there is none. It is display only: it travels in `pane.meta` and `pane.list`
+and is never stored.
 
 `session_ref`, `model_seen`, `worktree_seen` and `cwd` are stored in the pane's
 row and returned by `pane.list` and `session.list`.
@@ -369,7 +380,7 @@ row and returned by `pane.list` and `session.list`.
 A pane's status is one of `starting`, `idle`, `running`, `waiting_permission`,
 `waiting_input`, `exited` and `lost`. plyd owns the machine; the adapters only
 name signals (`StatusSignal` in `crates/agents/src/adapter.rs`), and both CLIs
-use the same vocabulary. The table will live in
+use the same vocabulary. The table lives in
 `crates/daemon/src/panes/state.rs`:
 
 | From | Signal | Source | To |
@@ -400,12 +411,14 @@ Transitions not in the table are ignored and counted.
   body (Codex); `InputRequested` the notification's message or body. The detail
   travels in `pane.status`.
 
-In this build three rows run: the spawn, `exited` when the process ends
-(`pane.status` then `pane.exit`, after its last output), and `lost` for panes
-whose process did not survive a plyd restart
-(`crates/daemon/src/panes/registry.rs`, `Registry::load`). The keep-awake
-assertion follows `running` panes, so it does not engage until the machine
-runs.
+- **SessionEnd** arrives before the process has an exit code, so it ends the
+  machine: every later signal is ignored, and the pane shows `exited(code)` when
+  the process is reaped (`pane.status`, then `pane.exit`, after its last
+  output). `lost` is set when plyd starts (`Registry::load`), never by a signal.
+- **The quiet timer** runs from the latest of the last pty output, the last hook
+  and the moment the pane entered `running`.
+- The pane's task publishes the machine's state when it adopts the process; the
+  keep-awake assertion follows `running` panes.
 
 **Presentation** (`app/src/state/selectors.ts`): "your turn" is `idle`; "done"
 is `idle` with every plan item complete; "needs you" is `waiting_permission` or
@@ -484,6 +497,14 @@ restarts, so a resumed pane starts on an empty terminal and the CLI repaints it.
 - `crates/hook/tests/hook.rs`: the C3 line, the payload byte for byte, INV-12
   (plyd down, stdin held open, a listener that never reads) and INV-14 (stdout
   and stderr empty on fourteen bad paths).
+- `crates/daemon/tests/states.rs`: every row of the table through a real plyd
+  and the fake CLIs of `crates/daemon/tests/fake/` (they run the hook commands
+  of their `--settings` file or `-c notify=…`, print OSC 9 and write a rollout
+  in the sandbox's `CODEX_HOME`), F1 (a hook turns the pane waiting within
+  250 ms), INV-12 with plyd down, the version check at spawn and the R28
+  rollout binding.
+- `crates/daemon/tests/config_untouched.rs`: INV-8, a Claude Code and a Codex
+  session leave the user's three config files byte for byte as they were.
 - `crates/daemon/tests/lifecycle.rs`:
   `an_agent_pane_runs_the_cli_from_the_login_path_with_its_launch_spec` (a fake
   `claude` on the login `PATH` gets the adapter's argv, environment and files)

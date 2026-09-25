@@ -5,6 +5,11 @@
 //! cargo run -p ply-daemon --example ply-cli -- demo          # shell pane, echo, detach, reattach, compare, close
 //! cargo run -p ply-daemon --example ply-cli -- list          # panes of every workspace
 //! cargo run -p ply-daemon --example ply-cli -- screen 3      # attach to pane 3 at 80 x 24 and print its screen
+//! cargo run -p ply-daemon --example ply-cli -- create claude /path "prompt"   # open an agent or shell pane
+//! cargo run -p ply-daemon --example ply-cli -- watch 60       # print C1 events for 60 s, stamped in Unix ms
+//! cargo run -p ply-daemon --example ply-cli -- type 3 '/exit\r'  # type into pane 3 (\r, \n and \e are escapes)
+//! cargo run -p ply-daemon --example ply-cli -- answer 3 3     # pane.answer: press 3 in pane 3's dialog
+//! cargo run -p ply-daemon --example ply-cli -- close 3        # pane.close {kill:true}
 //! ```
 //!
 //! It talks to the plyd of `PLY_HOME` (else the installed one). Attaching resizes the pane to the client's size, as
@@ -17,7 +22,7 @@ mod client;
 
 use std::error::Error;
 use std::process::ExitCode;
-use std::time::Duration;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use client::{Control, Data};
 use ply_daemon::paths::Paths;
@@ -37,11 +42,25 @@ fn main() -> ExitCode {
     {
         ["demo"] => demo(),
         ["list"] => list(),
-        ["screen", id] => match id.parse() {
-            Ok(id) => screen(id),
-            Err(e) => Err(format!("pane id {id:?}: {e}").into()),
+        ["screen", id] => pane_id(id).and_then(screen),
+        ["create", cli, cwd] => create(cli, cwd, None),
+        ["create", cli, cwd, prompt] => create(cli, cwd, Some(prompt)),
+        ["watch", secs] => match secs.parse() {
+            Ok(secs) => watch(Duration::from_secs(secs)),
+            Err(e) => Err(format!("seconds {secs:?}: {e}").into()),
         },
-        _ => Err("usage: ply-cli demo | list | screen <pane_id>".into()),
+        ["type", id, text] => pane_id(id).and_then(|id| type_text(id, text)),
+        ["answer", id, choice] => pane_id(id).and_then(|id| {
+            let choice: u8 = choice.parse().map_err(|e| format!("choice {choice:?}: {e}"))?;
+            simple("pane.answer", json!({"pane_id": id, "choice": choice}))
+        }),
+        ["close", id] => {
+            pane_id(id).and_then(|id| simple("pane.close", json!({"pane_id": id, "kill": true})))
+        }
+        _ => Err(
+            "usage: ply-cli demo | list | screen <pane> | create <cli> <cwd> [prompt] | watch <secs> | type <pane> <text> | answer <pane> <1-3> | close <pane>"
+                .into(),
+        ),
     };
     match run {
         Ok(true) => ExitCode::SUCCESS,
@@ -51,6 +70,67 @@ fn main() -> ExitCode {
             ExitCode::FAILURE
         }
     }
+}
+
+fn pane_id(id: &str) -> Result<u64> {
+    id.parse()
+        .map_err(|e| format!("pane id {id:?}: {e}").into())
+}
+
+fn unix_ms() -> u128 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| d.as_millis())
+}
+
+fn create(cli: &str, cwd: &str, prompt: Option<&str>) -> Result<bool> {
+    let mut c = Control::connect(&paths()?.control_socket())?;
+    let workspaces = call(&mut c, "workspace.list", json!({}))?;
+    let mut params = json!({"workspace_id": workspaces[0]["id"], "cli": cli, "cwd": cwd});
+    if let Some(prompt) = prompt {
+        params["prompt"] = json!(prompt);
+    }
+    let pane = match c.call("pane.create", params.clone()) {
+        Ok(pane) => pane,
+        Err(e) if e.code == ply_proto::control::ErrorCode::InvalidState => {
+            call(&mut c, "theme.set", json!({"palette": example_palette()}))?;
+            call(&mut c, "pane.create", params)?
+        }
+        Err(e) => return Err(format!("pane.create: {:?}: {}", e.code, e.msg).into()),
+    };
+    println!("{} {} {}", unix_ms(), pane["id"], pane["status"]);
+    Ok(true)
+}
+
+fn watch(duration: Duration) -> Result<bool> {
+    let mut c = Control::connect(&paths()?.control_socket())?;
+    let deadline = Instant::now() + duration;
+    while Instant::now() < deadline {
+        if let Some(event) = c.wait_event(Duration::from_millis(100), |_| true) {
+            println!("{} {}", unix_ms(), serde_json::to_string(&event)?);
+        }
+    }
+    Ok(true)
+}
+
+fn type_text(id: u64, text: &str) -> Result<bool> {
+    let bytes = text
+        .replace("\\r", "\r")
+        .replace("\\n", "\n")
+        .replace("\\e", "\u{1b}")
+        .into_bytes();
+    let (mut d, first) = Data::attach(&paths()?.data_socket(), id, 80, 24)?;
+    d.apply(&first, true)?;
+    d.input(&bytes)?;
+    d.settle(Duration::from_millis(200))?;
+    Ok(true)
+}
+
+fn simple(method: &str, params: Value) -> Result<bool> {
+    let mut c = Control::connect(&paths()?.control_socket())?;
+    call(&mut c, method, params)?;
+    println!("{} {method} ok", unix_ms());
+    Ok(true)
 }
 
 fn paths() -> Result<Paths> {

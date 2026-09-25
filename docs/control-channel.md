@@ -191,10 +191,13 @@ In order, plyd:
    an unknown version is logged and allowed; `docs/agents.md`);
 5. records the pane (`not_found` for an unknown workspace or a `tab_id` outside
    it), writes `run/panes/<id>/` with the launch files and `launch.json`,
-   sizes a new terminal to the last view size any client attached with, and
-   spawns the process (`spawn_failed`; `bad_request` when the adapter refuses a
-   value, such as a worktree name starting with `-`);
-6. broadcasts `pane.added` and returns the pane.
+   sizes a new terminal to the last view size any client attached with,
+   starts the pane's task with the launch spec, and spawns the process
+   (`spawn_failed`; `bad_request` when the adapter refuses a value, such as a
+   worktree name starting with `-`); the task adopts it and publishes its
+   status;
+6. broadcasts `pane.added` and returns the pane. An agent that already reported
+   readiness is `idle` in both.
 
 A failed spawn leaves no pane, tab or directory behind. A shell pane starts
 `idle`; an agent pane starts `starting`.
@@ -214,9 +217,9 @@ A closed pane's record stays in the database and is returned by
 
 Writes `choice` (1, 2 or 3; anything else is `bad_request`) to the pane's pty
 as that digit, which is how the CLIs' permission dialogs are answered. The pane
-must be `waiting_permission` or `waiting_input`, else `invalid_state`. No pane
-reaches those states in this build: the status machine that drives agent panes
-is not in plyd yet (`docs/agents.md`).
+must be `waiting_permission` or `waiting_input`, else `invalid_state`. The
+digit also counts as a key typed, so the pane moves to `running`
+(`docs/agents.md`).
 
 ### `pane.resume`
 
@@ -303,8 +306,8 @@ is connected is dropped; a client learns the current state from `pane.list`,
 | `pane.added` | a `Pane` | A pane was created, by any client (`pane.create`). Panes restored at plyd's start are not announced. |
 | `pane.removed` | `{pane_id}` | A pane was closed (`pane.close`, or a `kill:true` close whose process has now exited). |
 | `pane.status` | `{pane_id, status, detail?, exit_code?, at}` | The pane's status or its detail changed. `exit_code` is present exactly when `status` is `exited`; `at` is when plyd observed the change. An unchanged status and detail send nothing. |
-| `pane.progress` | `{pane_id, progress?}` | The agent's plan changed; no `progress` hides the bar. At most 4 a second per pane. Not emitted in this build (`docs/agents.md`). |
-| `pane.meta` | `{pane_id, model?, worktree?, cwd, branch?}` | What the session reports about itself changed. Absent fields are unknown. In this build only the working directory drives it (OSC 7 from the pane's program); `model` and `worktree` repeat the stored values and `branch` is always absent. |
+| `pane.progress` | `{pane_id, progress?}` | The agent's plan changed; no `progress` hides the bar. At most 4 a second per pane; the last value of a burst is never dropped. |
+| `pane.meta` | `{pane_id, model?, worktree?, cwd, branch?}` | What the session reports about itself changed. Absent fields are unknown. Claude Code's hooks, Codex's rollout and OSC 7 drive it; `branch` follows each directory change, from git (`docs/agents.md`). |
 | `pane.exit` | `{pane_id, code, at}` | The pane's process ended, after its last output was published. `code` is 128 + signal for a signal death, -1 when plyd could not wait for it. Always preceded by `pane.status` `exited`. |
 | `daemon.stopping` | `{kill_panes}` | plyd is about to exit; `kill_panes` says whether the processes are being stopped too. |
 

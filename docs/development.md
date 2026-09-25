@@ -91,10 +91,16 @@ PLY_HOME=/tmp/ply-dev cargo run -p ply-daemon --example ply-cli -- screen 1
 
 `demo` opens a shell pane, runs an `echo`, detaches, reattaches and compares the two screens, then closes the pane;
 `list` prints every workspace's panes; `screen` attaches at 80 × 24 (which resizes the pane) and prints its screen.
+`create <cli> <cwd> [prompt]`, `type <pane> <text>` (`\r`, `\n` and `\e` are escapes), `answer <pane> <1-3>`,
+`close <pane>` and `watch <secs>` (every C1 event, stamped in Unix milliseconds) drive an agent pane by hand, for
+example to time a real CLI's hooks against its `pane.status` events.
 
 Tests that start real or fake CLIs also set a sandboxed `HOME` (and `CODEX_HOME`), so `~/.claude/settings.json` and
 `~/.codex/config.toml` are never written (INV-8). plyd's own integration tests (`crates/daemon/tests/`) start plyd
-with a cleared environment, a temporary `HOME` and `PLY_HOME`, and `/bin/sh` as the login shell.
+with a cleared environment, a temporary `HOME` and `PLY_HOME`, and `/bin/sh` as the login shell. The agent tests
+install the fake CLIs of `crates/daemon/tests/fake/` as `claude` and `codex` on that shell's `PATH`; they run the
+`ply-hook` cargo built beside plyd, which `cargo nextest run --workspace` builds (run `cargo build -p ply-hook` before
+`cargo nextest run -p ply-daemon`).
 
 ## The terminal view on its own
 

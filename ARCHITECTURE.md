@@ -88,11 +88,14 @@ crates/hook/src      main.rs: stdin (or Codex's last argv) → one C3 line, 200 
 
 crates/daemon/src
 ├── main.rs          plyd's command line (--foreground, install-agent, …)
-├── daemon.rs        the lifetime: open the store, restore panes, serve C1 and C2, stop only when asked
-├── server/          control.rs (C1) · data.rs (C2) · mod.rs; the C3 hook server arrives with WP6
+├── daemon.rs        the lifetime: open the store, restore panes, serve C1, C2 and C3, stop only when asked
+├── server/          control.rs (C1) · data.rs (C2) · hooks.rs (C3) · mod.rs
 ├── panes/           registry.rs (workspaces, tabs, panes, mirrored to SQLite) · pane.rs (one task per pane:
-│                    the only owner of its Engine, pty channels and attached clients) · launch.rs (create,
-│                    resume, restore) · mod.rs
+│                    the only owner of its Engine, pty channels and attached clients) · agent.rs (one agent
+│                    process's session, status machine, progress limit and tailer) · state.rs (the spec 6.3
+│                    machine) · launch.rs (create, resume, restore) · mod.rs
+├── tail.rs          C4: finding and tailing a Codex pane's rollout
+├── osc.rs · branch.rs   OSC 7/9 and typed input; the git branch label
 ├── publisher.rs     the C2 delivery rules as small clocked state machines
 ├── pty.rs           rustix pty + Command, setsid/TIOCSCTTY in the one audited pre_exec block
 ├── login.rs         the login shell and the environment every pane starts with

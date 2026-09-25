@@ -7,22 +7,32 @@
 //! client under the rules of [`crate::publisher`]: the 120 Hz cadence, the per-client Ack window with its forced
 //! Snapshot and disconnect, the DEC 2026 hold, and idle-scrollback compression. Title changes and bells are coalesced
 //! to the same cadence. OSC 7 updates the pane's directory (`pane.meta`); the process's exit is published after its
-//! last output, as C2 EXIT to the clients and `pane.status`/`pane.exit` to C1. OSC 9 notifications and hook-driven
-//! status belong to the agent state machine (WP6) and are only logged here.
+//! last output, as C2 EXIT to the clients and `pane.status`/`pane.exit` to C1.
+//!
+//! An agent pane's task also owns its [`Agent`]: it is prepared from the launch spec before the process spawns (so a
+//! hook the new process fires at once already finds it), and the task feeds it the C3 envelopes and rollout lines
+//! other tasks hand in, the OSC 9 bodies and first output byte the engine reports, and every key typed (a KEY frame
+//! that encoded to bytes, INPUT_RAW, a `pane.answer` digit). The task publishes the agent's state when it adopts the
+//! process and acknowledges the adoption to whoever spawned it.
 
 use std::collections::VecDeque;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use ply_agents::LaunchSpec;
 use ply_proto::data::{Exit, Frame};
-use ply_proto::pane::{Cli, OptionAsMeta, PaneId, Rgb};
+use ply_proto::hook::HookEnvelope;
+use ply_proto::pane::{AgentCli, Cli, OptionAsMeta, PaneId, PaneStatus, Rgb};
 use ply_term::{
     Compression, DeltaBuilder, Encoded, Engine, EngineOutput, Input, Palette, Update, encode_input,
 };
 use rustix::process::Signal;
 use tokio::sync::{mpsc, oneshot};
 
+use crate::branch;
 use crate::daemon::{Shared, unix_now};
+use crate::osc::{decode_osc7, is_enter, osc9_bodies};
+use crate::panes::agent::Agent;
 use crate::pty::{Geometry, PaneProcess, PtyChannels};
 use crate::publisher::{AckOutcome, Cadence, ClientWindow, IdleTimer, SyncHold};
 
@@ -58,8 +68,16 @@ pub enum PaneCmd {
     SetOptionAsMeta(OptionAsMeta),
     /// SIGHUP to the process group, SIGKILL after [`KILL_GRACE`] (Ruling R7).
     Kill,
-    /// A new process for this pane (`pane.resume`).
+    /// The process about to be spawned from this spec (`pane.resume`): prepares the agent integration for it.
+    Launch(Box<LaunchSpec>),
+    /// The spawn prepared by [`PaneCmd::Launch`] failed; the prepared agent integration is dropped.
+    LaunchFailed,
+    /// A new process for this pane (`pane.create`, `pane.resume`).
     Start(Box<Started>),
+    /// A C3 envelope for this pane (hook or notify, spec 4.3).
+    Hook(Box<HookEnvelope>),
+    /// Complete lines of this pane's Codex rollout, in file order (C4).
+    Rollout(Vec<Vec<u8>>),
     /// End the task: the pane was closed or plyd is stopping.
     Stop,
 }
@@ -71,6 +89,8 @@ pub struct Started {
     pub process: PaneProcess,
     /// Its output, input and exit channels.
     pub channels: PtyChannels,
+    /// Answered once the task has adopted the process and published the pane's state.
+    pub adopted: Option<oneshot::Sender<()>>,
 }
 
 /// Capacity of a pane task's command channel.
@@ -110,8 +130,8 @@ pub struct PaneSeed {
     pub engine: Engine,
     /// The engine's current size.
     pub geometry: Geometry,
-    /// A running process, if any.
-    pub started: Option<Started>,
+    /// The launch spec of the process about to be started with [`PaneCmd::Start`] (`pane.create`), if any.
+    pub launch: Option<LaunchSpec>,
     /// The exit code of a process that already ended (a pane restored after a restart).
     pub exited: Option<i32>,
 }
@@ -139,6 +159,8 @@ pub fn fallback_palette() -> Palette {
 pub fn spawn_task(shared: Arc<Shared>, seed: PaneSeed) -> mpsc::Sender<PaneCmd> {
     let (tx, rx) = mpsc::channel(COMMAND_CAPACITY);
     let mut task = PaneTask {
+        me: tx.downgrade(),
+        agent: None,
         id: seed.id,
         cli: seed.cli,
         default_title: seed.default_title,
@@ -167,8 +189,8 @@ pub fn spawn_task(shared: Arc<Shared>, seed: PaneSeed) -> mpsc::Sender<PaneCmd> 
         closing: false,
         stop: false,
     };
-    if let Some(started) = seed.started {
-        task.adopt(started);
+    if let Some(spec) = seed.launch {
+        task.prepare(&spec);
     }
     tokio::spawn(task.run(rx));
     tx
@@ -224,6 +246,8 @@ impl WriteQueue {
 }
 
 struct PaneTask {
+    me: mpsc::WeakSender<PaneCmd>,
+    agent: Option<Agent>,
     id: PaneId,
     cli: Cli,
     default_title: String,
@@ -323,6 +347,25 @@ impl PaneTask {
         tracing::debug!(pane_id = self.id, "pane task stopped");
     }
 
+    /// Prepares the agent integration for the process about to start from `spec`; shells have none.
+    fn prepare(&mut self, spec: &LaunchSpec) {
+        let cli = match spec.cli {
+            Cli::Claude => AgentCli::Claude,
+            Cli::Codex => AgentCli::Codex,
+            Cli::Shell => {
+                self.agent = None;
+                return;
+            }
+        };
+        self.agent = Some(Agent::new(
+            &self.shared,
+            self.id,
+            cli,
+            spec,
+            self.me.clone(),
+        ));
+    }
+
     fn adopt(&mut self, started: Started) {
         if let Err(e) = started.process.resize(self.geometry) {
             tracing::debug!(pane_id = self.id, error = %e, "cannot size the new pty");
@@ -336,6 +379,30 @@ impl PaneTask {
         self.exit_grace = None;
         self.kill_at = None;
         self.writes.clear();
+        let (status, detail) = self
+            .agent
+            .as_ref()
+            .map_or((PaneStatus::Idle, None), Agent::status);
+        self.shared.set_status(self.id, status, detail);
+        if let Some(adopted) = started.adopted
+            && adopted.send(()).is_err()
+        {
+            tracing::debug!(pane_id = self.id, "nobody waited for the adoption");
+        }
+        let cwd = self
+            .shared
+            .registry()
+            .entry(self.id)
+            .map(|e| e.pane.cwd.clone());
+        if let Some(cwd) = cwd {
+            branch::lookup(&self.shared, self.id, cwd);
+        }
+    }
+
+    fn key_typed(&mut self, enter: bool, now: Instant) {
+        if let Some(agent) = self.agent.as_mut() {
+            agent.on_key(&self.shared, enter, now);
+        }
     }
 
     fn on_command(&mut self, cmd: PaneCmd) {
@@ -352,7 +419,11 @@ impl PaneTask {
                 tracing::debug!(pane_id = self.id, client, "client detached");
             }
             PaneCmd::Frame { client, frame } => self.on_frame(client, frame, now),
-            PaneCmd::Write(bytes) => self.write(bytes),
+            PaneCmd::Write(bytes) => {
+                let enter = is_enter(&bytes);
+                self.write(bytes);
+                self.key_typed(enter, now);
+            }
             PaneCmd::SetPalette(palette) => {
                 if let Err(e) = self.engine.set_palette(&palette) {
                     tracing::warn!(pane_id = self.id, error = %e, "cannot apply the new palette");
@@ -360,9 +431,24 @@ impl PaneTask {
             }
             PaneCmd::SetOptionAsMeta(option) => self.engine.set_option_as_meta(option),
             PaneCmd::Kill => self.kill(now),
+            PaneCmd::Launch(spec) => self.prepare(&spec),
+            PaneCmd::LaunchFailed => self.agent = None,
             PaneCmd::Start(started) => {
                 self.adopt(*started);
-                tracing::info!(pane_id = self.id, "pane process relaunched");
+                tracing::info!(pane_id = self.id, "pane process adopted");
+            }
+            PaneCmd::Hook(envelope) => match self.agent.as_mut() {
+                Some(agent) if self.exit_code.is_none() => {
+                    agent.on_hook(&self.shared, &envelope, now);
+                }
+                _ => {
+                    tracing::debug!(pane_id = self.id, event = ?envelope.event, "hook for a pane without a running agent dropped");
+                }
+            },
+            PaneCmd::Rollout(lines) => {
+                if let Some(agent) = self.agent.as_mut() {
+                    agent.on_rollout(&self.shared, &lines, now);
+                }
             }
             PaneCmd::Stop => self.stop = true,
         }
@@ -482,7 +568,11 @@ impl PaneTask {
 
     fn on_frame(&mut self, client_id: u64, frame: Frame, now: Instant) {
         match frame {
-            Frame::InputRaw(bytes) => self.write(bytes),
+            Frame::InputRaw(bytes) => {
+                let enter = is_enter(&bytes);
+                self.write(bytes);
+                self.key_typed(enter, now);
+            }
             Frame::Resize(r) => {
                 self.apply_geometry(
                     Geometry {
@@ -530,8 +620,15 @@ impl PaneTask {
                 if matches!(frame, Frame::Focus(f) if !f.focused) {
                     self.engine.reset_mouse_buttons();
                 }
+                let key = matches!(frame, Frame::Key(_));
                 match encode_input(&mut self.engine, input) {
-                    Ok(Encoded::Bytes(bytes)) => self.write(bytes),
+                    Ok(Encoded::Bytes(bytes)) => {
+                        let enter = is_enter(&bytes);
+                        self.write(bytes);
+                        if key {
+                            self.key_typed(enter, now);
+                        }
+                    }
                     Ok(Encoded::Nothing) => {}
                     Ok(Encoded::PasteRejected) => {
                         if let Some(client) = self.clients.iter_mut().find(|c| c.id == client_id) {
@@ -555,6 +652,9 @@ impl PaneTask {
 
     fn on_output(&mut self, chunk: &[u8]) {
         let now = Instant::now();
+        if let Some(agent) = self.agent.as_mut() {
+            agent.on_output(&self.shared, now);
+        }
         let out = self.engine.write(chunk);
         self.on_effects(out);
         let mut total = chunk.len();
@@ -601,7 +701,11 @@ impl PaneTask {
         }
         if let Some(uri) = out.pwd {
             match decode_osc7(&uri) {
-                Some(cwd) => self.shared.registry().set_cwd(self.id, &cwd),
+                Some(cwd) => {
+                    if self.shared.registry().set_cwd(self.id, &cwd) {
+                        branch::lookup(&self.shared, self.id, cwd);
+                    }
+                }
                 None => {
                     tracing::debug!(pane_id = self.id, uri = %uri, "OSC 7 without a local file URI ignored");
                 }
@@ -609,6 +713,12 @@ impl PaneTask {
         }
         for n in &out.notifications {
             tracing::debug!(pane_id = self.id, cli = ?self.cli, title = %n.title, body = %n.body, "desktop notification");
+        }
+        if let Some(agent) = self.agent.as_mut() {
+            let now = Instant::now();
+            for body in osc9_bodies(&out.notifications) {
+                agent.on_osc9(&self.shared, body, now);
+            }
         }
         if !out.clipboard_writes.is_empty() {
             tracing::debug!(
@@ -750,6 +860,9 @@ impl PaneTask {
         }
         self.input = None;
         self.writes.clear();
+        if let Some(agent) = self.agent.as_mut() {
+            agent.exit();
+        }
         let close = self
             .shared
             .registry()
@@ -781,6 +894,7 @@ impl PaneTask {
             self.kill_at,
             self.persist_at,
             self.idle.due(),
+            self.agent.as_ref().and_then(Agent::deadline),
         ]
         .into_iter()
         .chain(clients)
@@ -794,6 +908,9 @@ impl PaneTask {
         }
         if self.persist_at.is_some_and(|t| t <= now) {
             self.persist(now);
+        }
+        if let Some(agent) = self.agent.as_mut() {
+            agent.on_tick(&self.shared, now);
         }
         if self.kill_at.is_some_and(|t| t <= now) {
             self.kill_at = None;
@@ -905,42 +1022,9 @@ fn send_snapshot(pane_id: PaneId, engine: &mut Engine, client: &mut Client, now:
     }
 }
 
-/// The local path of an OSC 7 `file://host/path` URI, percent-decoded; `None` for other schemes or a relative path.
-pub fn decode_osc7(uri: &str) -> Option<String> {
-    let rest = uri.strip_prefix("file://")?;
-    let path = &rest[rest.find('/')?..];
-    let bytes = path.as_bytes();
-    let mut out = Vec::with_capacity(bytes.len());
-    let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i] == b'%'
-            && let Some(hex) = path.get(i + 1..i + 3)
-            && let Ok(b) = u8::from_str_radix(hex, 16)
-        {
-            out.push(b);
-            i += 3;
-        } else {
-            out.push(bytes[i]);
-            i += 1;
-        }
-    }
-    String::from_utf8(out).ok()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn osc7_uris_decode_to_local_paths() {
-        assert_eq!(
-            decode_osc7("file://example-host/Users/example/My%20Code"),
-            Some("/Users/example/My Code".to_owned())
-        );
-        assert_eq!(decode_osc7("file:///tmp"), Some("/tmp".to_owned()));
-        assert_eq!(decode_osc7("kitty-shell-cwd://host/tmp"), None);
-        assert_eq!(decode_osc7("file://host"), None);
-    }
 
     #[test]
     fn the_write_queue_caps_pending_input() {

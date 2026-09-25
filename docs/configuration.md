@@ -20,7 +20,7 @@ and `app/src/ipc/log.ts`.
 | run directory | `run/` in the data directory, mode `0700` | same |
 | control socket (C1) | `run/plyd.sock` | same |
 | screen socket (C2) | `run/data.sock` | same |
-| hook socket (C3) | `run/hook.sock`: the path agent panes are given; nothing listens on it yet | same |
+| hook socket (C3) | `run/hook.sock`: agent panes get its path as `PLY_HOOK_SOCK`, and `ply-hook` writes one line per hook to it | same |
 | per-pane files | `run/panes/<id>/` (mode `0700`): `launch.json`, and `claude-settings.json` for Claude Code panes (mode `0600`) | same |
 | logs | `~/Library/Logs/ply/plyd.YYYY-MM-DD.log` and `app.YYYY-MM-DD.log`, 14 days each | `<dir>/logs/` |
 | LaunchAgent | `~/Library/LaunchAgents/dev.ply.app.plyd.plist` | never installed |

@@ -111,7 +111,7 @@ impl Paths {
         self.run_dir.join("data.sock")
     }
 
-    /// C3, hook ingress (spec 4.3); agent panes get it as `PLY_HOOK_SOCK`, its server arrives in WP6.
+    /// C3, hook ingress (spec 4.3); agent panes get it as `PLY_HOOK_SOCK`, and `ply-hook` writes to it.
     pub fn hook_socket(&self) -> PathBuf {
         self.run_dir.join("hook.sock")
     }

@@ -5,7 +5,9 @@
 //! `cli_not_found`), checks the CLI's version from its install metadata without running it (C7, `cli_too_old`; an
 //! unknown version is logged and allowed), builds argv and env (shell: `<shell> -l`; agents: ply-agents' launch
 //! spec), writes the generated files and `launch.json` into `run/panes/<id>/` (mode 0700, files 0600, Ruling R6),
-//! sizes a new engine to the last known view and only then starts the child. A failed spawn leaves no pane behind.
+//! sizes a new engine to the last known view, starts the pane's task with the spec (so the agent integration exists
+//! before the child's first hook) and only then starts the child, which the task adopts before `pane.added` goes out.
+//! A failed spawn leaves no pane behind.
 
 use std::collections::BTreeMap;
 use std::io::Write;
@@ -18,7 +20,9 @@ use ply_agents::{LAUNCH_FILE, LaunchRequest, LaunchSpec, adapter};
 use ply_proto::control::{ErrorCode, PaneCreateParams};
 use ply_proto::pane::{AgentCli, Cli, Pane, PaneId, PaneStatus, Settings};
 use ply_term::{Engine, Palette};
+use tokio::sync::{mpsc, oneshot};
 
+use crate::branch;
 use crate::daemon::{Shared, unix_now};
 use crate::panes::pane::{PaneCmd, PaneSeed, Started, fallback_palette, spawn_task};
 use crate::panes::registry::{MethodResult, NewPane, internal_for, refuse};
@@ -27,6 +31,9 @@ use crate::pty::{Geometry, SpawnSpec, spawn_pane};
 
 /// Longest a spawn waits for the first `theme.set`.
 pub const PALETTE_WAIT: Duration = Duration::from_secs(5);
+
+/// Longest a spawn waits for the pane task to adopt the new process.
+pub const ADOPT_WAIT: Duration = Duration::from_secs(5);
 
 /// `pane.create`: validates, spawns, announces `pane.added` and returns the pane (see the module docs).
 /// Fails with `bad_request`, `not_found`, `cli_not_found`, `cli_too_old`, `invalid_state`, `spawn_failed`, `shutting_down`.
@@ -78,13 +85,14 @@ pub async fn create(shared: &Arc<Shared>, p: PaneCreateParams) -> MethodResult<P
         resume: None,
         prompt: p.prompt.as_deref(),
     };
-    let started = build_launch(shared, pane.id, p.cli, &options)
-        .and_then(|spec| start_engine(shared, pane.id, &spec, &palette, &settings));
-    let (engine, geometry, started) = match started {
+    let geometry = shared.geometry();
+    let prepared = build_launch(shared, pane.id, p.cli, &options).and_then(|spec| {
+        new_engine(pane.id, geometry, &palette, &settings).map(|engine| (spec, engine))
+    });
+    let (spec, engine) = match prepared {
         Ok(parts) => parts,
         Err(e) => {
-            shared.registry().discard_pane(pane.id);
-            remove_pane_dir(pane.id, &shared.paths.pane_dir(pane.id));
+            abandon(shared, pane.id, None).await;
             return Err(e);
         }
     };
@@ -96,10 +104,15 @@ pub async fn create(shared: &Arc<Shared>, p: PaneCreateParams) -> MethodResult<P
             default_title: title,
             engine,
             geometry,
-            started: Some(started),
+            launch: Some(spec.clone()),
             exited: None,
         },
     );
+    shared.registry().set_handle(pane.id, handle.clone());
+    if let Err(e) = start(shared, pane.id, &spec, geometry, &handle).await {
+        abandon(shared, pane.id, Some(&handle)).await;
+        return Err(e);
+    }
     let pane = {
         let mut reg = shared.registry();
         reg.announce(pane.id, handle);
@@ -107,6 +120,58 @@ pub async fn create(shared: &Arc<Shared>, p: PaneCreateParams) -> MethodResult<P
     };
     shared.update_power();
     Ok(pane)
+}
+
+/// Removes a pane whose process never started: its task, its record and its run directory.
+async fn abandon(shared: &Shared, pane_id: PaneId, handle: Option<&mpsc::Sender<PaneCmd>>) {
+    if let Some(handle) = handle
+        && handle.send(PaneCmd::Stop).await.is_err()
+    {
+        tracing::debug!(
+            pane_id,
+            "the task of the pane that failed to start had stopped"
+        );
+    }
+    shared.registry().discard_pane(pane_id);
+    remove_pane_dir(pane_id, &shared.paths.pane_dir(pane_id));
+}
+
+/// Spawns `spec` and waits until the pane task adopted it (and published the pane's state).
+async fn start(
+    shared: &Shared,
+    pane_id: PaneId,
+    spec: &LaunchSpec,
+    geometry: Geometry,
+    handle: &mpsc::Sender<PaneCmd>,
+) -> MethodResult<()> {
+    let (adopted, done) = oneshot::channel();
+    let mut started = spawn(shared, pane_id, spec, geometry)?;
+    started.adopted = Some(adopted);
+    let gone = || {
+        tracing::error!(
+            pane_id,
+            "the pane task is gone; the new process is orphaned"
+        );
+        refuse(ErrorCode::Internal, "the pane task is gone")
+    };
+    if handle
+        .send(PaneCmd::Start(Box::new(started)))
+        .await
+        .is_err()
+    {
+        return Err(gone());
+    }
+    match tokio::time::timeout(ADOPT_WAIT, done).await {
+        Ok(Ok(())) => Ok(()),
+        Ok(Err(_)) => Err(gone()),
+        Err(_) => {
+            tracing::warn!(
+                pane_id,
+                "the pane task took over {ADOPT_WAIT:?} to adopt its process"
+            );
+            Ok(())
+        }
+    }
 }
 
 /// `pane.resume`: relaunches a `lost` pane from its `launch.json`, resuming the CLI session when one was reported.
@@ -126,6 +191,7 @@ pub async fn resume(shared: &Arc<Shared>, pane_id: PaneId) -> MethodResult<Pane>
     let pane = shared
         .registry()
         .begin_resume(pane_id, PaneStatus::Starting, unix_now())?;
+    tracing::info!(pane_id, session = ?pane.session_ref, "resuming the pane");
     let resumed = relaunch(shared, &pane, &handle).await;
     shared
         .registry()
@@ -172,15 +238,20 @@ async fn relaunch(
         };
         build_launch(shared, pane_id, stored.cli, &options)?
     };
-    let started = spawn(shared, pane_id, &spec, shared.geometry())?;
     shared.set_status(pane_id, initial_status(spec.cli), None);
     if handle
-        .send(PaneCmd::Start(Box::new(started)))
+        .send(PaneCmd::Launch(Box::new(spec.clone())))
         .await
         .is_err()
     {
         tracing::error!(pane_id, "the pane task is gone; cannot resume");
         return Err(refuse(ErrorCode::Internal, "the pane task is gone"));
+    }
+    if let Err(e) = start(shared, pane_id, &spec, shared.geometry(), handle).await {
+        if handle.send(PaneCmd::LaunchFailed).await.is_err() {
+            tracing::debug!(pane_id, "the pane task had stopped");
+        }
+        return Err(e);
     }
     Ok(())
 }
@@ -216,11 +287,12 @@ pub fn restore(shared: &Arc<Shared>) {
                 default_title: default_title(pane.cli, &shared.login.shell),
                 engine,
                 geometry,
-                started: None,
+                launch: None,
                 exited: (pane.status == PaneStatus::Exited).then_some(pane.exit_code.unwrap_or(0)),
             },
         );
         shared.registry().set_handle(pane.id, handle);
+        branch::lookup(shared, pane.id, pane.cwd);
     }
 }
 
@@ -416,19 +488,6 @@ fn new_engine(
     Ok(engine)
 }
 
-fn start_engine(
-    shared: &Shared,
-    pane_id: PaneId,
-    spec: &LaunchSpec,
-    palette: &Palette,
-    settings: &Settings,
-) -> MethodResult<(Engine, Geometry, Started)> {
-    let geometry = shared.geometry();
-    let engine = new_engine(pane_id, geometry, palette, settings)?;
-    let started = spawn(shared, pane_id, spec, geometry)?;
-    Ok((engine, geometry, started))
-}
-
 fn spawn(
     shared: &Shared,
     pane_id: PaneId,
@@ -444,7 +503,11 @@ fn spawn(
         geometry,
     };
     match spawn_pane(&request) {
-        Ok((process, channels)) => Ok(Started { process, channels }),
+        Ok((process, channels)) => Ok(Started {
+            process,
+            channels,
+            adopted: None,
+        }),
         Err(e) => {
             tracing::warn!(pane_id, error = %e, "cannot start the pane's process");
             Err(refuse(ErrorCode::SpawnFailed, e.to_string()))

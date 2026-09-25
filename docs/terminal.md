@@ -133,7 +133,7 @@ This is what makes Codex's startup probe work before any view is attached
 | `bells` | a BELL frame at the next update |
 | `title` (OSC 0, 2) | stored as the pane's title (an empty title falls back to the CLI or shell name) and sent as TITLE at the next update |
 | `pwd` (OSC 7 `file://host/path`) | percent-decoded to the pane's `cwd` and announced with `pane.meta`; other schemes are ignored |
-| `notifications` (OSC 9, OSC 777) | logged; routing Codex's OSC 9 to its session is WP6b (`docs/agents.md`) |
+| `notifications` (OSC 9, OSC 777) | an OSC 9 body goes to the pane's agent session (C8: approval, question, plan prompt or turn complete; `docs/agents.md`); every notification is also logged |
 | `progress` (OSC 9;4) | unused |
 | `clipboard_writes` (OSC 52) | accepted and logged, but not written to the pasteboard: no C2 frame carries them. Clipboard reads get no callback, so they are refused |
 

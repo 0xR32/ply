@@ -21,6 +21,7 @@ ghostty-sys = { path = "crates/ghostty-sys" }
 ply-term = { path = "crates/term" }
 ply-agents = { path = "crates/agents" }
 anyhow = "=1.0.104"
+notify = "=8.2.0"
 rusqlite = { version = "=0.40.2", features = ["bundled", "fallible_uint"] }
 rustix = { version = "=1.1.5", default-features = false, features = ["std", "pty", "termios", "process", "fs", "stdio"] }
 serde = { version = "=1.0.229", features = ["derive"] }
