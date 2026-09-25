@@ -1,0 +1,149 @@
+diff --git a/packages/native/src/custom_elements/mod.rs b/packages/native/src/custom_elements/mod.rs
+index fc78124..c932a79 100644
+--- a/packages/native/src/custom_elements/mod.rs
++++ b/packages/native/src/custom_elements/mod.rs
+@@ -107,7 +107,7 @@ impl CustomRenderContext<'_> {
+ ///
+ /// The caller must have given `el` a host-derived id already: gpui keys both the
+ /// pseudo-style state and the accessibility node off that id.
+-pub(crate) fn custom_surface(
++pub fn custom_surface(
+     mut el: gpui::Stateful<gpui::Div>,
+     ctx: &CustomRenderContext,
+ ) -> gpui::Stateful<gpui::Div> {
+@@ -252,6 +252,36 @@ pub trait CustomElementFactory: 'static {
+ 
+     /// Create a new element instance.
+     fn create(&self, id: u64) -> Box<dyn CustomElement>;
++
++    /// Runs once per GPUI app before its window opens; only for global factories.
++    fn init(&self, _cx: &mut gpui::App) {}
++}
++
++type MakeFactory = fn() -> Box<dyn CustomElementFactory>;
++
++/// A static because an addon registers before any renderer, and so any registry, exists.
++static GLOBAL_FACTORIES: std::sync::Mutex<Vec<MakeFactory>> = std::sync::Mutex::new(Vec::new());
++
++/// Registers an element type for every renderer created after this call.
++/// A global factory replaces a built-in one with the same `element_type`.
++pub fn register_global_factory(make: MakeFactory) {
++    GLOBAL_FACTORIES
++        .lock()
++        .unwrap_or_else(std::sync::PoisonError::into_inner)
++        .push(make);
++}
++
++fn global_factories() -> Vec<MakeFactory> {
++    GLOBAL_FACTORIES
++        .lock()
++        .unwrap_or_else(std::sync::PoisonError::into_inner)
++        .clone()
++}
++
++pub(crate) fn init_global_factories(cx: &mut gpui::App) {
++    for make in global_factories() {
++        make().init(cx);
++    }
+ }
+ 
+ // ── Registry ─────────────────────────────────────────────────────────
+@@ -321,6 +351,9 @@ impl CustomElementRegistry {
+         registry.register(Box::new(code::CodeFactory));
+         registry.register(Box::new(diff::DiffFactory));
+         registry.register(Box::new(markdown::MarkdownFactory));
++        for make in global_factories() {
++            registry.register(make());
++        }
+         registry
+     }
+ 
+diff --git a/packages/native/src/lib.rs b/packages/native/src/lib.rs
+index c5f4fa1..9c3d9bd 100644
+--- a/packages/native/src/lib.rs
++++ b/packages/native/src/lib.rs
+@@ -39,9 +39,14 @@ mod updater;
+ ))]
+ mod test_renderer;
+ 
++pub use custom_elements::{
++    custom_surface, register_global_factory, CustomElement, CustomElementFactory,
++    CustomRenderContext,
++};
+ pub use element_tree::*;
+ pub use renderer::*;
+ pub use style::*;
++pub use text::log_painted_text;
+ 
+ #[cfg(any(
+     test,
+diff --git a/packages/native/src/renderer.rs b/packages/native/src/renderer.rs
+index b1710c3..e4d17c4 100644
+--- a/packages/native/src/renderer.rs
++++ b/packages/native/src/renderer.rs
+@@ -92,9 +92,9 @@ pub(crate) fn parse_font_weight(value: &crate::style::FontWeightValue) -> gpui::
+ 
+ /// Abstracted event callback shared by desktop, browser, and test renderers.
+ #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
+-pub(crate) type EventCallback = Arc<dyn Fn(EventPayload) + Send + Sync>;
++pub type EventCallback = Arc<dyn Fn(EventPayload) + Send + Sync>;
+ #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+-pub(crate) type EventCallback = Rc<dyn Fn(EventPayload)>;
++pub type EventCallback = Rc<dyn Fn(EventPayload)>;
+ 
+ fn raw_dimension_u32(value: f64, label: &str) -> std::result::Result<u32, String> {
+     if !value.is_finite() || value <= 0.0 || value.fract() != 0.0 || value > u32::MAX as f64 {
+@@ -1158,6 +1158,7 @@ impl GpuixRenderer {
+         let app_handle = app.run_embedded(move |cx: &mut gpui::App| {
+             crate::custom_elements::input::init(cx);
+             crate::custom_elements::img::init(cx);
++            crate::custom_elements::init_global_factories(cx);
+             // After the other bindings: `set_menus` reads key equivalents out of
+             // the keymap, so every binding must exist before it runs.
+             crate::app_menu::init(&app_name, cx);
+@@ -1291,6 +1292,7 @@ impl GpuixRenderer {
+                         .run(move |cx| {
+                             crate::custom_elements::input::init(cx);
+                             crate::custom_elements::img::init(cx);
++                            crate::custom_elements::init_global_factories(cx);
+                             let size = gpui::size(gpui::px(width as f32), gpui::px(height as f32));
+                             // A layer-shell surface is positioned by the compositor from its
+                             // anchor, so it opens at the origin; a normal window is centered.
+@@ -2700,6 +2702,7 @@ fn start_web_app(
+     gpui_platform::web_init();
+     let app = gpui_platform::single_threaded_web().run_embedded(move |cx| {
+         crate::custom_elements::input::init(cx);
++        crate::custom_elements::init_global_factories(cx);
+         let window = cx.open_window(Default::default(), |window, cx| {
+             if let Some(mode) = PENDING_DEBUG_OVERLAY.with(|pending| pending.borrow_mut().take()) {
+                 window.set_debug_frame_overlay_mode(mode);
+@@ -3384,7 +3387,7 @@ impl Drop for GpuixRenderer {
+ 
+ // ── GPUI View ────────────────────────────────────────────────────────
+ 
+-pub(crate) struct GpuixView {
++pub struct GpuixView {
+     pub(crate) tree: Arc<Mutex<RetainedTree>>,
+     pub(crate) event_callback: Option<EventCallback>,
+     pub(crate) window_title: String,
+@@ -5921,7 +5924,7 @@ pub(crate) fn mouse_button_to_u32(button: gpui::MouseButton) -> u32 {
+ /// caller customize it via a closure, then sends it through the callback.
+ /// Production: queues on Node.js event loop via ThreadsafeFunction.
+ /// Tests: pushes to a synchronous Vec for drainEvents().
+-pub(crate) fn emit_event_full(
++pub fn emit_event_full(
+     callback: &Option<EventCallback>,
+     element_id: u64,
+     event_type: &str,
+diff --git a/packages/native/src/test_renderer.rs b/packages/native/src/test_renderer.rs
+index 0e06c9f..654cb4f 100644
+--- a/packages/native/src/test_renderer.rs
++++ b/packages/native/src/test_renderer.rs
+@@ -235,6 +235,7 @@ impl TestGpuixRenderer {
+         let mut cx = gpui::VisualTestAppContext::new(platform);
+         cx.update(|cx| {
+             crate::custom_elements::input::init(cx);
++            crate::custom_elements::init_global_factories(cx);
+             install_test_image_http_client(cx);
+         });
+ 

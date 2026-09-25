@@ -1,0 +1,24 @@
+diff --git a/packages/native/js/host.ts b/packages/native/js/host.ts
+index fee74a2..0aec653 100644
+--- a/packages/native/js/host.ts
++++ b/packages/native/js/host.ts
+@@ -424,6 +424,7 @@ export interface HostProps {
+   onHighlight?: (event: EventPayload) => void
+   /** A native `motion` track reached its current target. */
+   onMotionComplete?: (event: EventPayload) => void
++  onTerminalEvent?: (event: EventPayload) => void
+ 
+   // ── Highlight ──────────────────────────────────────────────────
+   /**
+diff --git a/packages/native/js/mutations.ts b/packages/native/js/mutations.ts
+index 56f92d0..b767344 100644
+--- a/packages/native/js/mutations.ts
++++ b/packages/native/js/mutations.ts
+@@ -94,6 +94,7 @@ export const EVENT_PROPS = [
+   ["onBlur", "blur"],
+   ["onScroll", "scroll"],
+   ["onFileDrop", "fileDrop"],
++  ["onTerminalEvent", "terminalEvent"],
+ ] as const
+ 
+ export const EVENT_PROP_NAMES: ReadonlySet<string> = new Set(
