@@ -28,12 +28,14 @@ const SCREENS = join(
   'fixtures',
 );
 
+// Renders follow a 60 Hz frame (session.ts), so every settle spans a few frames.
 async function settle(renderer: TestRenderer, until: () => boolean = () => true, ms = 1_500) {
-  const deadline = Date.now() + ms;
-  for (let i = 0; ; i++) {
+  const started = Date.now();
+  const deadline = started + ms;
+  for (;;) {
     renderer.flush();
     renderer.dispatchNativeEvents();
-    if (until() && i >= 2) return;
+    if (until() && Date.now() - started >= 50) return;
     if (Date.now() > deadline) throw new Error('the view did not settle');
     await Bun.sleep(4);
   }

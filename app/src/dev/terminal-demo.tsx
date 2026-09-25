@@ -1,4 +1,4 @@
-// Dev demo, needs a running plyd: PLY_DEMO_PANES (1–6) shell panes, PLY_DEMO_INPUT typed into each, PLY_TERMINAL_STATS=1 logs timings.
+// Dev demo, needs a running plyd: PLY_DEMO_PANES (1–6) new shells or PLY_DEMO_ATTACH=<ids>, PLY_DEMO_INPUT typed in, PLY_TERMINAL_STATS=1.
 
 import { homedir } from 'node:os';
 import { render, useGpuix } from '@gpuix/react';
@@ -25,6 +25,7 @@ setTerminalLogSink((level, message, fields) => log(level, message, fields));
 
 const count = Math.min(6, Math.max(1, Number(process.env.PLY_DEMO_PANES ?? '1') || 1));
 const input = process.env.PLY_DEMO_INPUT;
+const attach = (process.env.PLY_DEMO_ATTACH ?? '').split(',').filter(Boolean).map(Number);
 const home = homedir();
 const store = createStore(initialState({ home, shellName: 'zsh', geistAvailable: false }));
 const client = createControlClient({ socketPath: controlSocketPath(), appVersion: version });
@@ -34,8 +35,13 @@ const listeners = new Set<() => void>();
 client.onState(async (state) => {
   if (state.kind !== 'connected' || panes.length > 0) return;
   try {
+    await client.request('theme.set', { palette: terminalTheme });
     const workspace = await client.request('workspace.open', { path: home });
-    for (let i = 0; i < count; i++) {
+    for (const w of attach.length > 0 ? await client.request('workspace.list', {}) : []) {
+      const all = await client.request('pane.list', { workspace_id: w.id });
+      panes.push(...all.filter((p) => attach.includes(p.id)));
+    }
+    for (let i = 0; i < (attach.length > 0 ? 0 : count); i++) {
       panes.push(
         await client.request('pane.create', {
           workspace_id: workspace.id,
@@ -147,8 +153,8 @@ render(
   </StoreContext.Provider>,
   {
     title: 'ply terminal demo',
-    width: 1280,
-    height: 800,
+    width: Number(process.env.PLY_DEMO_WIDTH ?? '1280'),
+    height: Number(process.env.PLY_DEMO_HEIGHT ?? '800'),
     focus: process.env.PLY_WINDOW_FOCUS !== '0',
     debugFrameOverlay: process.env.PLY_TERMINAL_STATS === '1' ? 'full' : 'hidden',
   },

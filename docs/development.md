@@ -89,6 +89,40 @@ Tests that start real or fake CLIs also set a sandboxed `HOME` (and `CODEX_HOME`
 `~/.codex/config.toml` are never written (INV-8). plyd's own integration tests (`crates/daemon/tests/`) start plyd
 with a cleared environment, a temporary `HOME` and `PLY_HOME`, and `/bin/sh` as the login shell.
 
+## The terminal view on its own
+
+`app/src/dev/terminal-demo.tsx` shows plyd's panes in a bare window, without the app shell. It sends the ply palette
+(`theme.set`), then opens `PLY_DEMO_PANES` (1–6) new shell panes in the home directory, or attaches to existing ones
+with `PLY_DEMO_ATTACH=<id,id,…>`:
+
+```sh
+PLY_HOME=/tmp/ply-dev bun --hot app/src/dev/terminal-demo.tsx
+PLY_HOME=/tmp/ply-dev PLY_DEMO_PANES=4 PLY_DEMO_INPUT='yes | head -c 50000000' PLY_TERMINAL_STATS=1 \
+  bun app/src/dev/terminal-demo.tsx
+```
+
+| Variable | Effect |
+|---|---|
+| `PLY_DEMO_INPUT` | a command typed into every new pane once it is attached (sent as C2 `INPUT_RAW`) |
+| `PLY_DEMO_WIDTH`, `PLY_DEMO_HEIGHT` | the window size (default 1280 × 800); attaching sizes the pane to the view |
+| `PLY_TERMINAL_STATS=1` | GPUIX's frame overlay, a decode/render line in each pane, and a timing line in the app log every 2 s |
+| `PLY_WINDOW_FOCUS=0` | open the window without taking focus |
+
+For the P1 bench a debug plyd replays the recorded agent streams into live panes: `plyd --replay <dir> [--speed N]
+[--panes K]` asks the running plyd of `PLY_HOME` for K shell panes (default 6) and makes each `exec` a feeder that
+writes one `<dir>/*.bytes` stream to its pty at N × 4 KiB/s, looping. It prints the pane ids for `PLY_DEMO_ATTACH`:
+
+```sh
+PLY_HOME=/tmp/ply-dev target/debug/plyd --replay "$PWD/crates/term/tests/fixtures" --speed 10 --panes 6
+PLY_HOME=/tmp/ply-dev PLY_DEMO_ATTACH=<printed ids> PLY_TERMINAL_STATS=1 bun app/src/dev/terminal-demo.tsx
+```
+
+The TypeScript C2 codec is pinned to ply-proto's by `crates/proto/tests/golden/c2/*.bin`: after an intended layout
+change, regenerate them with `PLY_BLESS=1 cargo test -p ply-proto --test golden_c2` and update
+`app/src/terminal/frames.test.ts` to match. The recorded screens in `app/src/terminal/fixtures/` are ply-term
+Snapshots and Deltas of the scrubbed streams in `crates/term/tests/fixtures/`. Under `bun test` a terminal view with
+no `TerminalHostContext` above it never connects, so no test reaches a real plyd or the pasteboard.
+
 ## The gates
 
 CI (`.github/workflows/ci.yml`) runs three jobs on macOS: `rust` (rustfmt, clippy, nextest, doctests, cargo-deny, rustdoc), `ts`

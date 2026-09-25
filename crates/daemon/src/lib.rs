@@ -43,6 +43,8 @@ pub mod paths;
 pub mod power;
 pub mod pty;
 pub mod publisher;
+#[cfg(debug_assertions)]
+pub mod replay;
 pub mod server;
 
 pub use error::{Error, Result};

@@ -40,6 +40,13 @@ enum Mode {
     InstallAgent {
         dry_run: bool,
     },
+    #[cfg(debug_assertions)]
+    Replay(ply_daemon::replay::ReplayOptions),
+    #[cfg(debug_assertions)]
+    ReplayFeed {
+        file: PathBuf,
+        speed: u32,
+    },
     Version,
     Help,
 }
@@ -51,6 +58,8 @@ fn parse(args: &[String]) -> Result<Mode, String> {
             [flag] if flag == "--dry-run" => Ok(Mode::InstallAgent { dry_run: true }),
             other => Err(format!("unexpected install-agent arguments {other:?}")),
         },
+        #[cfg(debug_assertions)]
+        Some(flag @ ("--replay" | "--replay-feed")) => parse_replay(flag, &args[1..]),
         Some("--version") if args.len() == 1 => Ok(Mode::Version),
         Some("--help" | "-h") if args.len() == 1 => Ok(Mode::Help),
         _ => {
@@ -103,6 +112,27 @@ fn main() -> ExitCode {
                 ExitCode::FAILURE
             }
         },
+        #[cfg(debug_assertions)]
+        Ok(Mode::Replay(options)) => match replay(&options) {
+            Ok(ids) => {
+                for id in ids {
+                    println!("{id}");
+                }
+                ExitCode::SUCCESS
+            }
+            Err(e) => {
+                eprintln!("plyd --replay: {e:#}");
+                ExitCode::FAILURE
+            }
+        },
+        #[cfg(debug_assertions)]
+        Ok(Mode::ReplayFeed { file, speed }) => match ply_daemon::replay::feed(&file, speed) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(e) => {
+                eprintln!("plyd --replay-feed: {e}");
+                ExitCode::FAILURE
+            }
+        },
         Ok(Mode::Serve {
             foreground,
             run_dir,
@@ -122,6 +152,46 @@ fn main() -> ExitCode {
             },
         },
     }
+}
+
+// Debug builds only: `--replay <dir> [--speed N] [--panes K]` and the feeder it execs, `--replay-feed <file> [--speed N]`.
+#[cfg(debug_assertions)]
+fn parse_replay(flag: &str, rest: &[String]) -> Result<Mode, String> {
+    let (target, options) = rest
+        .split_first()
+        .ok_or_else(|| format!("{flag} needs a path"))?;
+    let (mut speed, mut panes) = (1u32, 6usize);
+    let mut it = options.iter();
+    while let Some(arg) = it.next() {
+        let value = it.next().ok_or_else(|| format!("{arg} needs a value"))?;
+        match arg.as_str() {
+            "--speed" => speed = value.parse().map_err(|e| format!("--speed {value}: {e}"))?,
+            "--panes" if flag == "--replay" => {
+                panes = value.parse().map_err(|e| format!("--panes {value}: {e}"))?;
+            }
+            other => return Err(format!("unknown {flag} argument {other}")),
+        }
+    }
+    let path = PathBuf::from(target);
+    if !path.is_absolute() {
+        return Err(format!("{flag} needs an absolute path, got {target}"));
+    }
+    Ok(if flag == "--replay" {
+        Mode::Replay(ply_daemon::replay::ReplayOptions {
+            dir: path,
+            speed,
+            panes,
+        })
+    } else {
+        Mode::ReplayFeed { file: path, speed }
+    })
+}
+
+#[cfg(debug_assertions)]
+fn replay(options: &ply_daemon::replay::ReplayOptions) -> anyhow::Result<Vec<u64>> {
+    let paths = Paths::from_env(None)?;
+    let exe = std::env::current_exe().context("cannot locate the plyd executable")?;
+    Ok(ply_daemon::replay::start(&paths, &exe, options)?)
 }
 
 fn serve(foreground: bool, run_dir: Option<PathBuf>) -> anyhow::Result<()> {
@@ -214,6 +284,19 @@ mod tests {
             Ok(Mode::InstallAgent { dry_run: true })
         ));
         assert!(parse(&args(&["--run-dir", "rel"])).is_err());
+        #[cfg(debug_assertions)]
+        {
+            assert!(matches!(
+                parse(&args(&["--replay", "/tmp/r", "--speed", "10", "--panes", "4"])),
+                Ok(Mode::Replay(o)) if o.speed == 10 && o.panes == 4 && o.dir == Path::new("/tmp/r")
+            ));
+            assert!(matches!(
+                parse(&args(&["--replay-feed", "/tmp/r/a.bytes"])),
+                Ok(Mode::ReplayFeed { speed: 1, .. })
+            ));
+            assert!(parse(&args(&["--replay", "rel"])).is_err());
+            assert!(parse(&args(&["--replay-feed", "/tmp/a", "--panes", "2"])).is_err());
+        }
         assert!(parse(&args(&["--bogus"])).is_err());
     }
 }

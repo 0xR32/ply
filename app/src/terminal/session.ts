@@ -45,17 +45,21 @@ export function terminalStats(): TerminalStats[] {
 
 const pending = new Set<TerminalSession>();
 let flushTimer: ReturnType<typeof setTimeout> | null = null;
+let lastFlush = Number.NEGATIVE_INFINITY;
+const FRAME_MS = 16;
 
-// One timer for every pane, so frames that arrive together re-render in one React batch (spec R-R2, R-R21).
+// One timer for every pane, at most once per 60 Hz frame (P1, Ruling R30; plyd sends up to 120 Hz), all panes in one React batch.
 function schedule(session: TerminalSession): void {
   pending.add(session);
   if (flushTimer) return;
+  const wait = Math.max(0, lastFlush + FRAME_MS - performance.now());
   flushTimer = setTimeout(() => {
     flushTimer = null;
+    lastFlush = performance.now();
     const due = [...pending];
     pending.clear();
     for (const s of due) s.notify();
-  }, 0);
+  }, wait);
 }
 
 const HISTORY_WAIT_MS = 5_000;
