@@ -192,7 +192,9 @@ blank. It never carries more.
 
 **RESIZE `0x12`** — `cols:u16 · rows:u16 · cell_width_px:u16 ·
 cell_height_px:u16`, 8 bytes, the same fields as ATTACH. plyd reflows the pane,
-sets the pty's size and answers this client with a Snapshot.
+sets the pty's size and answers this client with a Snapshot. A grid too large
+for one Snapshot frame (see **Attaching**) is ignored, and the Snapshot shows
+the size the pane kept.
 
 **FETCH_HISTORY `0x13`** — `start:i64 · count:u16`, 10 bytes: scrollback rows
 `start .. start + count`. `start` is a row index, so negative; `count` is 1 to
@@ -284,15 +286,17 @@ after it.
 |---|---|
 | 1 | `v` differs from plyd's `C2_VERSION`. |
 | 2 | No open pane has that id (or it closed while attaching). |
-| 3 | The first frame was not ATTACH, or did not decode. |
+| 3 | The first frame was not ATTACH, did not decode, or asked for a grid too large for one Snapshot frame. |
 
 `message` is a sentence for the user.
 
 ## Attaching
 
 1. The client connects and sends ATTACH.
-2. plyd refuses a bad first frame, another version or an unknown pane with
-   ATTACH_REFUSED and closes.
+2. plyd refuses a bad first frame, another version, an unknown pane or a grid
+   whose Snapshot could not fit one frame (7 bytes a cell plus 7 a row, with
+   64 KiB kept for styles, within `MAX_FRAME_LEN`; `Geometry::fits_one_frame`)
+   with ATTACH_REFUSED and closes. A refused size is never recorded.
 3. Otherwise plyd applies the client's size to the pane (the terminal reflows
    and the pty gets `TIOCSWINSZ`; the size also becomes the size of the next
    pane created) and answers with a SNAPSHOT, then a TITLE when the program has

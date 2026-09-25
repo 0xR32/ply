@@ -49,8 +49,9 @@ plyd will hand it every `AgentEvent` (`Hook`, `Osc9`, `RolloutLine`,
 CLI:
 
 1. **The program.** `claude` or `codex` is the first executable of that name on
-   the login shell's `PATH`, which plyd reads once at startup by running
-   `$SHELL -l -c` (`crates/daemon/src/login.rs`), because launchd gives plyd a
+   the login shell's `PATH`, which plyd reads once at startup from an
+   interactive login shell, `$SHELL -l -i -c`, falling back to `$SHELL -l -c`
+   (`crates/daemon/src/login.rs`), because launchd gives plyd a
    minimal environment. Not found is `cli_not_found`. A shell pane runs the
    login shell as `<shell> -l`.
 2. **The version**, read without running the CLI (see **The version check**).

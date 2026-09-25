@@ -104,7 +104,7 @@ set them in the file with plyd stopped, or with `settings.set`.
 | `PLY_PLYD` | the app | The plyd binary to start, tried before `target/debug/plyd` and `target/release/plyd`. |
 | `PLY_WINDOW_FOCUS` | the app | `0` opens the window without taking focus, for scripted and agent-driven runs. |
 | `PLY_TERMINAL_STATS` | the app | `1` shows each terminal's last decode and render time in its corner. |
-| `SHELL`, `USER` | plyd | The login shell: `$SHELL` when it is an absolute executable, else the `UserShell` of `dscl . -read /Users/$USER`, else the passwd entry from `id -P`, else `/bin/zsh`. plyd then runs `$SHELL -l -c` once (10 s at most) to learn the login `PATH`. |
+| `SHELL`, `USER` | plyd | The login shell: `$SHELL` when it is an absolute executable, else the `UserShell` of `dscl . -read /Users/$USER`, else the passwd entry from `id -P`, else `/bin/zsh`. plyd then asks it once for its `PATH` as an interactive login shell (`$SHELL -l -i -c`, 5 s at most, stdin from `/dev/null`), because zsh reads `.zshrc`, where installers put `~/.local/bin`, only when interactive; a shell that fails or hangs so is asked as a plain login shell (`-l -c`). The log says which answered. |
 | `LANG`, `LC_*`, `TMPDIR`, `LOGNAME`, `SSH_AUTH_SOCK`, `__CF_USER_TEXT_ENCODING` | plyd | Passed through to every pane when set; `LANG` defaults to `en_US.UTF-8`. |
 | `NODE_ENV` | the app | `test` (set by `bun test`) keeps the log in memory instead of a file, and gives terminal views an inert host that never opens a socket or touches the pasteboard. |
 | `CODEX_HOME` | Codex | Where Codex keeps its rollouts (`$CODEX_HOME/sessions/`, default `~/.codex`). Tests that run a CLI sandbox it together with `HOME`. |
@@ -139,16 +139,19 @@ plyd --replay <dir> [--speed N] [--panes K]   debug builds only: stream recorded
 
 `--foreground` also logs to stderr; both modes serve the same way. A second
 plyd for the same data directory prints that one is running, with its pid, and
-exits 0 — so launchd's restart-after-a-crash never loops on it. Any other
-startup failure (a database written by a newer plyd, a socket that cannot be
-bound, a socket path too long) exits 1; a usage error exits 2.
+exits 0 — so launchd's restart-after-a-crash never loops on it. A database
+written by a newer plyd is refused the same way, with status 0. Any other
+startup failure (a socket that cannot be bound, a socket path too long) exits
+1; a usage error exits 2.
 
 `--replay` (and the `--replay-feed` it runs in each pane) exists only in debug
 builds, for the P1 bench; `docs/development.md` describes it.
 
 `plyd install-agent` renders `packaging/plyd.plist.template` with the resolved
 path of the plyd binary it runs as, writes the plist only when it changed
-(booting the old definition out first), then runs `launchctl bootstrap
+(booting the old definition out first — unless a plyd holds the instance lock:
+booting it out would kill every session, so it reports that and leaves the
+plist as it is), then runs `launchctl bootstrap
 gui/<uid> <plist>` (an agent that is already loaded is fine) and `launchctl
 kickstart gui/<uid>/dev.ply.app.plyd`. `--dry-run` prints the plist and the
 commands and writes nothing. It refuses to run under `PLY_HOME`, which a

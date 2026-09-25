@@ -158,7 +158,8 @@ and named after its basename.
 ### `pane.list`
 
 The open panes of the workspace: every pane that has not been closed, whatever
-its status (`exited` and `lost` panes are open until `pane.close`). `not_found`
+its status (`exited` and `lost` panes are open until `pane.close`), once
+`pane.added` announced it (a pane whose spawn is still running is not listed). `not_found`
 for an unknown workspace. `Pane.position` and `Pane.tab_id` give the
 arrangement; `layout.get` gives the tab order.
 
@@ -203,7 +204,7 @@ A failed spawn leaves no pane, tab or directory behind. A shell pane starts
 | `kill` | Pane | What happens |
 |---|---|---|
 | `false` | live (any status but `exited`, `lost`) | `pane_alive`; nothing changes. |
-| `true` | live | Answers `{}` at once. plyd sends SIGHUP to the process group and SIGKILL 2 s later if it is still there. When the process has exited: `pane.status` (`exited`), `pane.exit`, then `pane.removed`. |
+| `true` | live | Answers `{}` at once. plyd sends SIGHUP to the process group and, 2 s later, SIGKILL to the whole group, even when its leader has already exited (a member that ignored SIGHUP would keep the pty open). When the leader has exited: `pane.status` (`exited`), `pane.exit`, then `pane.removed`. |
 | either | `exited` or `lost` | Closed now: `closed_at` is stored, the pane leaves its tab (a tab with no pane left is deleted), `run/panes/<id>/` is removed and `pane.removed` is broadcast. |
 
 A closed pane's record stays in the database and is returned by
@@ -219,8 +220,10 @@ is not in plyd yet (`docs/agents.md`).
 
 ### `pane.resume`
 
-Relaunches a `lost` pane (`invalid_state` for any other status) into the same
-pane and terminal, from its `run/panes/<id>/launch.json`. An agent pane's launch
+Relaunches a `lost` pane (`invalid_state` for any other status, and for a
+pane another `pane.resume` is relaunching) into the same pane and terminal, from
+its `run/panes/<id>/launch.json`. The pane leaves `lost` at once (`pane.status`
+`starting`), and goes back to `lost` when the relaunch fails. An agent pane's launch
 spec is rebuilt through its adapter with the pane's `session_ref` as the session
 to resume (`claude --resume <id>`, `codex resume <thread>`), in the stored
 working directory and with the stored worktree option; a shell pane runs its
