@@ -149,7 +149,7 @@ pub enum AdapterSignal {
 /// The signals of the spec 6.3 table (with Rulings R17 and R27); plyd owns the table, these name its signal column.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StatusSignal {
-    /// `starting` → `idle`: Claude SessionStart, Codex first output byte.
+    /// Every live state → `idle`: Claude SessionStart (a new or resumed session, not a compaction), Codex first output byte.
     Ready,
     /// `idle`, `waiting_input` → `running`: Claude UserPromptSubmit, Codex Enter typed.
     PromptSubmitted,
@@ -175,7 +175,7 @@ pub enum StatusSignal {
     KeyTyped,
     /// `running` → `idle` for a pane whose adapter has an [`Adapter::quiet_timeout`]; plyd raises it itself (R17).
     QuietTimeout,
-    /// Any state → `exited(code)`: Claude SessionEnd; the code comes from the process, which plyd still waits for.
+    /// Claude SessionEnd, no status change (Ruling R47): `/clear` and `/resume` end a session while the process runs on.
     SessionEnded {
         /// The CLI's stated reason, e.g. `"prompt_input_exit"`.
         reason: Option<String>,

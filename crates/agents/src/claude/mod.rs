@@ -169,6 +169,8 @@ impl ClaudeSession {
             signals.push(AdapterSignal::Meta(self.meta.clone()));
         }
         match event {
+            // A compaction continues the session mid-turn, so it is no new session to be idle in.
+            "SessionStart" if str_field(payload, "source") == Some("compact") => {}
             "SessionStart" => signals.push(status(StatusSignal::Ready)),
             "UserPromptSubmit" => signals.push(status(StatusSignal::PromptSubmitted)),
             "PreToolUse" => signals.push(status(StatusSignal::ToolUse(tool_call(payload)?))),

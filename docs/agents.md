@@ -386,7 +386,7 @@ use the same vocabulary. The table lives in
 | From | Signal | Source | To |
 |---|---|---|---|
 | — | spawn | `pane.create`, `pane.resume` | `starting` (a shell pane: `idle`) |
-| `starting` | `Ready` | Claude SessionStart · Codex's first pty output byte | `idle` |
+| any live status | `Ready` | Claude SessionStart (not the one after a compaction) · Codex's first pty output byte | `idle` |
 | `idle`, `waiting_input` | `PromptSubmitted` | Claude UserPromptSubmit · Enter typed in a Codex pane | `running` |
 | any live status but `waiting_permission` | `ToolUse` | Claude PreToolUse or PostToolUse | `running` |
 | `running` | `PermissionRequested` | Claude PermissionRequest · Codex OSC 9 approval | `waiting_permission` |
@@ -395,7 +395,7 @@ use the same vocabulary. The table lives in
 | `waiting_permission`, `waiting_input` | `KeyTyped` | any key typed in the pane | `running` |
 | `running` | `TurnComplete` | Claude Stop or StopFailure · Codex notify for the bound thread · Codex OSC 9 of any other body | `idle` |
 | `running` (Claude) | `QuietTimeout` | the pty silent and no hook for 5 s | `idle` |
-| any | `SessionEnded` · the process exits | Claude SessionEnd · pty EOF | `exited(code)` |
+| any | the process exits | pty EOF | `exited(code)` |
 | any live status, after a plyd restart | the process is gone | plyd's start | `lost` |
 
 Transitions not in the table are ignored and counted.
@@ -411,12 +411,17 @@ Transitions not in the table are ignored and counted.
   body (Codex); `InputRequested` the notification's message or body. The detail
   travels in `pane.status`.
 
-- **SessionEnd** arrives before the process has an exit code, so it ends the
-  machine: every later signal is ignored, and the pane shows `exited(code)` when
-  the process is reaped (`pane.status`, then `pane.exit`, after its last
-  output). `lost` is set when plyd starts (`Registry::load`), never by a signal.
+- **SessionEnd** changes nothing (Ruling R47). Claude fires it for `/clear` and
+  an in-session `/resume` while the process keeps running, so it is logged and
+  the status stays; the SessionStart that follows updates the session id (which
+  `pane.resume` uses) and makes the pane `idle`. A SessionStart after a
+  compaction continues the session and changes no status. Only the process's
+  exit ends the machine: the pane shows `exited(code)` when the process is
+  reaped (`pane.status`, then `pane.exit`, after its last output). `lost` is set
+  when plyd starts (`Registry::load`), never by a signal.
 - **The quiet timer** runs from the latest of the last pty output, the last hook
-  and the moment the pane entered `running`.
+  and the moment the pane entered `running`. A timeout the machine does not act
+  on is restarted rather than left due, so a pane task never wakes in a loop.
 - The pane's task publishes the machine's state when it adopts the process; the
   keep-awake assertion follows `running` panes.
 

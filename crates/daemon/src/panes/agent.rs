@@ -117,10 +117,19 @@ impl Agent {
         [quiet, self.progress.due()].into_iter().flatten().min()
     }
 
-    /// Raises the quiet timeout (R17) and sends a held progress value once their time has come.
+    /// Raises the quiet timeout (R17) and sends a held progress value once their time has come; a past deadline never stays due.
     pub fn on_tick(&mut self, shared: &Arc<Shared>, now: Instant) {
         if self.quiet_deadline().is_some_and(|at| at <= now) {
             self.step(shared, &StatusSignal::QuietTimeout, now);
+            // A due deadline the machine did not act on would wake the pane task again at once, forever.
+            if self.quiet_deadline().is_some_and(|at| at <= now) {
+                tracing::warn!(
+                    pane_id = self.pane_id,
+                    status = ?self.machine.status(),
+                    "the quiet timeout changed nothing; restarting it"
+                );
+                self.active_at = now;
+            }
         }
         if let Some(progress) = self.progress.take_due(now) {
             shared.registry().set_progress(self.pane_id, progress);
@@ -146,7 +155,8 @@ impl Agent {
 
     fn quiet_deadline(&self) -> Option<Instant> {
         let quiet = self.quiet?;
-        (self.machine.status() == PaneStatus::Running).then(|| self.active_at + quiet)
+        (self.machine.status() == PaneStatus::Running && !self.machine.has_ended())
+            .then(|| self.active_at + quiet)
     }
 
     fn on_event(&mut self, shared: &Arc<Shared>, event: AgentEvent<'_>, now: Instant) {
@@ -194,10 +204,16 @@ impl Agent {
                 }
                 shared.set_status(self.pane_id, status, detail);
             }
-            Step::Ended => {
+            Step::SessionEnded => {
+                let reason = match signal {
+                    StatusSignal::SessionEnded { reason } => reason.as_deref(),
+                    _ => None,
+                };
                 tracing::debug!(
                     pane_id = self.pane_id,
-                    "session ended; waiting for the process to exit"
+                    reason,
+                    status = ?before,
+                    "the CLI ended a session; the status stays until its next session or the process exit"
                 );
             }
             Step::Ignored => {

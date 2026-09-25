@@ -329,7 +329,7 @@ fn a_quiet_claude_pane_goes_idle_after_5_s_while_output_keeps_it_running() {
 }
 
 #[test]
-fn session_end_then_the_exit_code_ends_the_pane_and_later_hooks_are_ignored() {
+fn session_end_changes_nothing_and_the_exit_code_ends_the_pane() {
     let mut e = env("st-end");
     let (id, fake) = e.claude();
     e.claude_hook(
@@ -339,11 +339,74 @@ fn session_end_then_the_exit_code_ends_the_pane_and_later_hooks_are_ignored() {
         json!({"reason": "prompt_input_exit"}),
     );
     no_status(&mut e.c, id, Duration::from_millis(300));
-    e.claude_hook(&fake, id, "UserPromptSubmit", json!({"prompt": "late"}));
-    no_status(&mut e.c, id, Duration::from_millis(300));
     fake.send("exit 0");
     let (s, _) = next_status(&mut e.c, id, WAIT);
     assert_eq!((s.status, s.exit_code), (Exited, Some(0)));
+}
+
+#[test]
+fn a_clear_ends_one_session_and_the_next_session_start_keeps_the_machine_going() {
+    let mut e = env("st-clear");
+    let (id, fake) = e.claude();
+    e.claude_hook(&fake, id, "UserPromptSubmit", json!({"prompt": "hi"}));
+    e.next(id, Running);
+    e.claude_hook(&fake, id, "SessionEnd", json!({"reason": "clear"}));
+    no_status(&mut e.c, id, Duration::from_millis(300));
+    let cleared = "00000000-0000-4000-8000-00000000abcd";
+    e.claude_hook(
+        &fake,
+        id,
+        "SessionStart",
+        json!({"source": "clear", "session_id": cleared, "model": "claude-example-model"}),
+    );
+    e.next(id, Idle);
+    assert_eq!(
+        e.listed(id)["session_ref"],
+        cleared,
+        "resume follows the new session"
+    );
+    e.claude_hook(&fake, id, "UserPromptSubmit", json!({"prompt": "again"}));
+    e.next(id, Running);
+    e.claude_hook(&fake, id, "PermissionRequest", write_call(None));
+    e.next(id, WaitingPermission);
+    fake.send("exit 0");
+    e.until(id, Exited);
+}
+
+/// CPU time plyd has used so far, from `ps` (`[[H:]M:]S.cc`).
+fn cpu_ms(pid: u32) -> u64 {
+    let out = Command::new("ps")
+        .args(["-o", "cputime=", "-p", &pid.to_string()])
+        .output()
+        .unwrap();
+    let text = String::from_utf8_lossy(&out.stdout).trim().to_owned();
+    let secs = text
+        .split(':')
+        .fold(0.0, |acc, part| acc * 60.0 + part.parse::<f64>().unwrap());
+    (secs * 1000.0) as u64
+}
+
+#[test]
+fn a_session_end_while_running_leaves_the_pane_task_asleep() {
+    let mut e = env("st-spin");
+    let pid = e._plyd.child.id();
+    let (id, fake) = e.claude();
+    e.claude_hook(&fake, id, "UserPromptSubmit", json!({"prompt": "hi"}));
+    e.next(id, Running);
+    e.claude_hook(&fake, id, "SessionEnd", json!({"reason": "clear"}));
+    let took = e.next(id, Idle);
+    assert!(
+        took >= Duration::from_millis(4500),
+        "the R17 quiet timeout still applies after a SessionEnd: {took:?}"
+    );
+    let before = cpu_ms(pid);
+    std::thread::sleep(Duration::from_secs(3));
+    let used = cpu_ms(pid) - before;
+    assert!(
+        used < 300,
+        "plyd used {used} ms of CPU in 3 s with nothing to do"
+    );
+    fake.send("exit 0");
 }
 
 #[test]

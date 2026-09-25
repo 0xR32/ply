@@ -6,7 +6,7 @@
 //!
 //! | From | Signal | To |
 //! |---|---|---|
-//! | `starting` | Ready (Claude SessionStart · Codex first output byte) | `idle` |
+//! | every live state | Ready (Claude SessionStart but a compaction's · Codex first output byte) | `idle` |
 //! | `idle`, `waiting_input` | PromptSubmitted (Claude UserPromptSubmit · Codex Enter typed) | `running` |
 //! | every live state but `waiting_permission` | ToolUse (Claude PreToolUse · PostToolUse) | `running` |
 //! | `running` | PermissionRequested (Claude PermissionRequest · Codex OSC 9 approval) | `waiting_permission` |
@@ -15,11 +15,12 @@
 //! | `running` (Claude) | QuietTimeout (silent pty, no hook for 5 s, R17) | `idle` |
 //! | `waiting_permission` | CallSettled for the pending call (PostToolUse, PostToolUseFailure, PermissionDenied) | `running` |
 //! | `running` | TurnComplete (Claude Stop · StopFailure · Codex notify · OSC 9 turn complete, R27) | `idle` |
-//! | any | SessionEnded (Claude SessionEnd) · pty end-of-file | `exited(code)` |
+//! | any | the process exits (pty end-of-file) | `exited(code)` |
 //!
-//! SessionEnd arrives before the process has an exit code, so it ends the machine ([`Step::Ended`]): nothing moves it
-//! any more, and the pane shows `exited(code)` once the process is reaped ([`StatusMachine::exit`]). `lost` is set by
-//! the registry when plyd starts, never by a signal. Shell panes have no machine.
+//! SessionEnd changes nothing ([`Step::SessionEnded`], Ruling R47): Claude fires it for `/clear` and an in-session
+//! `/resume` while the process keeps running, and the SessionStart that follows makes the pane `idle`. Only the
+//! process's exit ends the machine ([`StatusMachine::exit`]). `lost` is set by the registry when plyd starts, never by
+//! a signal. Shell panes have no machine.
 
 use std::time::{Duration, Instant};
 
@@ -36,8 +37,8 @@ pub enum Step {
         /// One line for the header; set only for the waiting states.
         detail: Option<String>,
     },
-    /// The session ended (SessionEnd); the state stays until the process's exit code arrives.
-    Ended,
+    /// Claude ended a session but its process runs on (`/clear`, `/resume`, or on its way out); nothing changed.
+    SessionEnded,
     /// No row matches the current state and signal; nothing changed and the ignored count grew by one.
     Ignored,
 }
@@ -81,7 +82,7 @@ impl StatusMachine {
         self.ignored
     }
 
-    /// Whether SessionEnd was seen or the process exited; an ended machine ignores every signal.
+    /// Whether the process exited; an ended machine ignores every signal.
     pub fn has_ended(&self) -> bool {
         self.ended
     }
@@ -94,7 +95,7 @@ impl StatusMachine {
         }
         let s = self.status;
         match signal {
-            StatusSignal::Ready if s == Starting => self.to(Idle, None),
+            StatusSignal::Ready => self.to(Idle, None),
             StatusSignal::PromptSubmitted if matches!(s, Idle | WaitingInput) => {
                 self.to(Running, None)
             }
@@ -124,10 +125,7 @@ impl StatusMachine {
                 self.to(Running, None)
             }
             StatusSignal::TurnComplete if s == Running => self.to(Idle, None),
-            StatusSignal::SessionEnded { .. } => {
-                self.ended = true;
-                Step::Ended
-            }
+            StatusSignal::SessionEnded { .. } => Step::SessionEnded,
             _ => self.ignore(),
         }
     }
@@ -284,9 +282,9 @@ mod tests {
     }
 
     #[test]
-    fn ready_moves_starting_to_idle() {
+    fn ready_makes_every_live_state_idle() {
         for cli in BOTH {
-            row(cli, &StatusSignal::Ready, &[Starting], Idle);
+            row(cli, &StatusSignal::Ready, &LIVE, Idle);
         }
     }
 
@@ -416,15 +414,36 @@ mod tests {
     }
 
     #[test]
-    fn session_end_ends_the_machine_from_any_state() {
+    fn session_end_changes_nothing_and_the_next_session_start_makes_the_pane_idle() {
         for s in LIVE {
             let mut m = at(AgentCli::Claude, s);
+            let ignored = m.ignored();
             assert_eq!(
-                m.apply(&StatusSignal::SessionEnded { reason: None }),
-                Step::Ended
+                m.apply(&StatusSignal::SessionEnded {
+                    reason: Some("clear".into())
+                }),
+                Step::SessionEnded
             );
-            assert!(m.has_ended());
-            assert_eq!(m.apply(&StatusSignal::PromptSubmitted), Step::Ignored);
+            assert!(!m.has_ended(), "only the process's exit ends the machine");
+            assert_eq!((m.status(), m.ignored()), (s, ignored));
+            assert!(matches!(
+                m.apply(&StatusSignal::Ready),
+                Step::To { status: Idle, .. }
+            ));
+            assert!(matches!(
+                m.apply(&StatusSignal::PromptSubmitted),
+                Step::To {
+                    status: Running,
+                    ..
+                }
+            ));
+            assert!(matches!(
+                m.apply(&permission()),
+                Step::To {
+                    status: WaitingPermission,
+                    ..
+                }
+            ));
             m.exit();
             assert_eq!(m.status(), Exited);
         }

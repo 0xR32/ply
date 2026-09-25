@@ -77,6 +77,15 @@ fn session_start_reports_ready_model_and_session_id() {
         statuses(&feed(&mut *s, "SessionStart", "SessionStart_resume.json")),
         [StatusSignal::Ready]
     );
+    let mut compacted = fixture("SessionStart.json");
+    compacted["source"] = json!("compact");
+    let signals = s
+        .handle(AgentEvent::Hook(&envelope("SessionStart", compacted)))
+        .unwrap();
+    assert!(
+        statuses(&signals).is_empty(),
+        "a compaction continues the turn: {signals:?}"
+    );
 }
 
 #[test]
