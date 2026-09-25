@@ -32,6 +32,13 @@ checked = "2026-09-25"
 exception = "R35"
 note = "single-maintainer but foundational, actively maintained and ubiquitous; named by the spec (9.1) for library errors"
 
+[cargo.tracing]
+repo = "tokio-rs/tracing"
+stars = 6891
+last_commit = "2026-05-30"
+contributors_5plus = 28
+checked = "2026-09-25"
+
 [cargo.ts-rs]
 repo = "Aleph-Alpha/ts-rs"
 stars = 1884

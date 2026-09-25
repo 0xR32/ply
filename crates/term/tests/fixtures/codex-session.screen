@@ -1,0 +1,70 @@
+size 120x40
+cursor 2,35 Block visible=true blinking=false
+modes 0x000a
+title "Create a.txt with hi | proj"
+00|│ ✨ Update available! 0.156.1 -> 0.157.0                       │
+00~ 0+2 fg=- bg=- ul=- attrs=0x0002; 2+20 fg=63a8f8 bg=- ul=- attrs=0x0001; 23+18 fg=- bg=- ul=- attrs=0x0001; 41+24 fg=- bg=- ul=- attrs=0x0002
+01|│ See https://github.com/openai/codex for installation options. │
+01~ 0+2 fg=- bg=- ul=- attrs=0x0002; 6+31 fg=63a8f8 bg=- ul=- attrs=0x0008; 63+2 fg=- bg=- ul=- attrs=0x0002
+02|│                                                               │
+02~ 0+65 fg=- bg=- ul=- attrs=0x0002
+03|│ See full release notes:                                       │
+03~ 0+2 fg=- bg=- ul=- attrs=0x0002; 25+40 fg=- bg=- ul=- attrs=0x0002
+04|│ https://github.com/openai/codex/releases/latest               │
+04~ 0+2 fg=- bg=- ul=- attrs=0x0002; 2+47 fg=63a8f8 bg=- ul=- attrs=0x0008; 49+16 fg=- bg=- ul=- attrs=0x0002
+05|╰───────────────────────────────────────────────────────────────╯
+05~ 0+65 fg=- bg=- ul=- attrs=0x0002
+06|
+07|╭──────────────────────────────────────────────────────────╮
+07~ 0+60 fg=- bg=- ul=- attrs=0x0002
+08|│ >_ OpenAI Codex (v0.156.1)                               │
+08~ 0+5 fg=- bg=- ul=- attrs=0x0002; 5+12 fg=- bg=- ul=- attrs=0x0001; 17+43 fg=- bg=- ul=- attrs=0x0002
+09|│                                                          │
+09~ 0+60 fg=- bg=- ul=- attrs=0x0002
+10|│ model:     GPT-6-Sol low   /model to change              │
+10~ 0+13 fg=- bg=- ul=- attrs=0x0002; 26+3 fg=- bg=- ul=- attrs=0x0002; 29+6 fg=63a8f8 bg=- ul=- attrs=0x0000; 35+25 fg=- bg=- ul=- attrs=0x0002
+11|│ directory: /private/tmp/example-01/…/scratchpad/s3b/proj │
+11~ 0+13 fg=- bg=- ul=- attrs=0x0002; 58+2 fg=- bg=- ul=- attrs=0x0002
+12|╰──────────────────────────────────────────────────────────╯
+12~ 0+60 fg=- bg=- ul=- attrs=0x0002
+13|
+14|  Tip: This is GPT-6, a new generation of intelligence. Astra is state-of-the-art in coding, computer use, science, and
+14~ 2+4 fg=- bg=- ul=- attrs=0x0001
+15|  professional work. Give it a hard problem, a half-formed idea, or anything you've been meaning to build. See where it
+16|  takes you.
+17|
+18|
+19|› create a file a.txt containing hi
+19~ 0+2 fg=- bg=- ul=- attrs=0x0003
+20|
+21|
+22|• I’ll create a.txt in the current workspace and check its contents.
+22~ 0+2 fg=- bg=- ul=- attrs=0x0002; 14+5 fg=a6e3a1 bg=- ul=- attrs=0x0000
+23|
+24|• Added a.txt (+1 -0)
+24~ 0+2 fg=- bg=- ul=- attrs=0x0002; 2+5 fg=- bg=- ul=- attrs=0x0001; 15+2 fg=2 bg=- ul=- attrs=0x0000; 18+2 fg=1 bg=- ul=- attrs=0x0000
+25|    1 +hi
+25~ 0+4 fg=- bg=213a2b ul=- attrs=0x0000; 4+2 fg=- bg=213a2b ul=- attrs=0x0002; 6+1 fg=2 bg=213a2b ul=- attrs=0x0000; 7+2 fg=cdd6f4 bg=213a2b ul=- attrs=0x0000; 9+111 fg=- bg=213a2b ul=- attrs=0x0000
+26|
+27|• Explored
+27~ 0+1 fg=- bg=- ul=- attrs=0x0002; 2+8 fg=- bg=- ul=- attrs=0x0001
+28|  └ Read a.txt
+28~ 0+4 fg=- bg=- ul=- attrs=0x0002; 4+4 fg=63a8f8 bg=- ul=- attrs=0x0000
+29|
+30|• Created a.txt containing hi.
+30~ 0+2 fg=- bg=- ul=- attrs=0x0002; 10+5 fg=a6e3a1 bg=- ul=- attrs=0x0000; 27+2 fg=a6e3a1 bg=- ul=- attrs=0x0000
+31|
+32|  09:34
+32~ 0+7 fg=- bg=- ul=- attrs=0x0002
+33|
+34|
+35|› Ask Codex to do anything
+35~ 0+1 fg=- bg=- ul=- attrs=0x0001; 2+24 fg=- bg=- ul=- attrs=0x0002
+36|
+37|  GPT-6-Sol low fast · /private/tmp/example-01/-Users-example-Work-Examples/00000000-0000-4000-8000-000000000000/scratc…
+37~ 2+18 fg=f6e2b7 bg=- ul=- attrs=0x0000; 23+97 fg=abdfa7 bg=- ul=- attrs=0x0000
+38|
+39|
+scrollback 2
+-0002|
+-0001|╭───────────────────────────────────────────────────────────────╮

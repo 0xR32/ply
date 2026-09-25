@@ -13,6 +13,13 @@ engine = ["dep:ghostty-sys"]
 [dependencies]
 ply-proto.workspace = true
 ghostty-sys = { workspace = true, optional = true }
+thiserror.workspace = true
+tracing.workspace = true
 
 [lints]
 workspace = true
+
+[[bench]]
+name = "throughput"
+harness = false
+required-features = ["engine"]
