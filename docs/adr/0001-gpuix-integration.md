@@ -1,10 +1,10 @@
 # ADR-0001: GPUIX integration — ply's own addon and the native `<terminal>` element
 
-- Status: Proposed (spike S1b result; Accepted when the WP0 review merges it)
+- Status: Accepted
 - Date: 2026-09-25
 - Work package: WP0 (spike S1b)
-- Spec version: 5.0.1 → 5.1.0 (corrections of VERIFY items and new build rules; see Spec delta.
-  One item, ⌘W, is left as an open decision.)
+- Spec version: 5.0.1 → 6.0.0 (applied by the spec-sync task; includes controller rulings
+  R23–R25)
 
 ## Context
 
@@ -20,10 +20,12 @@ Sources, pinned: `vendor/gpuix` at 9fcd628 (`gpuix-native` 0.10.0) and its zed s
 relative to `vendor/gpuix` (zed files start with `zed/`). Crate sources are the registry
 copies of napi 3.12.7, napi-derive 3.6.8, napi-build 2.4.4 and napi-sys 3.3.2.
 
-The experiment lived outside the repo in a scratch directory that mirrors ply's layout
-(`<scratch>/s1b`: a Cargo workspace with `crates/native`, `vendor → ply/vendor`, and a JS
-root with `vendor/gpuix/packages/{native,react}` as bun workspaces). It is thrown away; the
-patch files and the `justfile` are kept. Toolchain: Rust 1.97.1, Bun 1.3.10, macOS 26.6.2
+The experiment ran in a scratch directory that mirrors ply's layout: a Cargo workspace with
+`crates/native`, `vendor → ply/vendor`, and a JS root with `vendor/gpuix/packages/{native,react}`
+as bun workspaces. The controller preserved it, without `node_modules` and built binaries, at
+`.superpowers/plan/spikes/s1b/` (git-ignored, so local to the machine that ran it); the
+Evidence table at the end of Decision maps each measurement to its file there. The patch
+files and the `justfile` are the kept deliverables. Toolchain: Rust 1.97.1, Bun 1.3.10, macOS 26.6.2
 on an 8-core Apple Silicon (M1 Pro class) machine with 16 GB, with three other spikes
 compiling at the same time (load average 4–30 during the runs). No Xcode is installed, only
 the Command Line Tools.
@@ -140,6 +142,11 @@ applies nor reverses fails the recipe. Reverting is `git -C vendor/gpuix checkou
   reaches gpuix-native's copy). This spike built and ran every variant that way; the shader
   compile then happens at window creation and was not timed separately (`createTestRoot()`,
   which includes it and the font registration, took 347–702 ms).
+
+**Ruling R25 (decided):** two addon builds — a `test-support` build for development and
+`bun test`, and a production build without `test-support`, with `runtime_shaders`, for
+shipping and for every performance number; the workspace has `exclude = ["vendor"]`; `lto`
+sits on a profile, never in a per-package override.
 
 The `crates/native` manifest that worked (copy for WP1/WP5):
 
@@ -338,7 +345,7 @@ otherwise GPUI dispatch runs first and the IME (`insertText:`) only gets keys th
   | `enter`, `tab`, `shift-tab`, `escape`, `ctrl-c`, `alt-b` | `on_key_down`, propagation stopped | no |
   | `cmd-t` (in `passthroughKeys`), `cmd-k` | seen, not stopped | yes |
   | `cmd-c`, `cmd-v` | `on_key_down`, stopped (K7) | no |
-  | `cmd-w` | live: the window closed and the process exited (measured). GPUIX binds ⌘W to `CloseWindow` (packages/native/src/app_menu.rs:44-50) and bindings run before key listeners (window.rs:5608-5620), so the listener cannot see it. Test renderer: bubbles, because it installs no app menu | live no / test yes (measured) |
+  | `cmd-w` (spike element, without R23's binding) | live: the window closed and the process exited (measured). GPUIX binds ⌘W to `CloseWindow` (packages/native/src/app_menu.rs:44-50) and bindings run before key listeners (window.rs:5608-5620), so the listener cannot see it. Test renderer: bubbles, because it installs no app menu | live no / test yes (measured) |
 
   Rule for WP5: a key counts as text only if `key_char` is non-control (the same test GPUI
   uses, zed/crates/gpui_macos/src/window.rs:2468); `enter`/`tab` carry `"\n"`/`"\t"` in `key_char`
@@ -353,6 +360,42 @@ otherwise GPUI dispatch runs first and the IME (`insertText:`) only gets keys th
   element returns without handling or stopping them, so they reach `render({onKeyDown})`.
   Since the element never stops ⌘ chords except ⌘C/⌘V/⌘A, the list only matters for chords
   the element would otherwise own.
+- **⌘W — Ruling R23 (decided, untested).** ⌘W closes the focused pane: the terminal element
+  registers, from `CustomElementFactory::init`, a GPUI key binding `cmd-w` → a ply action in
+  the terminal's own key context (`.key_context(…)` on the element's div), handles that action
+  with `.on_action(…)`, stops propagation and emits `onTerminalEvent`
+  `{"kind":"command","id":"pane.close"}`. With no pane focused the context is absent, so ⌘W
+  keeps GPUIX's close-window. No third patch. **Untested: WP5 must prove that the key-context
+  binding beats both the global `cmd-w` binding and the ⌘W menu key equivalent that
+  `set_menus` installs.** What reading the source establishes, and what it does not:
+  - The menu key equivalent comes from the keymap: `create_menu_item` takes the first binding
+    for the item's action (zed/crates/gpui_macos/src/platform.rs:466-480) and sets it on the
+    `NSMenuItem` (platform.rs:528-540), so Window › Close Window carries ⌘W.
+  - GPUI's view answers `performKeyEquivalent:` (zed/crates/gpui_macos/src/window.rs:139-142,
+    2331-2333) by running GPUI's own key dispatch and returning YES when it was handled
+    (window.rs:2407-2430, 2507-2510). If AppKit offers the key equivalent to the key window's
+    views before the main menu, a handled ⌘W never reaches the menu. That ordering is AppKit's
+    and is not in this source; GPUIX's AGENTS.md:436-450 states the opposite for its Edit-menu
+    case. If the menu gets it first, `handle_menu_item` dispatches `CloseWindow` as an action
+    (platform.rs:1703-1720), which the terminal cannot intercept: the type is private to
+    GPUIX (packages/native/src/app_menu.rs:19-37).
+  - **A key context alone does not win.** GPUI ranks a binding with no context as deep as the
+    deepest context (zed/crates/gpui/src/keymap.rs:150-160, 246-252), and a binding whose
+    context is the focused element's own context has that same depth
+    (zed/crates/gpui/src/keymap/context.rs:260-268). The tie goes to the binding added later
+    (keymap.rs:188-190). GPUIX binds `cmd-w` in `app_menu::init` (app_menu.rs:44-50), which
+    runs **after** `init_global_factories` in patch 0001's order (renderer.rs:1159-1163; the
+    patch inserts the call after line 1160). So a ply binding added directly in `init` loses
+    to `CloseWindow`. It has to be added later: either by `cx.defer(|cx| cx.bind_keys(…))` from `init` (runs at the end of
+    the current effect cycle, zed/crates/gpui/src/app.rs:1998-2004; expected to be the
+    `open_window` update that follows `app_menu::init` — not verified), or by moving the
+    `init_global_factories` call after `app_menu::init` in patch 0001 (a one-line change of
+    the existing patch, not a third one). Once ply's binding ranks first, GPUI dispatches its
+    action first and stops when the element handles it (zed/crates/gpui/src/window.rs:5608-5620).
+  - Where to test: GPUIX's test renderer installs no app menu and no `cmd-w` binding (⌘W
+    bubbles there, Decision 10 table), so it cannot prove R23. The live `GpuixRenderer`'s
+    `simulateKeystrokes` goes through GPUI dispatch and bindings (measured: `cmd-w` closed the
+    live window) but not through AppKit's menu, so the menu path needs a real key press.
 - **Mouse:** `on_mouse_down/up/move` and `on_scroll_wheel` on the element's div, with
   `cx.stop_propagation()` for wheel events it consumes (as input.rs:1336-1342). **Measured:**
   an automation click delivered `{"kind":"mouse","x":230,"y":96}` and focused the pane.
@@ -435,6 +478,49 @@ through the same loader, so it loads ply's addon via `NAPI_RS_NATIVE_LIBRARY_PAT
 
 The linker signs the dylib ad hoc; stripping invalidates that signature (WP10 re-signs).
 
+### 14. Notes for WP5
+
+- **Export names.** napi-rs camel-cases a digit boundary as a word start: the spike's
+  `s1b_stats` became `s1BStats` (measured, `exports.ts` output). Name the Rust function
+  `ply_stats` so the export is `plyStats` (R-R17).
+- **AppKit calls from `render` must be deferred.** Calling `NSWindow` methods such as
+  `setFrameOrigin:` inside `CustomElement::render` re-entered GPUI and logged `RefCell already
+  borrowed` (measured, `live-run1.log`); wrapping the call in `window.defer(cx, …)` fixed it.
+- **The production build draws nothing until macOS reports the window visible** (Decision 8).
+  A live smoke or automation run must make the window visible first; the spike floated it
+  with `setLevel:` 3 plus `orderFrontRegardless`, without activating it
+  (`s1b_float_window` in the spike's `crates/native/src/lib.rs`).
+- **`EventPayload.modifiers`** is `{ shift, ctrl, alt, cmd }`, all booleans
+  (packages/native/src/element_tree.rs:166-171).
+- **Focus handle:** `tabIndex` (or a key/focus listener) creates it; `autoFocus` alone does not
+  (renderer.rs:4586-4592).
+- **Events emitted from `render()`** reach JS live through the threadsafe function; in the test
+  renderer they wait for `dispatchNativeEvents()` (Decision 12).
+- **`getPaintedText()` also exists on the live `GpuixRenderer`** (last frame; renderer.rs:2269-2272),
+  useful for smoke checks without the test renderer.
+- The spike's `crates/native/src/lib.rs` is a working reference for the factory registration,
+  the waker, `custom_surface` + `track_focus`, the key rules, an `EntityInputHandler` entity
+  registered in paint, `FontFallbacks`, `log_painted_text` and a `plyStats`-style napi object.
+  It is scratch code (`unwrap`, `expect`, no `tracing`) and is not to be copied as is.
+
+### 15. Evidence
+
+All paths below are under `.superpowers/plan/spikes/s1b/`. Scripts run from `jsroot/app` with
+`NAPI_RS_NATIVE_LIBRARY_PATH` pointing at a built addon and `S1B_FONT_DIR` at `fonts/`.
+
+| Claim | Where |
+|---|---|
+| Spike element, manifests, profiles | `crates/native/src/lib.rs`, `crates/native/Cargo.toml`, `Cargo.toml`, `rust-toolchain.toml` |
+| Seeded vs fresh lock (817 kept, 206 drifted) | `Cargo.lock`, `Cargo.lock.fresh`, `lockdiff.py`, `seed.err`, `locked.err`, `meta.log` (the missing `exclude`) |
+| Fresh-resolve `cargo check` passes (79.8 s) | not preserved (it ran in a sibling scratch directory); result recorded here only |
+| Cold release build 5 min 53 s, sizes | `build-cold.log`; earlier split in `build-release.log` / `build-release2.log`; `build-prod.log`, `build-prod2.log`, `build-ts2.log`, `build-dev.log` |
+| napi exports, one `dlopen`, no-override failure | `jsroot/app/src/exports.ts`, `jsroot/app/src/no-override.ts` (outputs recorded in Decisions 5–6) |
+| Live repaint, pump, keys, ⌘W | `jsroot/app/src/live.tsx`; `live-run1.log` (test-support), `live-prod.log` (window behind other apps), `live-prod2.log` (floated) |
+| Tree-size cost, idle CPU | `jsroot/app/src/live-tree.tsx`, `idle.tsx`, `rebuild-cost.tsx` (outputs recorded in Decision 8 and Consequences) |
+| Test renderer, automation, fonts | `jsroot/app/src/testroot.tsx`, `terminal.test.tsx`, `testroot-init.log`, `shots/s1b-testroot.png`, `shots/late-registration-probe-helvetica.png` |
+| `flush()` stall with a fast producer | `jsroot/app/src/flush-probe.tsx`, `rebuild-probe.tsx`, `flush-probe.log`, `rebuild-probe.log`, `rebuild-probe2.log` |
+| JS workspace and JSX typing | `jsroot/package.json`, `jsroot/bunfig.toml`, `jsroot/bun.lock`, `jsroot/app/package.json`, `jsroot/app/src/native/`, `jsroot/app/src/typing/`, `jsroot/app/tsconfig.typing.json` |
+
 ## Consequences
 
 - ply builds two addons: a `test-support` build for development and `bun test` (it contains
@@ -442,18 +528,26 @@ The linker signs the dylib ad hoc; stripping invalidates that signature (WP10 re
   performance measurement (P1–P5). GPUIX's default build and its npm binaries include
   `test-support` and draw on every notify, so they are not representative for frame numbers.
 - ⌘W, ⌘Q, ⌘H, ⌥⌘H and ⌘M are bound by GPUIX's app menu (app_menu.rs:44-50) and never reach
-  `render({onKeyDown})`. ⌘W closes the window, which quits the app (QuitMode::LastWindowClosed,
-  renderer.rs:1157). K3's "⌘W closes the pane" is not reachable with patches 0001–0002
-  (open decision, Spec delta).
+  `render({onKeyDown})`; without a pane focused, ⌘W closes the window, which quits the app
+  (QuitMode::LastWindowClosed, renderer.rs:1157). R23 makes ⌘W close the focused pane through
+  the element's own binding; that it wins over GPUIX's binding and the menu key equivalent is
+  unproven until WP5's live test (Decision 10).
 - The per-frame cost of a terminal repaint includes a full rebuild of the React tree: ~0.01 ms
   per host node measured (0.75 ms at 24 nodes, 5.0 ms at 504, 20.3 ms at 2004, p90). At
-  R-R16's 2 000-node cap the window cannot hold 60 Hz while a pane streams. From these points
-  (an estimate, not a measurement of ply's chrome), P1's 8.3 ms p99 leaves room for a few
-  hundred chrome nodes plus the panes' own painting.
+  R-R16's 2 000-node cap the window cannot hold 60 Hz while a pane streams. **Ruling R24
+  (decided):** the main screen's React tree has a budget of 400 host nodes; R-R16's 2 000
+  stays the ceiling; WP5 tries hosting each terminal as its own GPUI entity rendered as a
+  cached view so that a terminal notify does not rebuild the GpuixView tree; P3 is
+  re-measured on the production addon in WP11. From reading, the cached view is unlikely to
+  help: a notify marks the notified view and every ancestor view dirty
+  (zed/crates/gpui/src/window.rs:1954-1966, 3076-3082), and the window root is drawn through
+  an uncached `ViewElement` (window.rs:3199; view.rs:103-109, 243-255, 314-345), so
+  `GpuixView::render` still runs on every draw; caching would save only the terminal's own
+  render. WP5's P1 bench decides; the 400-node budget holds either way.
 - Idle cost: the whole process with one idle pane used **1.72 %** of one core with the 8 ms
   pump and **1.37 %** with 16 ms (10 s samples, production build). GPUIX's own comment gives
   1.5 % for the paced loop (packages/react/src/reconciler/renderer.ts:81-84). P3's 0.5 % is not
-  met by the unmodified runtime; WP11 decides.
+  met by the unmodified runtime; per R24, WP11 re-measures P3 on the production addon.
 - `createRenderer()` starts GPUIX's stdio automation server whenever stdin is not a TTY
   (packages/native/js/runtime.ts:39-45). A packaged app launched with a pipe on stdin exposes
   click/type/screenshot to its parent; with `/dev/null` it reads EOF. WP10 keeps stdin
@@ -510,20 +604,24 @@ Corrects (5.1.0):
   simulation over them loses 0–1.9 % of 120 Hz vsyncs; a 4 ms pump loses none. Recheck in
   the P1 bench on a 120 Hz display; the fallback is ply's own `startFrameLoop(renderer,
   { frameMs: 4 })`.
-- **5.2 R-R16** — the 2 000-node cap is inconsistent with P1 once every terminal frame rebuilds
-  the whole tree (Consequences); to be set from the P1 bench (measured points above).
+- **5.2 R-R16** (R24) — add a main-screen budget of 400 host nodes; 2 000 stays the ceiling.
+  WP5 tries a cached terminal view (expected from reading not to avoid the GpuixView rebuild,
+  Consequences); P3 is re-measured on the production addon in WP11.
 - **5.2 R-R19** — the element id is `ElementId::Name("__gpuix_terminal_<host id>")` (GPUIX's
   rule, AGENTS.md:398-400), not `<pane>`.
-- **7.1 K3/K6** — ⌘W, ⌘Q, ⌘H, ⌥⌘H and ⌘M never reach the app keymap; they are GPUIX menu
-  bindings. **Open decision for the owner:** keep ⌘W as "close window" (the app closes,
-  sessions keep running per 11.3) and give "close pane" another chord; or a third patch that
-  makes GPUIX's Window-menu binding configurable (INV-13 needs an ADR and an upstream offer);
-  or a ply keybinding in the terminal's key context that wins only while a pane has focus.
-- **8.1** — (a) the root `Cargo.toml` needs `[workspace] exclude = ["vendor"]`; (b) `lto` cannot
+- **7.1 K3/K6** (R23) — ⌘Q, ⌘H, ⌥⌘H and ⌘M never reach the app keymap (GPUIX menu bindings).
+  ⌘W closes the focused pane through a GPUI binding in the terminal element's key context,
+  registered from `CustomElementFactory::init` and reported as `onTerminalEvent`
+  `{kind:"command", id:"pane.close"}`; with no pane focused ⌘W keeps close-window; no third
+  patch. The binding must be added after GPUIX's `app_menu::init` to win GPUI's tie-break
+  (Decision 10). Marked untested until WP5 proves it against the global binding and the menu
+  key equivalent. C6 gains the `command` kind.
+- **8.1** (R25) — (a) the root `Cargo.toml` needs `[workspace] exclude = ["vendor"]`; (b) `lto` cannot
   go in `[profile.release.package.gpuix-native]`: it goes on a whole profile (`[profile.release]`
   or a dedicated profile used by `just build-native`), and the dev-only `opt-level` overrides
-  copy as `[profile.dev.package.*]`; (c) `just build-native` builds two variants (with and
-  without `test-support`); (d) the JS side is the bun workspace of Decision 6, with the vendored
+  copy as `[profile.dev.package.*]`; (c) `just build-native` builds two variants: `test-support`
+  for development and `bun test`, and production (no `test-support`, `runtime_shaders`) for
+  shipping and every performance number; (d) the JS side is the bun workspace of Decision 6, with the vendored
   `dist/` built by `tsc` after `just vendor-patch`; (e) patch 0002 also adds the `HostProps`
   field; (f) the patches are a registration hook, not GPUIX's "Phase 2" (which is separate
   binaries sharing a GPUI dylib; the same wording is in ADR-0007).

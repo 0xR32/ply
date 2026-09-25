@@ -3,8 +3,7 @@
 - Status: Accepted (owner's decision, 2026-09-25)
 - Date: 2026-09-25
 - Work package: WP0
-- Spec version: 5.0.1 → 5.1.0 (records D5; adds one INV-17 enforcement rule, Decision 3;
-  the spike's own deltas are in ADR-0005)
+- Spec version: 5.0.1 → 6.0.0 (applied by the spec-sync task)
 
 ## Context
 
@@ -55,8 +54,12 @@ is the model for `ghostty-sys`.
    `libghostty-vt.vendor.json` does, and `patches.md` lists no patches: ADR-0005 needed
    none, and herdr's five local patches are not taken.
 3. **Fence (INV-17).** Only `ghostty-sys` has FFI to it and only `ply-term`'s `engine`
-   feature uses `ghostty-sys`; only `ply-daemon` enables that feature, which
-   `cargo tree -i ghostty-sys` checks. The app never links it and never
+   feature uses `ghostty-sys`; only `ply-daemon` enables that feature. `ply-native` is
+   never built together with the rest of the workspace (Ruling R11), so Cargo's feature
+   unification can never switch `engine` on inside the addon, and the check runs per
+   crate: `cargo tree -p ply-native -i ghostty-sys` must be empty, and
+   `cargo tree -p ply-daemon -i ghostty-sys` must show only the path
+   ghostty-sys → ply-term → ply-daemon. The app never links it and never
    mirrors terminal modes: KEY, MOUSE, FOCUS and PASTE are encoded in plyd with the pane's
    own encoders. `check-rules.ts` compares `vendor/libghostty-vt` with `vendor.json` plus
    `patches.md`, **including ignored files**: Zig 0.16 writes fetched packages into
@@ -93,6 +96,8 @@ is the model for `ghostty-sys`.
 ## Spec delta
 
 Confirms spec 2 (terminal emulation, build toolchain), D5, R10 and INV-17; the spike's
-corrections are in ADR-0005. One addition: INV-17's "Enforced by" column says the vendor
-directory comparison includes git-ignored files, because Zig 0.16 hides its `zig-pkg/`
-there (Decision 3). A new rule in an enforcement mechanism: minor bump.
+corrections are in ADR-0005. Two changes to INV-17's "Enforced by" column, applied with
+6.0.0 by the spec-sync task: the `cargo tree` check is per crate, as in Decision 3
+(Ruling R11), instead of one `cargo tree -i ghostty-sys` over the workspace; and the
+vendor directory comparison includes git-ignored files, because Zig 0.16 hides its
+`zig-pkg/` there (Decision 3).

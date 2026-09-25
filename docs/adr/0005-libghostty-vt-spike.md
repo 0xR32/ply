@@ -3,8 +3,7 @@
 - Status: Accepted
 - Date: 2026-09-25
 - Work package: WP0 (spike S5b)
-- Spec version: 5.0.1 → 6.0.0 proposed (C2 KEY and MOUSE field layouts change, a contract
-  change under rule 0.1.2; the controller reconciles the number with ADR-0003/0004)
+- Spec version: 5.0.1 → 6.0.0 (applied by the spec-sync task)
 
 ## Context
 
@@ -20,7 +19,7 @@ cores, macOS 26.6.2, Zig 0.16.0, Rust 1.97.1):
    `1.3.2-HEAD-+44f2a44df`). Every API fact below cites `include/ghostty/vt/<file>:<line>`
    (abbreviated `terminal.h:1972` etc.). Where a header was silent, the Zig source is cited
    as `src/<path>:<line>`.
-2. **A spike crate** (`s5b`, scratch, not committed): a `build.rs` modelled on herdr's,
+2. **A spike crate** (`s5b`, kept outside git, see Evidence): a `build.rs` modelled on herdr's,
    hand-written FFI (89 functions and the types and constants they need), a DeltaBuilder,
    and 26 tests plus benchmark subcommands. The FFI was checked at run time against the
    library's own ABI manifest (`ghostty_type_json()`, `types.h:355-410`): 22 struct
@@ -29,11 +28,50 @@ cores, macOS 26.6.2, Zig 0.16.0, Rust 1.97.1):
    reference only; herdr's copy carries five local patches (its `libghostty-vt.patches.md`)
    that ply's pristine copy does not have.
 4. **Recorded real streams**: the eleven Claude Code pty captures of S2b and the four Codex
-   0.156.1 captures of S3b, replayed through the engine; the Codex startup-probe fixture of
-   ADR-0004.
+   0.156.1 captures of S3b (Evidence), replayed through the engine; the Codex startup-probe
+   fixture of ADR-0004.
 5. **Load note.** Three sibling spikes ran at the same time (one compiling GPUI); the load
    average was 3–12 on 8 cores during measurements. Each number is the best of 5–7 runs,
    with the median shown where it differs; unloaded runs are expected to be equal or better.
+6. **Controller rulings** R18–R22 (fix round 1) settle the items this spike left open; they
+   are written into Decision 4, Consequences and Spec delta below.
+
+## Evidence
+
+All of it lives in the owner's checkout under `.superpowers/plan/`, which is git-ignored
+(`.gitignore:1`), so none of it is in the repository.
+
+- **Spike crate**: `.superpowers/plan/spikes/s5b/` — `build.rs`, `src/{ffi,term,bench,main}.rs`,
+  `tests/*.rs` (the 26 tests), `corpus/git-log-p-color.bin`, and the recorded outputs:
+  `bench-run2.txt` (throughput and Delta cost), `sample-git.txt` and `sample-rec.txt`
+  (`sample` profiles), `manifest.json` (`ghostty_type_json()` of this build), `pane.snap` and
+  `pane.snap.txt` (the cross-process snapshot and its expected text),
+  `rustix-contributors.txt` (the INV-16 query).
+- **Recorded pty captures**: `.superpowers/plan/evidence/s2b/logs/run*_raw.bin` (11 Claude
+  Code runs, S2b) and `.superpowers/plan/evidence/s3b/raw_*.bin` (4 Codex 0.156.1 runs, S3b).
+- **The recorded agent corpus** (the corpus R18 refers to) is exactly these 15 files,
+  concatenated in byte-wise order of their names, S2b first: `run10_raw.bin`,
+  `run1_raw.bin`, `run2_raw.bin`, `run3_raw.bin`, `run4_raw.bin`, `run5_raw.bin`,
+  `run6_raw.bin`, `run6a_raw.bin`, `run7_raw.bin`, `run8_raw.bin`, `run9_raw.bin`, then
+  `raw_approval.bin`, `raw_approval2.bin`, `raw_approve.bin`, `raw_observe.bin`. One copy is
+  188,223 bytes, SHA-256
+  `b065ed633b2d21720c7923c85af3162a3b1b92c78eb008070aed55802caf704b`. The benchmark repeats
+  the whole sequence 179 times (33,691,917 bytes, the first multiple over 32 MiB) and writes
+  it in 64 KiB chunks into a 168 × 50 terminal with `SCROLLBACK_MAX_BYTES` = NULL,
+  `SCROLLBACK_MAX_LINES` = 10,000, mode 2027 on and no effects installed, building a Delta
+  at most every 8.333 ms (`src/main.rs` `tput_rec`, `src/bench.rs` `run_stream_cfg`).
+- **Re-running.** The replay tests and `tput_rec` look for the captures at `../s2b/logs`
+  and `../s3b` relative to the crate; in the preserved layout they are at
+  `../../evidence/s2b/logs` and `../../evidence/s3b`. `build.rs` reads the vendor tree from
+  `S5B_GHOSTTY_SRC` and the eight Zig packages from `zig-pkg/` next to it or
+  `S5B_ZIG_PKG_DIR`; the package directory was not preserved, and one online
+  `zig build -Demit-lib-vt --fetch` in a copy of the vendor tree recreates it.
+- Two fix-round-1 measurements came from additions not in the preserved crate: the OSC 9
+  body table (Decision 3, test `osc9_rule`) and plain ASCII with Deltas (subcommand
+  `tput-plain`). Their source is appended to
+  `.superpowers/sdd/ply-plan/task-1-report.md` (fix round 1).
+- `corpus/git-log-p-color.bin` is real `git log -p` output of a third-party repository and
+  contains commit author names: it must never be committed (INV-11).
 
 ## Decision
 
@@ -173,7 +211,8 @@ so C2's `style:u16` must be ply's own intern table keyed by the `GhosttyStyle` v
 `CELLS_DATA_FG_COLOR`/`BG_COLOR` (`render.h:746-760`) for C2: they resolve palette indices
 to RGB, which breaks "colours stay symbolic".
 
-**Grapheme clusters (R-R14) — CONFIRMED; the default is off.** With mode 2027 off (the
+**Grapheme clusters (R-R14) — CONFIRMED; the library default is off, plyd turns it on
+(R22).** With mode 2027 off (the
 library default; DECRQM `?2027$p` answers `2` = reset) the family emoji `👨‍👩‍👧` becomes three
 wide cells, the first two carrying a trailing ZWJ; with 2027 on it is one wide cell `1F468+[200D,1F469,200D,1F467]`, and a flag pair is
 one cell. herdr turns it on through `OPT_MODE_DEFAULT` (`src/ghostty/mod.rs:876-899`).
@@ -205,9 +244,17 @@ parser cannot do it.** OSC 7 `file://example-host/Users/example/project` reached
 `OSC 1337;CurrentDir=` also land there. OSC 9 bodies reached `DESKTOP_NOTIFICATION` with an
 empty title, including when the sequence was split across two `vt_write` calls; replaying
 the Codex captures delivered "Codex wants to edit a.txt" and "Created [a.txt](…) containing
-`hi`." **Bodies that start with a ConEmu sub-command are not notifications**: `4;1;50`
-became a progress report and `9;<path>` a pwd (`src/terminal/osc/parsers/osc9.zig:14-20`);
-"10 files changed" and "" were notifications. OSC 777 delivers title and body. The
+`hi`." **Some bodies are parsed as ConEmu commands and never reach the callback**
+(`src/terminal/osc/parsers/osc9.zig:14-270`; the notification fallback is `:272-285`).
+Exactly: a body starting with `12` is a prompt mark whatever follows (no `;` check,
+`:100-104`), and it also moves the cursor to a fresh line; a body starting with `5` is
+"wait for input" whatever follows (`:205-209`); `10` alone or `10;0`–`10;3` (`:33-85`),
+`1;` (`:24-32`), `11;` (`:86-99`), `2;`, `3;`, `6;`, `7;`, `8;`, `9;` (the last a pwd,
+`:108-267`), and `4;` followed by `0`–`4` (progress, `:144-204`) are commands too. Measured:
+"12 tests pass", "120 files", "5 files changed", "1;500", "10;1", "4;1;50" (progress) and
+"9;/tmp/x" (pwd) were swallowed, and "12 tests pass" moved the cursor from (3,0) to (0,1);
+"1", "10 files changed", "10;9", "11 items", "2 items", "3", "4", "4;9", "9 lives" and ""
+arrived as notifications. OSC 777 delivers title and body. The
 standalone `vt/osc.h` parser exposes only the command type and a title string
 (`osc.h:81-97`), not the OSC 7 URI or the OSC 9 text, so it cannot serve C8. OSC 0/2
 reached `TITLE_CHANGED`; a 32 kB Codex capture changed the title about 100 times (its
@@ -259,7 +306,8 @@ took 240 steps / 20–175 ms. The token does not change when compressing. Readin
 decompresses what it touches (`terminal.h:2257-2258`; formatting a whole compressed pane
 raised the footprint again).
 
-**Memory per pane (P4) — MEASURED; met when idle, not while a styled stream is live.**
+**Memory per pane (P4) — MEETS P4 as ruled (R19: measured after 10 min idle, with the
+idle compressor mandatory); not met while a densely styled stream is live.**
 `proc_pid_rusage` phys_footprint (what `vmmap` reports as footprint), six 168 × 50
 terminals filled at once, delta divided by six:
 
@@ -274,7 +322,9 @@ An empty terminal costs 0.03 MiB; a render state plus DeltaBuilder another 0.79 
 cost follows the 8-byte cell: 10,149 rows × 168 cells × 8 B = 13.0 MiB. The P4 target of
 15 MB holds for idle panes (all ≤ 4.75 MiB) and for plain and diff output while live; a
 pane that has just received 10,000 densely styled lines is at 17.0 MB until its idle timer
-compresses it.
+compresses it. The "after idle compression" column is the R19 reading, provided plyd's idle
+delay is under 10 minutes: the spike ran the incremental compressor to COMPLETE right after
+filling, which is the end state of an idle pane.
 
 **Scrollback limits — two defaults must be overridden.** A new terminal has
 `SCROLLBACK_MAX_BYTES = 10,000` (bytes, `src/terminal/Terminal.zig:272`) and no line
@@ -301,8 +351,10 @@ guarantee" (`snapshot.h:112-113`).
 **Search — CONFIRMED.** Needle "needle" over 5,000 lines: 5 case-insensitive matches in
 2.1 ms with `ghostty_search_run`; `SELECT_NEXT` with scroll policy NONE selects index 0.
 
-**Throughput (WP3 exit ≥ 300 MB/s) — NOT MET on recorded agent output.** 168 × 50
-terminal, 10k scrollback, 64 KiB writes (pty-read size), best of 5–7:
+**Throughput — MEETS the WP3 exit as ruled (R18): ≥ 100 MB/s engine + Deltas on the
+recorded agent corpus and ≥ 300 MB/s plain ASCII.** The original ≥ 300 MB/s on recorded
+output is not met. 168 × 50 terminal, 10k scrollback, 64 KiB writes (pty-read size), best
+of 5–7:
 
 | stream | engine only | engine + Delta at ≤ 120 Hz | engine + Delta after every 64 KiB |
 |---|---|---|---|
@@ -310,7 +362,10 @@ terminal, 10k scrollback, 64 KiB writes (pty-read size), best of 5–7:
 | colour `git log -p` (33.6 MB) | 123 MB/s | 116 MB/s | 67 MB/s |
 | synthetic Claude-style TUI frames with 2026 (33.6 MB) | 348 MB/s | 321 MB/s | 107 MB/s |
 | CJK / emoji / combining (8.4 MB) | 120 MB/s | 114 MB/s | 68 MB/s |
-| plain ASCII 168-column lines (34 MB) | 712–724 MB/s | — | — |
+| plain ASCII 168-column lines (34 MB) | 712–724 MB/s | 681 MB/s (median 656) | — |
+
+A rerun in fix round 1 (load 5–6, 7 runs) gave 137 / 131 / 75 MB/s on the recorded agent
+corpus; the plain-ASCII-with-Deltas figure is from that round.
 
 Mode 2027 and write size (4 KiB–1 MiB) stay within run-to-run noise; plain ASCII reaches 994 MB/s with
 no scrollback. `sample` puts the time inside the engine: for the recorded agent streams in
@@ -321,7 +376,7 @@ SGR parser, the per-page style set and, once scrollback is full, page recycling
 
 **PTY (C5) — CONFIRMED with `rustix` 1.1.5** (`default-features = false`, features `std`,
 `pty`, `termios`, `process`, `fs`, `stdio`, plus `event` for the spike's poll loop).
-`openpt(RDWR|NOCTTY)`, `grantpt`, `unlockpt`, `ptsname` → `/dev/ttys013`; open the slave
+`openpt(RDWR|NOCTTY)`, `grantpt`, `unlockpt`, `ptsname` → `/dev/ttysNNN`; open the slave
 `RDWR|NOCTTY|CLOEXEC`; `tcsetwinsize` on the master; `Command` with `env_clear()` + six
 explicit vars, the slave as stdio, and `pre_exec { setsid()?; ioctl_tiocsctty(stdin())?; }`.
 `/usr/bin/env` printed exactly the six vars. `/bin/sh` printed the pts path for `tty`,
@@ -340,7 +395,10 @@ commits (125 in total), not archived, release 1.1.5.
 
 Before the child starts (R-R4): `OPT_USERDATA`; `WRITE_PTY`; `BELL`; `TITLE_CHANGED`;
 `PWD_CHANGED`; `DESKTOP_NOTIFICATION`; `PROGRESS_REPORT`; `CLIPBOARD_WRITE` (never
-`CLIPBOARD_READ`); `SIZE`; `COLOR_SCHEME`; `COLOR_FOREGROUND/BACKGROUND/CURSOR/PALETTE` from
+`CLIPBOARD_READ`); `SIZE`; `COLOR_SCHEME`; `XTVERSION` answering `ply <version>` (R22;
+without it the terminal reports "libghostty", `terminal.h:1127-1133`); `MODE_DEFAULT` with
+mode 2027 = true, so grapheme clustering is also what RIS restores (R22,
+`terminal.h:1453-1466`); `COLOR_FOREGROUND/BACKGROUND/CURSOR/PALETTE` from
 `theme.set`; `TERMINFO_NAME` = `xterm-256color` (C5); `SCROLLBACK_MAX_BYTES` = NULL and
 `SCROLLBACK_MAX_LINES` = `scrollback_lines` + 300 (the deficit measured at 168 columns);
 `CONTINUATION_MAX_BYTES` > 0; `KITTY_IMAGE_STORAGE_LIMIT` = 0 (by default the terminal
@@ -367,16 +425,19 @@ it. `setopt_from_terminal` before every key and mouse encode, then re-apply
 - A scroll produces a FULL Delta (all 50 rows): 8,400 cells × 7 bytes ≈ 59 KB per frame
   per streaming pane at the 120 Hz cap. Bounded, but the reason a SCROLL op may pay off
   later.
-- The ≥ 300 MB/s WP3 exit criterion cannot be met as written on this machine: recorded agent
-  output runs at 134 MB/s (engine alone, loaded machine), and the time is inside
-  libghostty-vt (`sample` over all three modes: 3,032 of 3,214 samples inside
-  `ghostty_terminal_vt_write`, 126 inside ply's DeltaBuilder). For scale,
-  the S2b Claude Code captures average 0.3–1.3 kB/s between their first and last hook;
-  P1 itself (six panes at ten times real speed) is measured by WP11's replay bench. The
-  owner decides the new threshold (spec delta 12).
-- P4 holds for idle panes only because of compression, so plyd must run the idle
-  compressor; a pane that has just scrolled 10,000 densely styled lines stays over 15 MB
-  until then.
+- WP3's exit threshold is ruled provisionally (R18), owner may change: ≥ 100 MB/s engine +
+  Deltas on the recorded agent corpus (measured 128–131 MB/s) and ≥ 300 MB/s plain ASCII
+  (measured 681 MB/s with Deltas). The original ≥ 300 MB/s on recorded output is out of
+  reach on this machine because the time is inside libghostty-vt (`sample` over all three
+  modes: 3,032 of 3,214 samples inside `ghostty_terminal_vt_write`, 126 inside ply's
+  DeltaBuilder). For scale, the S2b Claude Code captures average 0.3–1.3 kB/s between
+  their first and last hook; P1 (six panes at ten times real speed) is measured by WP11's
+  replay bench.
+- P4 is read after 10 minutes idle, ruled provisionally (R19), owner may change. It holds
+  only because of compression, so the idle compressor is mandatory in plyd (R19); a pane
+  that has just scrolled 10,000 densely styled lines stays over 15 MB until it runs.
+- C2 carries the field changes of Spec delta 1–4 and 14 before protocol v1 is frozen
+  (R20, R21), so WP2 builds them into ply-proto from the start.
 - Snapshots work across a plyd restart; across a libghostty-vt upgrade they are not
   guaranteed to decode, so persisted snapshots record the pin and are discarded (start
   blank) when it changes or decoding fails.
@@ -394,62 +455,70 @@ VERIFY S5b items (WP0 list and the rules that name S5b):
 | WP0: render state reports dirty rows a DeltaBuilder turns into Deltas | CONFIRMED (dirty set = touched rows plus the row the cursor left; scroll, alternate screen and resize are FULL) |
 | WP0: snapshot encode/restore works across a plyd restart | CONFIRMED for terminal state (cross-process); callbacks are re-installed; format has no compatibility guarantee across library versions |
 | R-R4 and WP0: colour and device queries answered from ply's palette | CONFIRMED; CORRECTED: the palette is `OPT_COLOR_*` (`terminal.h:1199-1227`), not `vt/color_scheme.h`; answers leave through `OPT_WRITE_PTY`; OSC 10/11 are unanswered unless fg/bg are set |
-| C8 and WP0: OSC 7 and OSC 9 reachable | CONFIRMED through `OPT_PWD_CHANGED` and `OPT_DESKTOP_NOTIFICATION`; CORRECTED: the standalone `vt/osc.h` path cannot deliver the payloads; OSC 9 bodies starting `1;`–`12;` are ConEmu commands |
+| C8 and WP0: OSC 7 and OSC 9 reachable | CONFIRMED through `OPT_PWD_CHANGED` and `OPT_DESKTOP_NOTIFICATION`; CORRECTED: the standalone `vt/osc.h` path cannot deliver the payloads; OSC 9 bodies starting `12` or `5` (anything after), and `1;`, `10`, `10;0`–`10;3`, `11;`, `2;`, `3;`, `4;0`–`4;4`, `6;`–`9;` are ConEmu commands, not notifications (Decision 3) |
 | WP0: key, mouse, focus and paste encoders cover R-R5 to R-R10 | CONFIRMED; C2 fields CORRECTED below |
 | R-R18 and WP0: DEC 2026 handling | CONFIRMED: polled `DATA_MODE` 2026, no callback; plyd holds Deltas and caps with `OPT_MODE` false |
 | R-R22 and WP0: idle-scrollback compression | CONFIRMED (`compression_activity` + `compress(INCREMENTAL)`, COMPLETE on macOS) |
-| P4 and WP0: bytes per pane at 10 000 × 168 | MEASURED: 13.5–14.0 MiB live for plain/diff output, 16.2 MiB for SGR-dense output, 0.7–4.8 MiB idle-compressed |
+| P4 and WP0: bytes per pane at 10 000 × 168 | MEASURED: 13.5–14.0 MiB live for plain/diff output, 16.2 MiB for SGR-dense output, 0.7–4.8 MiB idle-compressed; meets P4 as read under R19 |
 | C5 and WP0: `rustix::pty` + `pre_exec` gives a controlling tty and exactly ply's env | CONFIRMED (rustix 1.1.5; macOS rules in Decision 3) |
 | R-R12: reflow on resize | CONFIRMED: primary reflows 20→40→10 columns, alternate does not |
-| R-R14: wide, spacer, grapheme from the grid | CONFIRMED; grapheme clusters need mode 2027 on |
+| R-R14: wide, spacer, grapheme from the grid | CONFIRMED; grapheme clusters need mode 2027 on, which plyd sets as the reset default (R22) |
 | R-R6: ⇧⏎ → LF without kitty | CONFIRMED as a plyd rule: the legacy encoder emits `ESC[27;2;13~`, kitty `ESC[13;2u` |
 | R-R11: OSC 52 writes allowed, reads refused | CONFIRMED by installing only `OPT_CLIPBOARD_WRITE` |
 | 2 Terminal emulation: 8-byte cells, SIMD, snapshots, search, encoders | CONFIRMED (`GhosttyCell` = 8 bytes in the manifest, `page.zig:2143`; SIMD on at run time) |
 | 6.2: Codex probes answered by plyd's terminal within 250 ms | CONFIRMED on the recorded probe (2.9 µs) |
 
-Changes this ADR proposes (spec 6.0.0, pending the controller's merge with ADR-0003/0004):
+Changes, applied as spec 6.0.0 by the spec-sync task. Items 1–4 and 14 are C2 changes
+adopted by R20/R21 before the v1 freeze; 9 and 15 are R22; 12 and 13 are ruled
+provisionally (R18/R19), owner may change:
 
 1. **4.2 KEY** becomes `{key:u16 (GhosttyKey 0–175), mods:u16, consumed_mods:u16,
    action:u8 (0 release, 1 press, 2 repeat), flags:u8 (bit 0 composing),
    unshifted_codepoint:u32, text:utf8}`. `mods` needs 10 bits (`key/event.h:57-91`), the
    option-as-alt rule needs the side bits and `consumed_mods`, and kitty's
-   alternate-key reporting needs `unshifted_codepoint`. (Contract change.)
+   alternate-key reporting needs `unshifted_codepoint`. (Contract change; adopted, R20.)
 2. **4.2 MOUSE** becomes `{action:u8 (press, release, motion), button:u8 (0 = none,
    1–11), x:f32, y:f32 (pixels from the terminal's top-left), mods:u16}`; plyd keeps the
    pressed-button state and the geometry. `col/row` cannot feed SGR-pixels (1016).
    ATTACH/RESIZE `px_w/px_h` must be defined as the **cell** size in pixels, the value
-   `ghostty_terminal_resize` takes (`terminal.h:2026`). (Contract change.)
+   `ghostty_terminal_resize` takes (`terminal.h:2026`). (Contract change; adopted, R20.)
 3. **4.2 cell flags** gain `spacer_head` (a wide character wrapped to the next line,
    `screen.h:112-113`); **style `attrs`** is a `u16` (eight booleans plus a 3-bit underline
-   kind: none, single, double, curly, dotted, dashed).
-4. **4.2 PASTE** needs a rule for `GHOSTTY_REJECTED` (a multi-line paste into a pane without
-   2004): either an `allow_unsafe` flag on PASTE plus a plyd → app rejection frame, or a
-   fixed plyd policy. Open for WP2.
+   kind: none, single, double, curly, dotted, dashed). (Adopted, R20.)
+4. **4.2 PASTE** becomes `{allow_unsafe:u8, text:utf8}`. When `ghostty_terminal_paste`
+   returns `GHOSTTY_REJECTED` (`paste.h:45-53`: a newline without 2004, or the bracket
+   terminator with it), plyd writes nothing and sends a new plyd → client frame
+   `0x26 PASTE_REJECTED`; the app asks the user and resends the PASTE with
+   `allow_unsafe = 1` (R21).
 5. **R-R4**: "The exact callbacks (`vt/color_scheme.h`, `vt/device.h`,
    `vt/size_report.h`)" is replaced by the list in Decision 4; it adds "the palette is set
    before the child starts, or OSC 10/11 stay unanswered".
 6. **C8**: "from the terminal's own callbacks if it reports these sequences, otherwise with
    its standalone OSC parser" becomes "from `OPT_PWD_CHANGED` and
-   `OPT_DESKTOP_NOTIFICATION`"; ADR-0004's classifier must treat a body that starts with a
-   ConEmu sub-command as not a notification.
+   `OPT_DESKTOP_NOTIFICATION`"; and "an OSC 9 body the engine parses as a ConEmu command
+   (Decision 3: starting `12` or `5`, among others) never reaches plyd, so a Codex message
+   such as `12 tests pass` is lost". ADR-0004's classifier only ever sees bodies that passed
+   this filter.
 7. **R-R18**: "Its exact reporting is VERIFY S5b" becomes "plyd reads mode 2026 after each
    write batch, holds Deltas while it is set, and clears it with `OPT_MODE` after 150 ms".
 8. **R-R22**: add "`SCROLLBACK_MAX_BYTES` is cleared and `SCROLLBACK_MAX_LINES` is
    `scrollback_lines` + 300, because page-granular pruning keeps fewer rows than the cap".
-9. **R-R14**: add "plyd sets mode 2027 as the reset default". Decision for the owner:
-   Ghostty and herdr cluster by default, but a CLI that measures with wcwidth then
-   disagrees on the width of ZWJ sequences.
+9. **R-R14**: add "plyd sets mode 2027 as the reset default (`OPT_MODE_DEFAULT`)" (R22).
+   Known cost: a CLI that measures with wcwidth disagrees on the width of ZWJ sequences.
 10. **2 Terminal emulation** pin: "libghostty-vt 1.3.2-HEAD" is Ghostty's source version;
     the library reports `0.1.0-dev`. Wording.
 11. **8 ledger, `crates/ghostty-sys`**: the header list becomes `terminal.h`, `render.h`,
     `screen.h`, `style.h`, `modes.h`, `device.h`, `size_report.h`, `snapshot.h`, `key.h`,
     `mouse.h`, `focus.h`, `paste.h`, `search.h`, `grid_ref.h`, `point.h`, `sys.h`,
     `types.h`; `osc.h` and `color_scheme.h` are not needed.
-12. **WP3 exit criterion** "at least 300 MB/s of recorded output": measured 128 MB/s
-    (engine + Deltas at 120 Hz) on the recorded Claude Code and Codex corpus. Proposed:
-    "≥ 100 MB/s on the recorded agent corpus on the reference machine", with P1 as the
-    binding end-to-end requirement. Owner decides.
-13. **P4** is read as the idle-compressed footprint, and plyd's idle compressor becomes
-    part of R-R22's "compressed when idle" rather than optional.
+12. **WP3 exit criterion** "at least 300 MB/s of recorded output" becomes "≥ 100 MB/s
+    engine + DeltaBuilder on the recorded agent corpus (Evidence) and ≥ 300 MB/s on plain
+    ASCII, on the reference machine" — ruled provisionally (R18), owner may change (for
+    example raise it). Measured: 128–131 MB/s and 681 MB/s.
+13. **P4** "plyd per pane" is measured after 10 minutes idle, and R-R22's "compressed when
+    idle" is mandatory: plyd runs the idle compressor on every pane — ruled provisionally
+    (R19), owner may change.
 14. **C2 TITLE**: Codex puts its spinner in the title (about 100 changes in a 32 kB
-    capture); TITLE frames are coalesced to the Delta cadence.
+    capture); TITLE frames are coalesced to the Delta cadence (adopted, R20).
+15. **XTVERSION** (`CSI > q`): plyd answers `ply <version>` through `OPT_XTVERSION` (R22);
+    Claude Code sends this probe at startup (the S2b replays).

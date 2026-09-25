@@ -3,55 +3,72 @@
 - Status: Accepted
 - Date: 2026-09-25
 - Work package: WP0 (spike S3b)
-- Spec version: 5.0.1 → 5.1.0 (new evidence/rules; no contract or invariant changes are
-  proposed here — see Spec delta)
+- Spec version: 5.0.1 → 6.0.0 (applied by the spec-sync task)
 
 ## Context
 
-Spec sections 3.3 (C4, C8), 6.2–6.5 and WP0's S3b list six things WP6's Codex adapter needs
-exact strings for: the `notify` payload shape, the OSC 9 message catalogue for
-`classify_osc9`, the rollout file layout and record shapes, resume/`-C`, the startup
-terminal probes, the TUI's terminal modes, and the approval dialog's answer keys, plus
-whether per-invocation `-c` can trust a ply hook.
+Spec sections 3.3 (C4, C8), 6.2–6.5 and WP0's S3b list what WP6's Codex adapter needs exact
+strings for: the `notify` payload shape, the OSC 9 message catalogue for `classify_osc9`,
+the rollout file layout and record shapes, resume/`-C`, the startup terminal probes, the
+TUI's terminal modes, the approval dialog's answer keys, the `update_plan` tool, and whether
+per-invocation `-c` can trust a ply hook.
 
-Evidence was gathered two ways, both recorded:
+Evidence was gathered two ways, both preserved:
 
 1. **Real runs** of the installed `codex-cli 0.156.1` (`~/.local/bin/codex`), driven over a
-   pty by a small Python harness (`stdlib pty`/`os`/`select`,
-   `.superpowers/sdd/ply-plan/../../../scratchpad/s3b/drive.py` — not committed, spike-only),
-   against a **sandboxed `CODEX_HOME`** (`scratchpad/s3b/codex_home`) that reuses the real
-   `auth.json` read-only (copied once, never written back) so no ChatGPT login flow was
-   needed. `~/.codex/config.toml` was never opened for writing; every override went through
-   `-c`. Hashes: `025ef1fc7456…` before the spike's first `codex` invocation,
-   `8eb1a1eef70c…` after. **They differ**, and not because of anything this spike wrote — see
-   the safety note below.
+   pty by a small Python harness (stdlib `pty`/`os`/`select`), against a **sandboxed
+   `CODEX_HOME`** that reused the real `auth.json` read-only (copied once, never written
+   back) so no ChatGPT login flow was needed. `~/.codex/config.toml` was never opened for
+   writing by this spike; every override went through `-c`. The real `~/.codex/config.toml`
+   was hash-compared before and after the spike's runs and came back **changed** — not
+   because of anything this spike wrote; see the note below. Raw captures, scripts and the
+   sandboxed session directory are preserved at `.superpowers/plan/evidence/s3b/` (`drive.py`,
+   `notify.sh`, `hookmark.sh`, `notify.log`, `doctor.json`, `hooktest*.out`, `raw_*.bin`,
+   `script_*.json`, `codex_home_sessions/`).
 2. **Source reading** of a shallow clone of `openai/codex` tag `rust-v0.156.1` (resolves to
    commit `b412ff32c417f855c2b2d1581b77058eed87c84b`; git printed "not a commit" for the tag
-   object itself, which is normal for an annotated tag) into `scratchpad/codex-src`. File:line
-   citations below are against that checkout.
+   object itself, which is normal for an annotated tag). File:line citations below are
+   against that checkout (`codex-rs/...`).
 
-**Safety note (read before WP6 reruns any of this):** partway through this spike, invoking
-the bare `codex --version` / `--help` / `doctor` (outside the sandboxed `CODEX_HOME`, because
-those are discovery calls against the real install) triggered Codex's own background
-self-updater: `~/.local/bin/codex` is a symlink into `~/.codex/packages/standalone/current`,
-and that target moved from 0.156.1 to 0.157.0 mid-session, without any flag from this spike
-asking for it. The updater also rewrote `~/.codex/config.toml`'s `last_updated`/
-`last_revision` bookkeeping lines, which is why the before/after hashes differ — this spike
-never opened that file for writing, and every experiment that touched config used `-c`
-against a sandboxed `CODEX_HOME`. **Implication for INV-8's "byte-identical" daemon test:**
-Codex can rewrite its own real config out from under a byte-identity check for reasons that
-have nothing to do with ply, just from being invoked at all with an update available. The
-INV-8 test should diff a fixed set of user-meaningful keys (or exclude `last_updated`/
-`last_revision`), not the whole file, or it will flake independently of ply. All the
-load-bearing findings below (OSC 9 catalogue, approval keys, terminal probes, modes, rollout
-shapes, resume) were captured **before** the version moved, i.e. on 0.156.1 exactly. Only the
-`update_plan`/code-mode-wrapping finding (Decision, item 6) was captured after, on 0.157.0;
-it is flagged as such.
+Fixtures for WP6 are at `.superpowers/plan/fixtures/s3b/` (scrubbed rollouts, notify
+payloads, OSC 9 message bodies, startup-probe bytes, the approval-dialog transcript).
 
-No process this spike started was left running; the two accidentally-hung `exec` calls
-(malformed `-c` array-index syntax, see item 3) were killed by PID. An unrelated `codex`
-process already running on this machine under a different working directory (a separate
-harness session, PID 20526/36077/75293 group) was left untouched — it is not this spike's.
+**Note on the config rewrite (R14, revised):** the real `~/.codex/config.toml` changed size
+and hash during this spike. The cause is Codex's **plugin-marketplace auto-upgrade**, not
+the binary updater. `last_updated`/`last_revision` are fields of `MarketplaceConfig`
+("Last time Codex successfully added or refreshed this marketplace" / "Git revision Codex
+last successfully activated for this marketplace" — `codex-rs/config/src/types.rs:1033-1038`),
+and a background thread named `plugins-marketplace-auto-upgrade` refreshes any configured
+marketplace on every startup whenever plugins are enabled
+(`codex-rs/core-plugins/src/manager.rs:2769-2800`, gated on `config.plugins_enabled`, which
+resolves to the `plugins` feature flag: `codex-rs/core/src/config/mod.rs:1671-1679`,
+`self.features.enabled(Feature::Plugins)` — `plugins` is on by default, confirmed in the
+enabled-feature list `doctor --json` prints). Passing `-c features.plugins.enabled=false`
+(equivalently `--disable plugins`) suppresses that thread and its config rewrite. Any real
+`CODEX_HOME` session — not just this spike's — can trigger it; it is unrelated to any `-c`
+flag ply itself passes.
+
+Separately, the installed binary did move from 0.156.1 to 0.157.0 during this spike
+(`~/.local/bin/codex` symlinks into `~/.codex/packages/standalone/current`, and that target
+changed). That is the work of a persistent, independently-running Codex app-server daemon
+with its own background auto-update loop (`codex-rs/app-server-daemon/src/lib.rs`:
+`auto_update_enabled`, `ensure_managed_updater`, `run_pid_update_loop`), which was already
+present on this machine (its state directory predates this spike) and updates on its own
+schedule. No command this spike issued calls into that machinery: `codex-rs/cli/src/main.rs`'s
+`--version`/`--help`/`doctor` code paths never call `ensure_managed_updater` or
+`run_pid_update_loop`. Per revised R14, ply's own spawn-time version check (a plain
+`codex --version`, used to gate C7's minimum-version check) is confirmed not to trigger the
+updater by the same absence of any call from that code path into the daemon's update
+machinery. Separately, and already established by spec 6.2 (not new to this ADR), every
+ply-spawned Codex pane carries at least one `-c` override, which spec 6.2 already documents
+as making the TUI "run embedded instead of attaching to its shared background daemon" — so
+ply's own panes never attach to that auto-updating daemon in the first place, by
+construction, independent of the version-check point above.
+
+No process this spike started was left running; two `exec` calls that hung (one from a
+malformed `-c` array-index override, see Decision item 3) were killed by PID. A separate,
+pre-existing `codex`-family process already running on this machine under an unrelated
+working directory, from an unrelated session, was left untouched.
 
 ## Decision
 
@@ -62,7 +79,7 @@ Confirming/correcting each VERIFY S3b line:
 plus one JSON argument) after each completed turn (`codex-rs/hooks/src/legacy_notify.rs:45-73`,
 registered in `codex-rs/hooks/src/registry.rs:125-127` on `HookEvent::AfterAgent`, which is
 core, not TUI-specific — it fires the same way under `codex exec`). Captured verbatim
-(scrubbed, `fixtures/notify-payloads.log`):
+(scrubbed, `.superpowers/plan/fixtures/s3b/notify-payloads.log`):
 
 ```json
 {"type":"agent-turn-complete","thread-id":"<uuid>","turn-id":"<uuid>","cwd":"/example/workspace","client":"codex-tui","input-messages":["create a file a.txt containing hi"],"last-assistant-message":"Created [a.txt](/example/workspace/a.txt) containing `hi`."}
@@ -75,14 +92,22 @@ Full field list (kebab-case): `type` (always `"agent-turn-complete"` — the enu
 cwd, last-assistant-message") was missing `client` and `input-messages` — both present on
 every run in this spike.
 
-**Gotcha for WP6:** Codex fires an extra, *internal* AfterAgent turn per thread to generate a
-short conversation title, and that also runs `notify` — with `input-messages` being the
-title-generation meta-prompt, not the user's actual message, and `last-assistant-message`
-being a JSON string like `{"title":"Create a.txt with hi"}`. This happened once, on the
-thread's first turn, in every interactive-TUI run in this spike. If ply-agents matches
-`notify` firings to "the visible turn finished" without checking `turn-id` against the turn
-it's tracking, this hidden micro-turn will fire an extra, spurious idle-transition. Recorded
-in `fixtures/notify-payloads.log` (both entries, from the same run).
+**Gotcha for WP6, corrected (R28):** Codex fires an extra, internal `AfterAgent` turn per
+thread to generate a short conversation title, and that also runs `notify`. In the captured
+evidence, that micro-turn's notify carries a **different `thread-id`** from the real turn
+(`01a0d77c-8216…` vs the real thread's `01a0d77c-7ac9…`), arrives chronologically **first**
+(07:34:19Z vs 07:34:24Z for the real turn's notify), and **no rollout file was ever created**
+for that title-generation thread-id — only the real thread's rollout exists on disk. So the
+risk is not "matching `turn-id` within a thread ply is already tracking" (there is no shared
+thread to match within — the two notifies are for two different threads from the start): the
+risk is a pane-binding strategy that trusts *whichever thread-id shows up in the first
+notify it sees*. That would bind the pane to the title-generation thread, which never gets a
+rollout, and progress/model/status reads that depend on the rollout would then never
+resolve. The fix (R28): bind a pane to a notify's `thread-id` only once a rollout file with
+that id actually exists on disk; until then, keep using the cwd-based discovery spec 6.2
+already prescribes for "before the first notify" (the newest rollout created after spawn
+whose `session_meta.cwd` equals the pane's cwd) — and keep using it even after a notify
+arrives, if that notify's claimed thread has no rollout yet.
 
 **2. Rollout files — CONFIRMED, layout and field names as spec states, plus exact names.**
 Layout: `$CODEX_HOME/sessions/YYYY/MM/DD/rollout-<ts>-<thread_uuid>.jsonl` where `<ts>` is
@@ -92,12 +117,12 @@ Layout: `$CODEX_HOME/sessions/YYYY/MM/DD/rollout-<ts>-<thread_uuid>.jsonl` where
 every run (spec marks it optional). `session_meta.payload` fields: `cwd` (literal key
 `"cwd"`), and **two** id fields, `id` and `session_id`, both equal to the thread UUID.
 `turn_context.payload.model` is the literal key `"model"` (e.g. `"gpt-6-sol"`). Approval
-requests are confirmed **never** written to the rollout (grepped every record `type` and
-`payload.type` across a run that went through an `EditApprovalRequested` dialog — no
-approval-shaped record exists; the approval only shows up as the eventual
+requests are confirmed **never** written to the rollout (every record `type` and
+`payload.type` was enumerated across a run that went through an `EditApprovalRequested`
+dialog — no approval-shaped record exists; the approval only shows up as the eventual
 `custom_tool_call`/`custom_tool_call_output` pair and the final assistant message).
-Fixtures: `fixtures/rollout-basic-session-meta-turn-context.jsonl`,
-`fixtures/rollout-approval-and-resume-source.jsonl`.
+Fixtures: `.superpowers/plan/fixtures/s3b/rollout-basic-session-meta-turn-context.jsonl`,
+`.superpowers/plan/fixtures/s3b/rollout-approval-and-resume-source.jsonl`.
 
 **3. Hook trust via per-invocation `-c` — mechanism CONFIRMED from source, exact
 `trusted_hash` NOT reproduced empirically; treat as open.**
@@ -115,22 +140,19 @@ event labels e.g. `session_start` at :95-109). The value that must match is
 `sha256:<hex>` of the canonical-JSON form of `{event_name, matcher, hooks:[handler]}`
 (`codex-rs/config/src/fingerprint.rs:54-66`, `codex-rs/hooks/src/engine/discovery.rs:769-792`).
 
-I confirmed empirically that an untrusted `-c`-declared hook is silently skipped under
-`codex exec` (no error, no crash — good, matches "no-op" expectations) using a `SessionStart`
-command hook pointed at a marker script. I then tried to compute the matching
-`trusted_hash` myself in Python (sha256 of the compact, key-sorted JSON, with `Option::None`
-fields omitted per toml-rs's usual struct-serialization behaviour) and pass it back via
-`-c hooks.state={"<key>"={trusted_hash="sha256:..."}}` in the same invocation. **Both
-attempts I tried did not trust the hook** (marker still did not fire) — I could not, within
-this spike's budget, nail the exact byte-for-byte canonicalization (candidate:
-`{"async":false,"command":"<path>","type":"command"}` under `{"event_name":"session_start","hooks":[...]}`,
-all `Option::None` fields dropped, sorted keys, compact separators). **One pitfall found on
-the way:** array-index dotted paths like `-c 'hooks.SessionStart[0].hooks[0].type="command"'`
-do **not** work — `-c`'s key parsing splits on literal `.` only
-(`codex-rs/config/src/overrides.rs:22`), so `"SessionStart[0]"` becomes a literal table key,
-not an array index, and in one case this hung the process for 120s+ rather than failing
-cleanly (I killed it by PID; root cause not chased further, likely the resulting bogus TOML
-shape confusing something downstream). Use `-c 'hooks.SessionStart=[{hooks=[{type="command",command="..."}]}]'`
+An untrusted `-c`-declared hook was confirmed to be silently skipped under `codex exec` (no
+error, no crash — matches expectations) using a `SessionStart` command hook pointed at a
+marker script. A matching `trusted_hash` was then attempted by hand (sha256 of the compact,
+key-sorted JSON, with `Option::None` fields omitted per toml-rs's usual struct-serialization
+behaviour), passed back via `-c hooks.state={"<key>"={trusted_hash="sha256:..."}}` in the
+same invocation. Neither candidate encoding tried trusted the hook (the marker did not
+fire); the exact byte-for-byte canonicalization was not nailed down within this spike's
+budget. **One pitfall found on the way:** array-index dotted paths like
+`-c 'hooks.SessionStart[0].hooks[0].type="command"'` do **not** work — `-c`'s key parsing
+splits on literal `.` only (`codex-rs/config/src/overrides.rs:22`), so `"SessionStart[0]"`
+becomes a literal table key, not an array index; in one case this hung the process for
+120s+ rather than failing cleanly (killed by PID; root cause not chased further beyond the
+bogus TOML shape). Use `-c 'hooks.SessionStart=[{hooks=[{type="command",command="..."}]}]'`
 (the whole array as one TOML value) instead. **Recommendation for WP6** if hooks are ever
 adopted: get the real hash by accepting it once through the TUI's interactive review
 (`codex-rs/tui/src/startup_hooks_review.rs`, which calls `write_hook_trusts` — this writes
@@ -147,12 +169,15 @@ end to end (resumed session printed `session id: <same uuid>` and answered the n
 doc: "Tell the agent to use the specified directory as its working root").
 
 **Correction:** spec 6.2 says Codex's flags, "checked at 3e27195 ... include -C and
---add-dir but no worktree option". The installed 0.156.1 binary's `--help` **does** have a
-`--worktree` flag ("Run the session in a new managed Git worktree"), and it's in the same
-struct as `-C`/`--add-dir` (`shared_options.rs:69-70`). 3e27195 (spec's checked commit) must
-predate it. This contradicts the spec's "no worktree option" conclusion and the "Codex panes
-get no worktree UI" design choice that follows from it — recorded as a spec delta below, not
-acted on (out of this ADR's scope to redesign the new-pane form).
+--add-dir but no worktree option". The installed 0.156.1 binary's `--help` shows a
+`--worktree` flag ("Run the session in a new managed Git worktree"), a boolean switch
+(`default_value_t = false`, taking no value — `codex-rs/utils/cli/src/shared_options.rs:69-70`),
+in the same struct as `-C`/`--add-dir`. This ADR does not determine whether commit 3e27195
+predates or postdates the flag's addition, or whether the spec's check simply missed it —
+only that the installed binary and the spec's stated conclusion disagree. This contradicts
+the "Codex panes get no worktree UI" design choice that follows from the spec's conclusion —
+recorded as a spec delta below, not acted on (out of this ADR's scope to redesign the
+new-pane form).
 
 **5. Startup terminal probes — CONFIRMED, exact bytes and timeout.**
 Captured over a pty with nothing answering (`TERM=xterm-256color`, no real terminal), before
@@ -172,7 +197,7 @@ up to two seconds ... too long for TUI startup"). On timeout: cursor position de
 `(0,0)` with a `tracing::warn!`, default colours stay `None` (nothing paints if plyd doesn't
 answer OSC 10/11 itself), and keyboard-enhancement support defaults to `false`
 (`codex-rs/tui/src/tui.rs:446-493`). Matches spec R-R4's "within 250ms" exactly. Fixture:
-`fixtures/terminal-startup-probes.txt`.
+`.superpowers/plan/fixtures/s3b/terminal-startup-probes.txt`.
 
 **6. TUI modes — CORRECTED. Alt screen and mouse capture are OFF by default; only
 bracketed paste and focus events are on.**
@@ -184,24 +209,25 @@ full capture, not a snippet. Source explains why: alt-screen entry and mouse cap
 gated behind `owned_screen`, which is only set true via `prepare_owned_screen(config.tui_fullscreen_transcript)`
 at startup (`codex-rs/tui/src/app/startup.rs:197`; `captures_mouse` at `tui.rs:606-608`
 returns `owned_screen` for the default overlay). `tui_fullscreen_transcript` **defaults to
-`false`** (`codex-rs/core/src/config/mod.rs:4416-4419`, `resolve_update_plan_enabled`-style
-`is_some_and`), i.e. Codex's default TUI mode is an **inline, scrollback-preserving**
-transcript, not a classic full alt-screen/mouse-capturing TUI. `AltScreenMode` itself
-defaults to `Auto` (which *would* enable alt screen), but `determine_alt_screen_mode`
-(`tui/src/lib.rs:2047-2052`) only decides *whether alt screen is allowed*; whether the TUI
-ever actually asks to *own* the screen (and only then does `enter_alt_screen()`/mouse capture
-run) is the separate `tui_fullscreen_transcript` gate, and that one is off unless the user
-opts in. **This directly contradicts spec 6.2's "The TUI uses the alternate screen and
-enables SGR mouse modes (1000, 1002, 1003, 1006), alternate scroll (1007) ... VERIFIED".**
-Recorded as a spec delta below. Practical upshot for ply: plyd's default assumption about a
-Codex pane's terminal modes should be "bracketed paste + focus events only", with alt-screen/
-mouse/alternate-scroll appearing only if the user has `tui.fullscreen_transcript = true` (or
+`false`** (`codex-rs/core/src/config/mod.rs:4416-4419`, resolved with `is_some_and`), i.e.
+Codex's default TUI mode is an **inline, scrollback-preserving** transcript, not a classic
+full alt-screen/mouse-capturing TUI. `AltScreenMode` itself defaults to `Auto` (which *would*
+enable alt screen), but `determine_alt_screen_mode` (`tui/src/lib.rs:2047-2052`) only decides
+*whether alt screen is allowed*; whether the TUI ever actually asks to *own* the screen (and
+only then does `enter_alt_screen()`/mouse capture run) is the separate
+`tui_fullscreen_transcript` gate, and that one is off unless the user opts in. **This
+directly contradicts spec 6.2's "The TUI uses the alternate screen and enables SGR mouse
+modes (1000, 1002, 1003, 1006), alternate scroll (1007) ... VERIFIED".** Recorded as a spec
+delta below. Practical upshot for ply: plyd's default assumption about a Codex pane's
+terminal modes should be "bracketed paste + focus events only", with alt-screen/mouse/
+alternate-scroll appearing only if the user has `tui.fullscreen_transcript = true` (or
 whatever the equivalent ply setting ends up being) — R-R5/R-R9's mouse/kitty-key encoding
 still needs to exist in plyd (a user can turn this on), but it should not be assumed live by
 default for Codex the way it might be for an interactive shell.
 
 **7. Approval dialog keys — CONFIRMED: a bare digit answers immediately, no Enter.**
-Captured dialog text (apply_patch/edit approval; `fixtures/approval-dialog-transcript.txt`):
+Captured dialog text (apply_patch/edit approval;
+`.superpowers/plan/fixtures/s3b/approval-dialog-transcript.txt`):
 
 ```
 › 1. Yes, proceed (y)
@@ -222,8 +248,48 @@ option text rather than assume "1" is always "yes" for every approval kind.
 
 **8. Minimum supported version — 0.156.1, as spec states; note the auto-update risk.**
 The spike's environment was 0.156.1 for the great majority of the evidence above; see the
-Context section's safety note for the mid-spike auto-update to 0.157.0. Item 6.2's version
+Context section's note for the mid-spike binary version move to 0.157.0. Item 6.2's version
 note ("at least 0.156.1, latest stable on 2026-09-24") is otherwise unaffected by this spike.
+
+**9. `update_plan` tool — ply passes `-c tools.update_plan.enabled=true`; the parser must
+read both call shapes (R26).**
+`tools.update_plan.enabled` (`ConfigToml.tools.update_plan.enabled`) defaults to **`false`**
+in 0.156.1 (`resolve_update_plan_enabled`, `codex-rs/core/src/config/mod.rs:2667-2672`,
+`is_some_and(|config| config.enabled)`): stock Codex never registers or calls `update_plan`
+unless a config or `-c` override turns it on. Confirmed empirically: an unmodified run asked
+to "use the update_plan tool" answered that the tool "isn't available in this session";
+adding `-c tools.update_plan.enabled=true` made the call succeed.
+
+The plain, unwrapped tool-call shape (used when Codex's "code_mode" tool-calling wrapper is
+not in play) is a `ToolSpec::Function` named `"update_plan"`
+(`codex-rs/core/src/tools/handlers/plan_spec.rs:7-53`) whose JSON Schema requires `plan`
+(array of `{step: string, status: "pending"|"in_progress"|"completed"}`, both required) and
+allows an optional `explanation` string. In the rollout, this shape would appear as a
+`response_item` of `type: "function_call"`, `name: "update_plan"`, with `arguments` as a
+genuine JSON **string** with quoted keys, e.g.
+`{"plan":[{"step":"add README","status":"in_progress"},{"step":"commit","status":"pending"}]}`
+— matching spec 6.4's assumption exactly.
+
+However, the same request, captured after the environment's mid-spike move to 0.157.0 (see
+Context), produced a **different** rollout shape: a `response_item` of
+`type: "custom_tool_call"`, `name: "exec"`, whose `input` is a JS-like object-literal
+snippet with **unquoted keys**, not JSON:
+`` const r = await tools.update_plan({plan:[{step:"add README",status:"in_progress"},{step:"commit",status:"pending"}]}); text(r); `` —
+Codex's "code_mode" tool-calling wrapper (`code_mode_host`, on by default per the
+enabled-feature list `doctor --json` printed) routes tool calls, including `update_plan`,
+through a generic `exec`-named `custom_tool_call` whose `input` embeds the call as
+JavaScript rather than emitting a discrete `function_call`. Fixture (scrubbed):
+`.superpowers/plan/fixtures/s3b/rollout-update-plan-code-mode.jsonl`.
+
+Per R26: ply's plan-progress parser (spec 6.4) must read **both** shapes — the plain
+`function_call` named `update_plan` with JSON `arguments`, and the `custom_tool_call` named
+`exec` whose `input` contains a `tools.update_plan({...})` call with a JS object literal
+(unquoted keys) — extracting the same `{plan: [{step, status}]}` data from whichever shape
+is present. Whether 0.156.1 itself ever wraps `update_plan` in code_mode (as opposed to only
+0.157.0, where this was actually observed) was not independently re-confirmed on a clean
+0.156.1 install within this spike's budget; the parser should handle both shapes regardless,
+since which one appears is a run-time routing decision (`code_mode_host`), not solely a
+version gate.
 
 **OSC 9 classification table** (for WP6's `classify_osc9`; source:
 `codex-rs/tui/src/chatwidget/notifications.rs:26-71` and call sites in
@@ -238,32 +304,43 @@ where noted):
 | `Approval requested by <mcp_server_name>` | `approval` | `ElicitationRequested` | MCP tool elicitation |
 | `Plan mode prompt: <title>` | `plan_prompt` | `PlanModePrompt` | fires both for the actual plan-mode implementation prompt **and** for `ToolRequestUserInput` (a generic tool-driven multi-question prompt, `tool_requests.rs:458`) — same OSC 9 text for two different underlying flows |
 | `Question: <title, ≤30 graphemes>` | `question` | `AsyncQuestion` | async user-input question |
-| anything else, including the literal fallback `Agent turn complete` | `turn_complete` | `AgentTurnComplete` | **no fixed prefix** — the message is the assistant's own response text (≤200 graphemes, whitespace-normalized), verbatim, e.g. `` Created [a.txt](/example/workspace/a.txt) containing `hi`. `` (**empirically confirmed**). The fallback string `"Agent turn complete"` only appears when the response text is empty. **This must be the classifier's default/last-checked bucket**, not a special case, and it must win any string that fails to match the five prefixes above — including strings that happen to start with something else entirely, since an assistant's final message text is unconstrained. |
+| anything else, including the literal fallback `Agent turn complete` | `turn_complete` | `AgentTurnComplete` | **no fixed prefix** — the message is the assistant's own response text (≤200 graphemes, whitespace-normalized), verbatim, e.g. `` Created [a.txt](/example/workspace/a.txt) containing `hi`. `` (**empirically confirmed**). The fallback string `"Agent turn complete"` only appears when the response text is empty. **This is the classifier's default bucket**: any body that matches none of the five prefixes above is `turn_complete`, full stop — an assistant's final message text is unconstrained, so this is not a "leftover/unknown" case to special-case away. |
 
-**Resolving the C8/6.3 tension this creates:** spec 4.1's C8 row says "an unknown prefix
-counts as `waiting_input`", and spec 6.3 says "Codex OSC 9 approval message → waiting_permission"
-/ "Codex OSC 9 question or plan prompt → waiting_input", listing `notify` as the sole source
-of the turn-complete transition. But OSC 9 **also** carries turn-complete (table above), with
-no reliable prefix to key on — so "unknown prefix → waiting_input" cannot be applied
-literally, or every ordinary turn-complete message would misclassify a pane as needing
-input. The fix, which the table above already encodes: check the five known prefixes first,
-in the order listed (longest/most specific match wins where there's any ambiguity — none of
-the five actually collide); anything that matches none of them is `turn_complete`, and
-`turn_complete` from OSC 9 drives the same `→ idle` transition that `notify` already drives
-(6.3's row), so it's a redundant confirmation of the same signal, not a new state. There is
-no remaining "truly unknown" OSC 9 message once `turn_complete` is the default bucket — spec
-4.1's "unknown prefix" case in practice never occurs for Codex's own five notification kinds,
-but should still exist in the implementation, mapped to `waiting_input`, purely as a safety
-net for a future Codex release adding a sixth kind this ADR doesn't know about.
+**Classifier rule (R27) — replaces C8's "unknown prefix counts as `waiting_input`".** Check
+the five known, fixed prefixes above, in the order listed (they do not collide); a body
+matching one of them maps to `waiting_permission` (the `approval` rows) or `waiting_input`
+(the `plan_prompt`/`question` rows), per spec 6.3. A body matching **none** of them is
+`turn_complete` and drives a `→ idle` transition — the same transition `notify`'s
+`agent-turn-complete` already drives (6.3's existing row), so OSC 9's turn-complete signal is
+a redundant confirmation of the same event, not a new state, and it is a real, reachable
+outcome (it is what every ordinary completed turn produces), not a fallback. There is no
+remaining "unknown prefix → `waiting_input`" case for Codex: C8's old safety net is removed
+by this rule, not kept alongside it — a body that matches nothing maps to `turn_complete`,
+never to `waiting_input`. (This ADR does not invent a new "truly unknown, not even
+turn-complete" bucket to be safe for some future sixth Codex notification kind; if one
+appears, it is a new classifier rule, not something R27 already covers.)
+
+**Cross-reference:** per ADR-0005 (libghostty-vt, S5b), libghostty-vt's own OSC 9 parser
+treats a body beginning with a bare integer (`1` through `12`) followed by `;` as a ConEmu
+OSC 9 sub-command and consumes it before it would ever reach `classify_osc9` — so a
+turn-complete message whose assistant text happens to start with e.g. `"1;"` is intercepted
+at the terminal-emulation layer, not seen by the classifier at all. This is out of scope to
+fix here (it is ADR-0005's parser, not this adapter); recorded so WP6 does not expect
+`classify_osc9` to ever see such a body.
 
 ## Consequences
 
-- WP6's Codex adapter can implement `classify_osc9` directly from the table above, and use
-  the three scrubbed rollout fixtures and `notify-payloads.log` as test fixtures, per the
-  task brief.
-- ply-agents must not treat every `notify` firing as "the tracked turn finished" — match
-  `turn-id` (or at least `thread-id`) against the turn plyd is actually waiting on, because
-  the title-generation micro-turn fires `notify` too (item 1).
+- WP6's Codex adapter can implement `classify_osc9` directly from the table and R27's rule
+  above, and use the fixtures under `.superpowers/plan/fixtures/s3b/` as test fixtures, per
+  the task brief.
+- ply-agents must not bind a pane to a notify's `thread-id` until a rollout with that id
+  exists on disk (R28); until then, keep using cwd-based rollout discovery, because the
+  title-generation micro-turn's notify arrives first and for a thread that never gets a
+  rollout (item 1).
+- ply must pass `-c tools.update_plan.enabled=true` on every Codex pane (setting
+  `codex_plan_tool`, default true) so `update_plan` is available at all, and the
+  plan-progress parser must read both the plain `function_call` shape and the code_mode
+  `custom_tool_call` "exec" JS-object-literal shape (item 9, R26).
 - plyd's default assumption for a fresh Codex pane's terminal modes is now "bracketed paste
   + focus events, no alt screen, no mouse capture, no alternate scroll" (item 6), which is
   *simpler* than spec 6.2 assumed, not harder — R-R5/R-R9's encoders are still needed for the
@@ -276,36 +353,66 @@ net for a future Codex release adding a sixth kind this ADR doesn't know about.
 - The `-c` dotted-path pitfall (array indices don't work; pass a full TOML array/table as one
   `-c` value instead) is a real footgun `ply-agents`' own `-c` construction must avoid, since
   it produced a 120s hang, not a clean error, in this spike.
-- Codex's own background self-updater can rewrite `~/.codex/config.toml`'s bookkeeping lines
-  as a side effect of being invoked at all (item, Context section) — INV-8's daemon test
-  should scope its byte-identity check away from those lines or it will flake independently
-  of anything ply does.
+- The config-rewrite cause (Context note, revised R14) is Codex's plugin-marketplace
+  auto-upgrade, gated on the `plugins` feature flag (`-c features.plugins.enabled=false`
+  suppresses it). INV-8's *automated* `config_untouched.rs` daemon test runs against fake
+  stand-in CLIs (`tests/fake/fake-claude.sh`, `fake-codex.sh`) in a sandboxed `HOME`, per the
+  spec's own file ledger — it never runs the real `codex` binary, so it cannot flake from
+  this cause. The spec's separately-noted **manual** real-CLI check per adapter (recorded in
+  the PR) *does* run the real binary, though, and should either pass
+  `-c features.plugins.enabled=false` or simply expect `last_updated`/`last_revision` to be
+  the only lines that may differ.
+- ply's own spawn-time Codex version check (a plain `codex --version`, gating C7's minimum
+  version) does not call into Codex's binary-update machinery and is confirmed not to trigger
+  it; separately, every ply Codex pane always carries a `-c` override, which spec 6.2 already
+  says keeps the TUI off the shared background daemon that the auto-updater lives behind.
 - The `--worktree` correction (item 4) is left for the owner/WP6 to decide whether to revisit
   "no worktree UI for Codex panes" — this ADR only records that the premise changed.
 
 ## Spec delta
 
 - Confirms 3.3 C4 (rollout record shape `{timestamp, ordinal?, type, payload}`, glob-based
-  discovery) and C8 (OSC 9 framing `ESC ] 9 ; msg BEL`, read through libghostty-vt) as
-  written, with the classification table above filling in `classify_osc9`.
+  discovery) as written.
+- **Replaces** 3.3 C8's classification clause ("message text is classified by the prefixes
+  recorded in ADR-0004; an unknown prefix counts as `waiting_input`") with R27: check the
+  five fixed prefixes in the table above; anything else is `turn_complete`. There is no
+  "unknown prefix" outcome left for Codex — contract change, major bump.
+- **Corrects** 6.2's status-signals line ("notify means turn complete. OSC 9 (C8) means
+  approval requested or a question.") — OSC 9 also carries turn-complete (no fixed prefix;
+  the classifier's default bucket), redundantly with `notify`. Contract change, major bump.
+- **Adds** a row to 6.3's state table: `running`/`idle` + Codex OSC 9 message classified
+  `turn_complete` → `idle`, alongside the existing `notify` turn-complete row (same
+  transition, two sources). New rule, at least minor; grouped with the C8/6.2 changes above
+  as part of the same major bump since it's the same contract.
+- **Corrects** 6.2's rollout-discovery line ("after the first notify, glob
+  `rollout-*-<thread-id>.jsonl`") per R28: a notify's `thread-id` only binds the pane once a
+  rollout with that id exists; cwd-based discovery continues until then, since the very
+  first notify for a thread can be the title-generation micro-turn, whose thread never gets a
+  rollout. Contract change (binding logic), major bump alongside the above.
+- **Adds** 6.4's `update_plan` handling per R26: ply passes `-c tools.update_plan.enabled=true`
+  on every Codex pane (the `codex_plan_tool` setting, default true), and the parser reads
+  both the plain `function_call` JSON-arguments shape and the code_mode `custom_tool_call`
+  "exec" JS-object-literal shape. New rule, minor bump (grouped with the major bump above
+  since it lands in the same release).
 - Confirms 6.2's `notify` argv/payload shape, adds the previously-unlisted `client` and
-  `input-messages` fields, and records the internal title-generation micro-turn as a source
-  of extra `notify` firings (new rule — minor bump).
+  `input-messages` fields (new rule — minor bump).
 - Confirms 6.2's `resume`/`-C` line and 6.5's "read model from turn_context" line
   (`turn_context.model`, confirmed as the literal key name).
-- **Corrects** 6.2's "no worktree option" conclusion: 0.156.1 has `--worktree`. The spec's
-  "offers no worktree for Codex" design line is now based on a stale premise; not changed by
-  this ADR (out of scope), but flagged for the owner (new evidence contradicting an existing
-  VERIFIED line — treat as at least a wording/patch bump on that line pending a decision on
-  whether the design itself changes, which would be a bigger bump).
+- **Corrects** 6.2's "no worktree option" conclusion: 0.156.1 has a boolean `--worktree`
+  flag. The spec's "offers no worktree for Codex" design line is now based on a stale
+  premise; not changed by this ADR (out of scope), but flagged for the owner (wording/patch
+  bump on that line pending a decision on whether the design itself changes, which would be
+  a bigger bump).
 - **Corrects** 6.2's "uses the alternate screen and enables SGR mouse modes ... VERIFIED"
   line: false by default (`tui_fullscreen_transcript` defaults off); only bracketed paste and
-  focus events are on by default. This is a contract-relevant correction to R-R4/R-R5/R-R9's
-  implicit assumption about what plyd will see from a Codex pane — recommend a minor bump for
-  the corrected rule text once the owner reviews.
+  focus events are on by default. Contract-relevant correction to R-R4/R-R5/R-R9's implicit
+  assumption about what plyd will see from a Codex pane — minor bump for the corrected rule
+  text once the owner reviews.
 - Confirms 4.1's `pane.answer {choice: 1|2|3}` behaviour against Codex (bare digit, no
   newline) — extends the same mechanism spec already defines for Claude Code to Codex,
   confirming no adapter-specific special-casing is needed there.
-- Adds a note to INV-8's verification (14) that the daemon's byte-identity config check must
-  exclude Codex's own self-update bookkeeping fields, or scope the check to keys ply itself
-  could plausibly have changed.
+- Corrects the note attached to INV-8's verification (14): the config-rewrite risk is
+  Codex's plugin-marketplace auto-upgrade (suppressible via
+  `-c features.plugins.enabled=false`), not the binary updater, and the automated
+  `config_untouched.rs` test (fake CLIs, sandboxed `HOME`) is unaffected by it either way;
+  only the spec's separately-noted manual real-CLI check needs to account for it.
