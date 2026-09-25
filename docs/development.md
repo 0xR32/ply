@@ -53,9 +53,10 @@ PLY_HOME=/tmp/ply-dev cargo run -p ply-daemon -- --foreground
 
 Build `ply-hook` with plyd: agent panes run it from the directory plyd lives in.
 
-`PLY_HOME` moves every path above (database, settings, run directory, logs, which go to `$PLY_HOME/logs`) under one
-directory, so a development daemon never touches the installed one and a test can start from an empty state. A
-sandboxed plyd also never installs a LaunchAgent and never holds the keep-awake power assertion. Keep `PLY_HOME`
+`PLY_HOME` moves every path above but the LaunchAgent (database, settings, lock, run directory, logs, which go to
+`$PLY_HOME/logs`) under one directory, so a development daemon never touches the everyday one and a test can start
+from an empty state. A sandboxed plyd also never installs a LaunchAgent and never holds the keep-awake power
+assertion. Keep `PLY_HOME`
 short: the socket paths below it must stay under 104 bytes.
 
 | Flag or variable | Effect |
@@ -69,10 +70,11 @@ plyd refuses to start a second time for the same data directory (it prints the r
 database written by a newer plyd, and has no idle exit: it stops only on `daemon.shutdown`, SIGTERM, SIGINT or
 SIGHUP. Panes whose process ran when plyd stopped come back as `lost` and can be relaunched with `pane.resume`.
 
-How the app finds plyd (`app/src/ipc/daemon-launcher.ts`): with `PLY_HOME` set it spawns `target/debug/plyd
---foreground` (or `$PLY_PLYD`) detached; otherwise it runs `plyd install-agent` for the bundle's
-`Contents/MacOS/plyd`, or in development for the cargo-built one, so `bun run dev` without `PLY_HOME` installs a
-LaunchAgent pointing at `target/debug/plyd`. plyd is the only writer of that plist.
+How the app finds plyd (`app/src/ipc/daemon-launcher.ts`): it uses the cargo-built plyd — `$PLY_PLYD`, else
+`target/debug/plyd`, else `target/release/plyd`. With `PLY_HOME` set it spawns that binary as `plyd --foreground`,
+detached; otherwise it runs `plyd install-agent` with it, so `bun run dev` without `PLY_HOME` installs a LaunchAgent
+pointing at the cargo-built plyd. plyd is the only writer of that plist. `docs/configuration.md` lists everything a
+run writes to the machine.
 
 A command-line client drives a running plyd through C1 and C2:
 
@@ -126,8 +128,9 @@ no `TerminalHostContext` above it never connects, so no test reaches a real plyd
 ## The gates
 
 CI (`.github/workflows/ci.yml`) runs three jobs on macOS: `rust` (rustfmt, clippy, nextest, doctests, cargo-deny, rustdoc), `ts`
-(Biome, tsc, bun test) and `rules` (check-rules, check-deps, and check-pr on pull requests). `just check` runs the
-same checks locally, except nextest and cargo-deny.
+(Biome, tsc, bun test) and `rules` (check-rules, check-deps, and check-pr on pull requests). Locally, `just check`
+runs the formatting, lint, rustdoc, rule and type gates; `just test` runs nextest, the doctests and `bun test`;
+`just deny` runs cargo-deny. Only check-pr has no local recipe.
 
 - **Lints.** The workspace sets `missing_docs = "warn"` and rustdoc `broken_intra_doc_links = "deny"`; clippy runs
   with `-D warnings`, so an undocumented public item fails. `clippy::unwrap_used` and `expect_used` are denied outside
