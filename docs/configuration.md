@@ -80,7 +80,7 @@ edit it by hand only while plyd is stopped.
 |---|---|---|---|---|
 | `accent` | `blue`, `mint`, `violet`, `sand` | `blue` | The chrome's accent, and the terminal cursor and selection colours (the ANSI colours never change). The app sends a new `theme.set` when it changes. | at once |
 | `option_as_meta` | `off`, `left`, `right`, `both` | `off` | Which ⌥ acts as Meta; `off` keeps ⌥ for the layout's characters (`docs/keybindings.md`). | at once, in every pane |
-| `keep_awake_while_running` | bool | `true` | While a pane is `running`, plyd holds a prevent-idle-sleep assertion through `caffeinate -i -w <plyd pid>`, released as soon as none is; closing the lid still sleeps the Mac. Never held by a plyd under `PLY_HOME`, and no pane reaches `running` in this build (`docs/agents.md`). | at once |
+| `keep_awake_while_running` | bool | `true` | While a pane is `running`, plyd holds a prevent-idle-sleep assertion through `caffeinate -i -w <plyd pid>`, released as soon as none is; closing the lid still sleeps the Mac. Never held by a plyd under `PLY_HOME`; an agent pane is `running` as `docs/agents.md` describes. | at once |
 | `use_ply_colours_in_claude` | bool | `true` | Adds `"theme":"dark-ansi"` to Claude Code's per-pane settings file, so Claude Code draws with the terminal's ANSI colours. | Claude Code panes started or resumed afterwards |
 | `codex_plan_tool` | bool | `true` | Passes `-c tools.update_plan.enabled=true` to Codex, the only source of Codex progress. | Codex panes started or resumed afterwards |
 | `scrollback_lines` | u32 | 10 000 | Scrollback lines each pane's terminal keeps; libghostty-vt keeps up to 300 more. | panes created afterwards, and panes restored at plyd's start |

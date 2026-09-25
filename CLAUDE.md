@@ -123,8 +123,11 @@ handlers cannot stop propagation.
 inherit it); `div` is block until `display: "flex"`; a shrinking flex child needs
 `minWidth: 0`; style values are numbers, not CSS shorthand, and `boxShadow` is an
 object; there is no `<button>` (use `<div onClick>`); never nest `<text>` inside
-`<text>` — adjacent `<text>` siblings merge into one line, which is what the
-terminal rows rely on. Every host node costs about 0.01 ms per frame.
+`<text>`. Each `<text>` is its own box and Taffy rounds every box, so a flex row
+of fractional-width runs drifts: a terminal row is a `<div>` whose `<text>` runs
+are each placed absolutely at `round(col × cell width)` (`terminal-row.tsx`,
+since 22e57db), and rows are memoized and keyed by content. Every host node
+costs about 0.01 ms per frame.
 
 **Fonts.** GPUIX has no font-loading API, so Geist and Geist Mono
 (`app/assets/fonts/`) are used only when installed in `~/Library/Fonts`

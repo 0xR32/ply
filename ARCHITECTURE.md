@@ -132,11 +132,14 @@ DEC 2026 synchronized output is open no Delta is built (150 ms cap); an idle pan
 sends nothing and is compressed after it goes quiet.
 
 In the app, `terminal-view.tsx` mounts only for the active tab's panes (only the
-focused one when zoomed). `data-client.ts` attaches, `replica.ts` applies frames
-and versions each row, and each visible row renders as one `<div>` of adjacent
-`<text>` runs, which GPUIX merges into one line; rows are memoized by version.
-Every GPUIX host node costs about 0.01 ms per frame, so runs are coalesced and a
-test keeps a 4-pane tab under 2 000 host nodes. Keys, mouse, paste and focus go
+focused one when zoomed). `data-client.ts` attaches, `replica.ts` applies frames,
+versions and hashes each row, and each visible row renders as one memoized
+`TerminalRow` (`terminal-row.tsx`): a `<div>` whose `<text>` runs are each placed
+absolutely at their own rounded column, `round(col × cell width)`, so neither
+layout rounding nor a fallback glyph can drift the columns after them; rows are
+keyed by content hash, so a scroll moves the rows it kept. Every GPUIX host node
+costs about 0.01 ms per frame, so runs are coalesced and a test keeps a 4-pane
+tab under 2 000 host nodes. Keys, mouse, paste and focus go
 back as C2 events and plyd encodes them against the pane's live modes; the app
 never mirrors terminal modes. `docs/terminal.md` has the details and the
 measured numbers.

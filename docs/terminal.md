@@ -153,8 +153,8 @@ cost (engine alone 134 MB/s on the agent corpus, 707 MB/s on ASCII).
 
 **The rest of the engine**: `resize` reflows the primary screen and ends an open
 DEC 2026 update; `compress_idle` compresses idle scrollback in bounded steps;
-`search` finds matches in the screen and scrollback (in absolute lines); `save` and `restore`
-serialize the whole state, unfinished sequences included (not used by plyd yet:
+`search` finds matches in the screen and scrollback (in absolute lines); `save`
+and `restore` serialize the whole state, unfinished sequences included (not used by plyd yet:
 screens do not survive a plyd restart).
 
 ## The pane process and its task
@@ -422,11 +422,54 @@ The test asserts at most 15 MB per pane after compression.
 The view records its own cost per pane: decode time per socket read
 (`DecodeStats` in `data-client.ts`) and render time per commit (`RenderStats` in
 `session.ts`), read through `terminalStats()` and shown in the view's corner
-with `PLY_TERMINAL_STATS=1`. Decoding runs on the main thread. The target is a
-p99 frame time within 16.6 ms with six streaming panes. A debug plyd can stream
-the recorded agent output into live panes for that measurement (`plyd --replay`,
-`crates/daemon/src/replay.rs`; `docs/development.md` shows the run), but no
-measured frame or decode times are recorded for this build yet.
+with `PLY_TERMINAL_STATS=1`. The target (P1) is a p99 frame time within 16.6 ms
+with six streaming panes. A debug plyd streams the recorded agent output into
+live panes for that measurement (`plyd --replay`, `crates/daemon/src/replay.rs`;
+`docs/development.md` shows the run). The numbers below were measured for the
+terminal view (WP5) with the npm GPUIX build, Menlo, on a machine loaded by
+parallel builds (load 3–40), single runs.
+
+**Decode** stays on the main thread (no Worker): a worst-case 1 MiB Snapshot
+(300 × 495 cells, 1 043 094 bytes) decodes in 0.82 ms p50, 1.52 ms p90, 6.6 ms
+max (JIT warm-up); a 160 × 50 agent screen in 0.04 ms; live frames take
+0.01–0.03 ms on average, 5.8 ms once.
+
+**Test renderer**, 1440 × 900, every row of every pane changing every frame (the
+160 × 50 recorded screens rotated by a row per frame):
+
+| Panes | Host nodes (chrome) | GPUI draw p50 / p99 | React per pane, average |
+|---|---|---|---|
+| 1 | 266 (20) | 2.0 / 2.35 ms | 0.64 ms |
+| 4 | 972 (72) | 7.1 / 8.2 ms | 0.76 ms |
+| 6 | 1 456 (106) | 11.0 / 11.9 ms | 0.77 ms |
+
+Before rows were keyed by content, React took 1.6–4.2 ms per pane for the same
+load. The node-count test (a 4-pane tab of 160 × 50 recorded screens) asserts
+fewer than 2 000; it is 972.
+
+**Live** (GPUI draw time from GPUIX's frame overlay; "JS batch" is one React
+render of every pane):
+
+| Load | Deltas/s per pane | Draw p99 / max | JS batch, average |
+|---|---|---|---|
+| 1 shell, `yes \| head -c 50M` | about 120 | 1.4 / 9.0 ms | 1.4 ms |
+| 4 shells, `yes \| head -c 50M` (60 Hz render cadence) | about 120 in, 60 drawn | 3.0 / 11.3 ms | about 2.1 ms |
+| 6 replayed agent panes, `plyd --replay … --speed 10` (40 KiB/s each) | 35–85 | 5.95 / 55 ms | about 5.4 ms (max 63 ms: the six first Snapshots) |
+
+P1 holds with six replayed panes (draw p99 5.95 ms plus about 5.4 ms of
+JavaScript); the one 55 ms frame is six panes attaching at once, so "no frame
+over 33 ms" is not met at attach.
+
+**P2**, key to the pty: in the app, building and encoding a KEY frame takes
+0.002 ms p50, 0.02 ms p99. KEY frame to the echoed Delta from plyd (shell echo
+and plyd's 120 Hz publisher included, six replayed panes streaming) takes
+0.48 ms p50, 1.93 ms p90, 8.97 ms p99, 15 ms max (n = 200), an upper bound of
+P2. plyd measures the part it owns itself: with `PLY_LOG=debug` every KEY frame
+logs `P2: key frame to pty write` with `latency_us`, from the data server
+decoding the frame to the pty writer's `write(2)` returning. A release plyd,
+300 keys 5 ms apart into a shell pane, measured 21 µs p50, 52 µs p90, 231 µs
+p99 and 509 µs max, and 21 / 34 / 62 / 78 µs while another pane streamed
+`seq` output to its own client.
 
 ## Tests
 
