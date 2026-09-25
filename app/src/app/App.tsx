@@ -4,6 +4,7 @@ import { StatusBar } from '../features/statusbar/statusbar';
 import { type Store, StoreContext, useAppSelector } from '../state/store';
 import { ChromeThemeContext, chromeFonts, createChromeTheme } from '../theme/chrome';
 import { tokens } from '../theme/tokens';
+import { Overlays } from './overlays';
 import { TopBar } from './top-bar';
 
 function Shell() {
@@ -50,12 +51,13 @@ function Shell() {
         <TopBar />
         <PaneGrid />
         <StatusBar />
+        <Overlays />
       </div>
     </ChromeThemeContext.Provider>
   );
 }
 
-/** Composition root: provides the store and the chrome theme, and lays out bar, grid and footer. */
+/** Composition root: provides the store and the chrome theme, and lays out bar, grid, footer and overlays. */
 export function App({ store }: { store: Store }) {
   return (
     <StoreContext.Provider value={store}>

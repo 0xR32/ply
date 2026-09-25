@@ -6,6 +6,7 @@ import { createControlClient } from './ipc/control-client';
 import { createDaemonStarter } from './ipc/daemon-launcher';
 import { geistAvailable, shellName } from './ipc/os';
 import { controlSocketPath } from './ipc/paths';
+import { windowKeyListeners } from './keymap/dispatcher';
 import { startEffects } from './state/effects';
 import { initialState } from './state/reducer';
 import { createStore } from './state/store';
@@ -42,4 +43,5 @@ render(<App store={store} />, {
   trafficLightX: tokens.layout.trafficLightX,
   trafficLightY: tokens.layout.trafficLightY,
   focus: takeFocus,
+  ...windowKeyListeners(store),
 });

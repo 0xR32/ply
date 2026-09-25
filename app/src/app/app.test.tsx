@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { join } from 'node:path';
 import { createTestRoot, hasNativeTestRenderer, type TestRenderer } from '@gpuix/react/testing';
+import { windowKeyListeners } from '../keymap/dispatcher';
 import { createStore, type Store } from '../state/store';
 import { makePane, makeState } from '../state/test-support';
 import { App } from './App';
@@ -56,7 +57,7 @@ function canvasState() {
 }
 
 function mount(store: Store) {
-  const root = createTestRoot({ width: 1440, height: 900 });
+  const root = createTestRoot({ width: 1440, height: 900, ...windowKeyListeners(store) });
   root.render(<App store={store} />);
   return root;
 }
@@ -83,6 +84,27 @@ describe.if(hasNativeTestRenderer)('App', () => {
       const footer = renderer.findByTestId('statusbar');
       expect(footer && renderer.getElementBounds(footer.id)?.height).toBe(36);
       shot(renderer, 'main');
+    } finally {
+      unmount();
+    }
+  });
+
+  test('⌘K opens the palette and ⌘N the new-pane form through the window key listener', () => {
+    const store = createStore(canvasState());
+    const { renderer, unmount } = mount(store);
+    try {
+      renderer.simulateKeystrokes('cmd-k');
+      renderer.flush();
+      expect(store.getState().overlay).toEqual({ kind: 'palette' });
+      expect(renderer.findByTestId('palette')).toBeDefined();
+      shot(renderer, 'palette');
+      renderer.simulateKeystrokes('escape');
+      renderer.flush();
+      expect(store.getState().overlay).toBeNull();
+      renderer.simulateKeystrokes('cmd-n');
+      renderer.flush();
+      expect(store.getState().overlay).toEqual({ kind: 'new-pane', target: 'pane' });
+      shot(renderer, 'new-pane');
     } finally {
       unmount();
     }
