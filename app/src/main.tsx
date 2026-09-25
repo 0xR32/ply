@@ -2,6 +2,7 @@ import { homedir } from 'node:os';
 import { render } from '@gpuix/react';
 import { version } from '../package.json';
 import { App } from './app/App';
+import { FrameStats } from './app/frame-stats';
 import { createControlClient } from './ipc/control-client';
 import { createDaemonStarter } from './ipc/daemon-launcher';
 import { log } from './ipc/log';
@@ -34,17 +35,25 @@ globalThis.plyStopEffects = startEffects(store, { client });
 
 // PLY_WINDOW_FOCUS=0 opens the window without stealing focus, for agents and scripted runs.
 const takeFocus = process.env.PLY_WINDOW_FOCUS !== '0';
+const frameStats = process.env.PLY_TERMINAL_STATS === '1';
 
-render(<App store={store} />, {
-  title: 'ply',
-  appName: 'ply',
-  width: 1280,
-  height: 800,
-  minWidth: 720,
-  minHeight: 480,
-  titlebarTransparent: true,
-  trafficLightX: tokens.layout.trafficLightX,
-  trafficLightY: tokens.layout.trafficLightY,
-  focus: takeFocus,
-  ...windowKeyListeners(store),
-});
+render(
+  <>
+    <App store={store} />
+    {frameStats ? <FrameStats /> : null}
+  </>,
+  {
+    title: 'ply',
+    appName: 'ply',
+    width: 1280,
+    height: 800,
+    minWidth: 720,
+    minHeight: 480,
+    titlebarTransparent: true,
+    trafficLightX: tokens.layout.trafficLightX,
+    trafficLightY: tokens.layout.trafficLightY,
+    focus: takeFocus,
+    debugFrameOverlay: frameStats ? 'full' : 'hidden',
+    ...windowKeyListeners(store),
+  },
+);
