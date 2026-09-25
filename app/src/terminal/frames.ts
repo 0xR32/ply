@@ -38,6 +38,7 @@ export const Kind = {
   exit: 0x25,
   pasteRejected: 0x26,
   attachRefused: 0x27,
+  clipboardWrite: 0x28,
 } as const;
 
 /** Name of a frame kind, the `kind` discriminant of `Frame`. */
@@ -244,7 +245,9 @@ export type ServerFrame =
   | { kind: 'bell' }
   | { kind: 'exit'; code: number }
   | { kind: 'pasteRejected' }
-  | { kind: 'attachRefused'; reason: RefuseReason; message: string };
+  | { kind: 'attachRefused'; reason: RefuseReason; message: string }
+  /** 0x28: the program set the clipboard through OSC 52 (empty text clears it); reads are never answered. */
+  | { kind: 'clipboardWrite'; text: string };
 
 /** Every C2 frame. */
 export type Frame = ClientFrame | ServerFrame;
@@ -555,6 +558,8 @@ function decodePayload(kind: number, r: Reader): Frame {
     }
     case Kind.title:
       return { kind: 'title', title: r.restText() };
+    case Kind.clipboardWrite:
+      return { kind: 'clipboardWrite', text: r.restText() };
     case Kind.bell:
       return { kind: 'bell' };
     case Kind.exit:
@@ -795,6 +800,9 @@ function encodePayload(f: Frame, w: Writer): void {
       return;
     case 'title':
       w.text(f.title);
+      return;
+    case 'clipboardWrite':
+      w.text(f.text);
       return;
     case 'bell':
     case 'pasteRejected':

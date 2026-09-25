@@ -235,6 +235,10 @@ fn goldens() -> Vec<(&'static str, Frame)> {
                 message: "no pane 9".to_owned(),
             }),
         ),
+        (
+            "clipboard-write",
+            Frame::ClipboardWrite("git log --oneline\n✓ copied".to_owned()),
+        ),
     ]
 }
 
@@ -276,7 +280,7 @@ fn c2_goldens_match_the_encoder_and_decode_back() {
 #[test]
 fn c2_goldens_cover_every_kind_and_nothing_else() {
     let kinds: BTreeSet<u8> = goldens().iter().map(|(_, f)| f.kind()).collect();
-    let expected: BTreeSet<u8> = (0x10..=0x18).chain(0x20..=0x27).collect();
+    let expected: BTreeSet<u8> = (0x10..=0x18).chain(0x20..=0x28).collect();
     assert_eq!(kinds, expected);
     let names: BTreeSet<String> = goldens().iter().map(|(n, _)| format!("{n}.bin")).collect();
     let on_disk: BTreeSet<String> = std::fs::read_dir(dir())

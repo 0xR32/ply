@@ -68,6 +68,7 @@ TypeScript codec also refuses a u64 above JavaScript's safe-integer range
 | `0x25` | EXIT | plyd → client | 4 bytes |
 | `0x26` | PASTE_REJECTED | plyd → client | empty |
 | `0x27` | ATTACH_REFUSED | plyd → client | 1 byte + text |
+| `0x28` | CLIPBOARD_WRITE | plyd → client | text |
 
 `0x10`–`0x1F` travel from the client and `0x20`–`0x2F` from plyd. A client that
 sends a plyd kind, or a second ATTACH, is disconnected.
@@ -292,6 +293,13 @@ after it.
 
 `message` is a sentence for the user.
 
+**CLIPBOARD_WRITE `0x28`** — the text a program set the clipboard to with OSC
+52, UTF-8 filling the payload; empty clears the clipboard. plyd sends it at once
+to every attached client (a write while none is attached is dropped) and only
+the `text/plain` part of the write; a write that does not fit one frame is
+dropped and logged. Clipboard reads are never answered. This kind was added to
+version 1 (nothing had been released), so `C2_VERSION` is still 1.
+
 ## Attaching
 
 1. The client connects and sends ATTACH.
@@ -358,7 +366,8 @@ machines and are applied per pane by its task (`crates/daemon/src/panes/pane.rs`
   reopens the window.
 - **TITLE and BELL** are coalesced to the update cadence (many title changes in
   one interval arrive as one TITLE) and are not held by the window.
-- **HISTORY and PASTE_REJECTED** go out as soon as they are built.
+- **HISTORY, PASTE_REJECTED and CLIPBOARD_WRITE** go out as soon as they are
+  built.
 - **A client that stops reading** fills its queue of 32 frames and is
   disconnected. So is one whose frame cannot be encoded (a Snapshot of a grid
   larger than about 149 000 cells does not fit one frame).
@@ -460,7 +469,7 @@ The golden ACK (`ack.bin`), acknowledging sequence number 2^53 − 1:
 
 ## Golden frames and the TypeScript codec
 
-`crates/proto/tests/golden/c2/` holds one `.bin` per frame kind, 17 files, each
+`crates/proto/tests/golden/c2/` holds one `.bin` per frame kind (KEY twice), 19 files, each
 a whole frame with its header. `crates/proto/tests/golden_c2.rs` writes them
 with ply-proto's encoder (`goldens()` lists the values; they exercise every
 colour tag, every attr, wide, spacer and grapheme cells, and u64 values at

@@ -308,6 +308,17 @@ describe('TerminalView: input', () => {
     }
   });
 
+  test('an OSC 52 write from the program sets the pasteboard', async () => {
+    const m = await mount();
+    try {
+      await m.deliver([screen(['$ ']), { kind: 'clipboardWrite', text: 'from vim' }]);
+      await settle(m.renderer, () => m.fake.clipboard.writes.length === 1);
+      expect(m.fake.clipboard.text).toBe('from vim');
+    } finally {
+      m.unmount();
+    }
+  });
+
   test('⌘V pastes the clipboard; a refused paste asks, and ⏎ resends it as allowed', async () => {
     const m = await mount(640, 320, 'echo one\necho two');
     try {

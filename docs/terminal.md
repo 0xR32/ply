@@ -135,7 +135,7 @@ This is what makes Codex's startup probe work before any view is attached
 | `pwd` (OSC 7 `file://host/path`) | percent-decoded to the pane's `cwd` and announced with `pane.meta`; other schemes are ignored |
 | `notifications` (OSC 9, OSC 777) | an OSC 9 body goes to the pane's agent session (C8: approval, question, plan prompt or turn complete; `docs/agents.md`); every notification is also logged |
 | `progress` (OSC 9;4) | unused |
-| `clipboard_writes` (OSC 52) | accepted and logged, but not written to the pasteboard: no C2 frame carries them. Clipboard reads get no callback, so they are refused |
+| `clipboard_writes` (OSC 52) | the `text/plain` part (UTF-8, at most one frame, 1 MiB) goes at once to every attached client as CLIPBOARD_WRITE, which the app writes to the pasteboard; a write while no client is attached is dropped. Clipboard reads get no callback, so they are refused |
 
 **Dirty tracking.** libghostty-vt's render state consumes the terminal's dirty
 flags, so each engine owns one render state and records, per viewport row, the
@@ -334,7 +334,9 @@ and never sends ^C. ⌘V pastes the pasteboard's text as a PASTE frame. The
 pasteboard is reached through `pbcopy` and `pbpaste` (`app/src/terminal/host.ts`),
 because GPUIX gives JavaScript no clipboard API; under `bun test` an inert host
 never touches it. When plyd refuses a paste as unsafe the view asks, and ⏎
-resends it with `allow_unsafe` while esc drops it.
+resends it with `allow_unsafe` while esc drops it. A program's OSC 52 write
+arrives as CLIPBOARD_WRITE and goes to the pasteboard the same way (an empty
+text clears it); a program can never read the pasteboard.
 
 **Scrollback** stays in plyd (`scrollback_lines`, default 10 000). The wheel
 scrolls ply's own view of it and the session fetches the pages it shows

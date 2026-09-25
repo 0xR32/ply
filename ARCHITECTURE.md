@@ -40,7 +40,9 @@ payload`, at most 1 MiB, encoded by hand in `crates/proto/src/data.rs` and again
 in `app/src/terminal/frames.ts`; golden frames in `crates/proto/tests/golden/c2/`
 keep the two byte-identical. The client sends ATTACH, RESIZE, KEY, MOUSE, PASTE,
 FOCUS, FETCH_HISTORY and ACK; plyd sends SNAPSHOT, DELTA (changed rows only),
-HISTORY, TITLE, BELL, EXIT, PASTE_REJECTED and ATTACH_REFUSED. Colours stay
+HISTORY, TITLE, BELL, EXIT, PASTE_REJECTED, ATTACH_REFUSED and CLIPBOARD_WRITE
+(OSC 52, which the app writes to the pasteboard). Scrollback is addressed by
+absolute line from each frame's `scrollback_base`. Colours stay
 symbolic and are resolved against the app's theme. Flow control: at most 4
 unacked Deltas, at most 120 Hz, a forced Snapshot after 3 s blocked, a
 disconnect after 30 s without an Ack. `docs/screen-protocol.md` has every byte.

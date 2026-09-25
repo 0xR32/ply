@@ -78,6 +78,8 @@ pub mod kind {
     pub const PASTE_REJECTED: u8 = 0x26;
     /// plyd → client: ATTACH was refused; plyd closes the connection after it.
     pub const ATTACH_REFUSED: u8 = 0x27;
+    /// plyd → client: the program set the clipboard (OSC 52).
+    pub const CLIPBOARD_WRITE: u8 = 0x28;
 }
 
 macro_rules! flag_set {
@@ -592,40 +594,42 @@ pub struct AttachRefused {
 /// Every C2 frame; [`Frame::kind`] gives its kind byte and [`Frame::encode`] its exact layout.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Frame {
-    /// 0x10.
+    /// 0x10, client → plyd: the first frame of every connection; anything else first is refused.
     Attach(Attach),
-    /// 0x11: raw bytes for the pty.
+    /// 0x11, client → plyd: bytes written to the pty unencoded (`pane.answer` digits, programmatic input).
     InputRaw(Vec<u8>),
-    /// 0x12.
+    /// 0x12, client → plyd: the view's new grid; plyd reflows, resizes the pty and answers with a Snapshot.
     Resize(Resize),
-    /// 0x13.
+    /// 0x13, client → plyd: scrollback lines wanted; answered with one HISTORY.
     FetchHistory(FetchHistory),
-    /// 0x14.
+    /// 0x14, client → plyd: the newest Snapshot or Delta applied; reopens the window of unacknowledged Deltas.
     Ack(Ack),
-    /// 0x15.
+    /// 0x15, client → plyd: a key event plyd encodes against the pane's live modes.
     Key(KeyEvent),
-    /// 0x16.
+    /// 0x16, client → plyd: a mouse event, sent only while the program reports the mouse.
     Mouse(MouseEvent),
-    /// 0x17.
+    /// 0x17, client → plyd: pasted text, bracketed when the program asked for it; unsafe text needs `allow_unsafe`.
     Paste(Paste),
-    /// 0x18.
+    /// 0x18, client → plyd: focus gained or lost, reported to the program only under mode 1004.
     Focus(Focus),
-    /// 0x20.
+    /// 0x20, plyd → client: the whole screen and a fresh style table (every ATTACH, RESIZE and forced resend).
     Snapshot(Snapshot),
-    /// 0x21.
+    /// 0x21, plyd → client: the rows changed since the client's last frame, or none when only the metadata moved.
     Delta(Delta),
-    /// 0x22.
+    /// 0x22, plyd → client: the scrollback page answering a FETCH_HISTORY, sent at once.
     History(History),
-    /// 0x23: the new title, UTF-8; coalesced to the Delta cadence.
+    /// 0x23, plyd → client: the new title (OSC 0/2), UTF-8, possibly empty; coalesced to the Delta cadence.
     Title(String),
-    /// 0x24: empty payload.
+    /// 0x24, plyd → client: the program rang the bell; empty payload, coalesced to the Delta cadence.
     Bell,
-    /// 0x25.
+    /// 0x25, plyd → client: the process ended; sent after its last output, and on every later ATTACH.
     Exit(Exit),
-    /// 0x26: empty payload.
+    /// 0x26, plyd → client: the last PASTE was refused as unsafe; empty payload.
     PasteRejected,
-    /// 0x27.
+    /// 0x27, plyd → client: why ATTACH failed; plyd closes the connection after it.
     AttachRefused(AttachRefused),
+    /// 0x28, plyd → client: the text an OSC 52 write set the clipboard to (empty clears it), UTF-8 filling the payload; reads are never answered.
+    ClipboardWrite(String),
 }
 
 struct Writer<'a>(&'a mut Vec<u8>);
@@ -906,6 +910,7 @@ impl Frame {
             Self::Exit(_) => kind::EXIT,
             Self::PasteRejected => kind::PASTE_REJECTED,
             Self::AttachRefused(_) => kind::ATTACH_REFUSED,
+            Self::ClipboardWrite(_) => kind::CLIPBOARD_WRITE,
         }
     }
 
@@ -1022,7 +1027,7 @@ impl Frame {
                 w.style_entries(k, &h.styles_added)?;
                 w.rows(k, &h.lines)?;
             }
-            Self::Title(t) => w.bytes(t.as_bytes()),
+            Self::Title(t) | Self::ClipboardWrite(t) => w.bytes(t.as_bytes()),
             Self::Bell | Self::PasteRejected => {}
             Self::Exit(e) => w.i32(e.code),
             Self::AttachRefused(r) => {
@@ -1174,6 +1179,7 @@ impl Frame {
                 })
             }
             kind::TITLE => Self::Title(r.rest_text()?),
+            kind::CLIPBOARD_WRITE => Self::ClipboardWrite(r.rest_text()?),
             kind::BELL => Self::Bell,
             kind::EXIT => Self::Exit(Exit { code: r.i32()? }),
             kind::PASTE_REJECTED => Self::PasteRejected,

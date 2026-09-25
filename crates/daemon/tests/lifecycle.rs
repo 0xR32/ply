@@ -121,6 +121,32 @@ fn an_osc_11_query_is_answered_with_the_palette_background() {
 }
 
 #[test]
+fn an_osc_52_write_reaches_every_attached_client() {
+    let sb = Sandbox::new("osc52");
+    let _plyd = sb.start();
+    let (mut c, ws) = sb.control();
+    let pane = sb.shell(&mut c, ws);
+    let mut d = sb.attach_ready(pane);
+    let mut other = sb.attach_ready(pane);
+    d.input(
+        b"printf '\\033]52;c;aGVsbG8gcGx5\\007'; printf '\\033]52;c;?\\007'; echo done-$((6*7))\r",
+    )
+    .unwrap();
+    assert!(
+        d.pump_until(WAIT, |d| d.shows("done-42")).unwrap(),
+        "{:?}",
+        d.screen()
+    );
+    assert_eq!(d.clipboard, ["hello ply"]);
+    assert!(other.pump_until(WAIT, |o| !o.clipboard.is_empty()).unwrap());
+    assert_eq!(
+        other.clipboard,
+        ["hello ply"],
+        "every attached client gets it"
+    );
+}
+
+#[test]
 fn a_second_plyd_refuses_to_start() {
     let sb = Sandbox::new("twice");
     let mut first = sb.start();

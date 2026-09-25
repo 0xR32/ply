@@ -164,6 +164,7 @@ const expected: Record<string, Frame> = {
   exit: { kind: 'exit', code: -129 },
   'paste-rejected': { kind: 'pasteRejected' },
   'attach-refused': { kind: 'attachRefused', reason: 'unknownPane', message: 'no pane 9' },
+  'clipboard-write': { kind: 'clipboardWrite', text: 'git log --oneline\n✓ copied' },
 };
 
 function golden(name: string): Uint8Array {
@@ -214,7 +215,8 @@ function rejects(kind: number, payload: number[] | Uint8Array, reason: FrameErro
 describe('C2 decoding is strict (INV-10)', () => {
   test('unknown kinds, truncation and trailing bytes', () => {
     rejects(0x19, [], 'unknownKind');
-    rejects(0x28, [], 'unknownKind');
+    rejects(0x29, [], 'unknownKind');
+    rejects(Kind.clipboardWrite, [0xc3], 'invalidUtf8');
     rejects(Kind.ack, [1, 0, 0, 0, 0, 0, 0], 'truncated');
     rejects(Kind.ack, [1, 0, 0, 0, 0, 0, 0, 0, 9], 'trailingBytes');
     rejects(Kind.bell, [0], 'trailingBytes');

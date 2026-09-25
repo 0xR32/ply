@@ -492,6 +492,7 @@ fn every_frame() -> Vec<Frame> {
             reason: RefuseReason::VersionMismatch,
             message: "plyd speaks C2 version 1".to_owned(),
         }),
+        Frame::ClipboardWrite(String::new()),
     ]
 }
 
@@ -517,6 +518,7 @@ fn c2_every_kind_round_trips_through_encode_and_the_reader() {
         kind::EXIT,
         kind::PASTE_REJECTED,
         kind::ATTACH_REFUSED,
+        kind::CLIPBOARD_WRITE,
     ]
     .into();
     assert_eq!(kinds, all, "a frame kind has no round-trip case");

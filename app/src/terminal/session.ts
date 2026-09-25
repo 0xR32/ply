@@ -228,6 +228,9 @@ export class TerminalSession {
         case 'pasteRejected':
           this.pendingPaste = this.lastPaste;
           break;
+        case 'clipboardWrite':
+          void this.writeClipboard(f.text, 'the program set the clipboard (OSC 52)');
+          break;
         case 'attachRefused':
           break;
       }
@@ -443,13 +446,17 @@ export class TerminalSession {
     if (!sel) return false;
     const { start, end } = selectionBounds(sel, this.replica);
     await this.loadHistory(start.line, Math.min(end.line + 1, this.replica.screenTop));
-    const text = selectedText(sel, this.replica);
+    return this.writeClipboard(selectedText(sel, this.replica), 'copy (⌘C)');
+  }
+
+  private async writeClipboard(text: string, why: string): Promise<boolean> {
     try {
       await this.host.writeClipboard(text);
       return true;
     } catch (error) {
       terminalLog('error', 'writing the clipboard failed', {
         pane_id: this.paneId,
+        why,
         error: String(error),
       });
       return false;

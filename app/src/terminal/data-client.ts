@@ -245,7 +245,8 @@ class UnixDataConnection implements DataConnection {
           f.kind !== 'title' &&
           f.kind !== 'bell' &&
           f.kind !== 'exit' &&
-          f.kind !== 'pasteRejected'
+          f.kind !== 'pasteRejected' &&
+          f.kind !== 'clipboardWrite'
         ) {
           throw new FrameError('unknownKind', 0, `plyd sent the client frame ${f.kind}`);
         }

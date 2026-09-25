@@ -125,6 +125,8 @@ pub struct Data {
     pub title: Option<String>,
     /// The EXIT code, once sent.
     pub exit: Option<i32>,
+    /// Every CLIPBOARD_WRITE text, in order.
+    pub clipboard: Vec<String>,
     /// Snapshots received, the attach one included.
     pub snapshots: usize,
     /// Deltas received.
@@ -152,6 +154,7 @@ impl Data {
             replica: Replica::new(),
             title: None,
             exit: None,
+            clipboard: Vec::new(),
             snapshots: 0,
             deltas: 0,
         };
@@ -251,6 +254,7 @@ impl Data {
             }
             Frame::Title(t) => self.title = Some(t.clone()),
             Frame::Exit(e) => self.exit = Some(e.code),
+            Frame::ClipboardWrite(text) => self.clipboard.push(text.clone()),
             _ => {}
         }
         Ok(())

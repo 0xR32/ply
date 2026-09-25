@@ -6,8 +6,10 @@
 //! it (a child that stops reading its input cannot stall output), and publishes screen changes to every attached
 //! client under the rules of [`crate::publisher`]: the 120 Hz cadence, the per-client Ack window with its forced
 //! Snapshot and disconnect, the DEC 2026 hold, and idle-scrollback compression. Title changes and bells are coalesced
-//! to the same cadence. OSC 7 updates the pane's directory (`pane.meta`); the process's exit is published after its
-//! last output, as C2 EXIT to the clients and `pane.status`/`pane.exit` to C1.
+//! to the same cadence. OSC 7 updates the pane's directory (`pane.meta`); an OSC 52 clipboard write goes to every
+//! attached client at once as CLIPBOARD_WRITE (the app sets the pasteboard; a write with nobody attached is dropped);
+//! the process's exit is published after its last output, as C2 EXIT to the clients and `pane.status`/`pane.exit` to
+//! C1.
 //!
 //! An agent pane's task also owns its [`Agent`]: it is prepared from the launch spec before the process spawns (so a
 //! hook the new process fires at once already finds it), and the task feeds it the C3 envelopes and rollout lines
@@ -20,11 +22,12 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use ply_agents::LaunchSpec;
-use ply_proto::data::{Exit, Frame};
+use ply_proto::data::{Exit, Frame, MAX_FRAME_LEN};
 use ply_proto::hook::HookEnvelope;
 use ply_proto::pane::{AgentCli, Cli, OptionAsMeta, PaneId, PaneStatus, Rgb};
 use ply_term::{
-    Compression, DeltaBuilder, Encoded, Engine, EngineOutput, Input, Palette, Update, encode_input,
+    ClipboardWrite, Compression, DeltaBuilder, Encoded, Engine, EngineOutput, Input, Palette,
+    Update, encode_input,
 };
 use rustix::process::Signal;
 use tokio::sync::{mpsc, oneshot};
@@ -734,13 +737,44 @@ impl PaneTask {
                 agent.on_osc9(&self.shared, body, now);
             }
         }
-        if !out.clipboard_writes.is_empty() {
+        for write in &out.clipboard_writes {
+            self.forward_clipboard(write);
+        }
+    }
+
+    fn forward_clipboard(&mut self, write: &ClipboardWrite) {
+        let Some(text) = clipboard_text(write) else {
             tracing::debug!(
                 pane_id = self.id,
-                writes = out.clipboard_writes.len(),
-                "OSC 52 clipboard write"
+                mimes = ?write.contents.iter().map(|c| c.mime.as_str()).collect::<Vec<_>>(),
+                "OSC 52 write without UTF-8 text/plain ignored"
             );
+            return;
+        };
+        if text.len() > MAX_FRAME_LEN {
+            tracing::warn!(
+                pane_id = self.id,
+                bytes = text.len(),
+                "OSC 52 write larger than one C2 frame dropped"
+            );
+            return;
         }
+        if self.clients.is_empty() {
+            tracing::debug!(
+                pane_id = self.id,
+                "OSC 52 write with no client attached dropped"
+            );
+            return;
+        }
+        let frame = Frame::ClipboardWrite(text);
+        for client in &mut self.clients {
+            send(self.id, client, &frame);
+        }
+        tracing::debug!(
+            pane_id = self.id,
+            clients = self.clients.len(),
+            "OSC 52 clipboard write forwarded"
+        );
     }
 
     fn after_change(&mut self, now: Instant) {
@@ -987,6 +1021,18 @@ impl PaneTask {
     }
 }
 
+/// The text an OSC 52 write sets: its `text/plain` part as UTF-8, or empty for a write that clears the clipboard.
+fn clipboard_text(write: &ClipboardWrite) -> Option<String> {
+    if write.contents.is_empty() {
+        return Some(String::new());
+    }
+    let part = write
+        .contents
+        .iter()
+        .find(|c| c.mime == "text/plain" || c.mime.starts_with("text/plain;"))?;
+    String::from_utf8(part.data.clone()).ok()
+}
+
 fn send(pane_id: PaneId, client: &mut Client, frame: &Frame) -> bool {
     if client.closed {
         return false;
@@ -1039,6 +1085,35 @@ fn send_snapshot(pane_id: PaneId, engine: &mut Engine, client: &mut Client, now:
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_clipboard_write_forwards_its_utf8_text_and_a_clear_as_empty() {
+        let part = |mime: &str, data: &[u8]| ply_term::ClipboardContent {
+            mime: mime.to_owned(),
+            data: data.to_vec(),
+        };
+        let write = |contents| ClipboardWrite { contents };
+        assert_eq!(
+            clipboard_text(&write(vec![
+                part("image/png", b"\x89PNG"),
+                part("text/plain", b"hi")
+            ])),
+            Some("hi".to_owned())
+        );
+        assert_eq!(
+            clipboard_text(&write(vec![part(
+                "text/plain;charset=utf-8",
+                "ü".as_bytes()
+            )])),
+            Some("ü".to_owned())
+        );
+        assert_eq!(clipboard_text(&write(vec![])), Some(String::new()));
+        assert_eq!(
+            clipboard_text(&write(vec![part("text/plain", &[0xff])])),
+            None
+        );
+        assert_eq!(clipboard_text(&write(vec![part("image/png", b"x")])), None);
+    }
 
     #[test]
     fn the_write_queue_caps_pending_input() {

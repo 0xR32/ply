@@ -104,6 +104,7 @@ export function fixtureServerFrames(name: string): ServerFrame[] {
       'exit',
       'pasteRejected',
       'attachRefused',
+      'clipboardWrite',
     ].includes(f.kind),
   );
 }
