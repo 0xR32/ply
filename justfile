@@ -36,3 +36,8 @@ fmt:
 fonts:
     mkdir -p ~/Library/Fonts
     cp app/assets/fonts/*.ttf ~/Library/Fonts/
+
+# Journeys J1–J6 on the full app against the release plyd and the fake CLIs; needs a GUI session, opens windows unfocused.
+e2e:
+    cargo build --release --locked -p ply-daemon -p ply-hook
+    PLY_E2E=1 bun test --timeout 120000 ./app/e2e
