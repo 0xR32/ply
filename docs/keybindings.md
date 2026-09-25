@@ -86,9 +86,12 @@ are sent as KEY frames and plyd encodes them against the pane's modes
 - **⇧⏎ inserts a newline.** plyd sends LF (`0x0A`, the same as Ctrl+J, which
   both CLIs read as "insert newline") unless the pane enabled the kitty keyboard
   protocol, in which case the encoder's own report goes out.
-- **The CLIs' dialogs answer to 1, 2 and 3**, typed into the pane like any key.
-  The needs-you strip's buttons send the same digits through `pane.answer`; the
-  strip itself binds no key.
+- **The CLIs' dialogs are answered in the pane** like any key: their option
+  lists differ by CLI, version and permission mode. The needs-you strip offers
+  only Yes and No, which `pane.answer` sends by meaning — plyd types `1` for Yes
+  and ESC for No, so No can never approve (Ruling R55); every other option
+  ("always allow", "switch to auto mode", …) is picked in the pane. The strip
+  binds no key.
 - **A lost pane resumes by mouse or palette.** The Resume button of the strip
   under it and the palette's "Resume <pane>" command both send `pane.resume`;
   neither binds a key.

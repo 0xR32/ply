@@ -451,8 +451,8 @@ async function soak(minutes: number): Promise<void> {
     };
     const answer = async (id: number) => {
       try {
-        await until(() => run.app.has(`answer-${id}-1`), `the answer button of pane ${id}`);
-        await run.app.click(`answer-${id}-1`);
+        await until(() => run.app.has(`answer-${id}-yes`), `the answer button of pane ${id}`);
+        await run.app.click(`answer-${id}-yes`);
       } catch (e) {
         stuck.push(`${new Date().toISOString()} ${String(e)}`);
       }

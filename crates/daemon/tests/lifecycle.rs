@@ -586,7 +586,7 @@ fn an_agent_pane_runs_the_cli_from_the_login_path_with_its_launch_spec() {
     assert!(d.shows("hello there"), "{:?}", d.screen());
 
     let not_waiting = c
-        .call("pane.answer", json!({"pane_id": id, "choice": 1}))
+        .call("pane.answer", json!({"pane_id": id, "answer": "yes"}))
         .unwrap_err();
     assert_eq!(
         not_waiting.code,

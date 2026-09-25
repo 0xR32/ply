@@ -39,7 +39,7 @@ for each tailed line (`RolloutHistory` for a resumed thread's past, see
 **Rollouts**), `Osc9` for each OSC 9 body the engine reports (OSC 777
 carries a title and is some other program's), `FirstOutput` for the process's
 first pty byte, and `KeyTyped` for every key typed — a KEY frame that encoded to
-bytes, INPUT_RAW, or a `pane.answer` digit — with `enter` when those bytes
+bytes, INPUT_RAW, or a `pane.answer` (`1` or ESC) — with `enter` when those bytes
 submit a line (a carriage return, or `CSI 13 u` in the kitty protocol). It
 applies the `AdapterSignal`s it gets back: status signals to the machine
 (`pane.status`), `Progress` through the rate limit (`pane.progress`), `Meta` to
@@ -158,8 +158,12 @@ working directory the other hooks report instead.
 - No PermissionRequest hook, silent or deciding, changes the dialog, and the
   user's own hooks still run beside ply's. A manual deny fires no hook,
   sometimes not even Stop.
-- The permission dialog answers to the digits 1, 2 and 3, which `pane.answer`
-  writes to the pty.
+- The permission dialog numbers its options, and their list varies: 2.1.282 in
+  one run offered 1 Yes, 2 always allow for the directory, 3 "Yes, and switch
+  to auto mode", 4 No, so a positional "3 is No" approved. `pane.answer` is
+  therefore by meaning (Ruling R55): Yes types `1`, the first option, "Yes" in
+  every Claude Code and Codex dialog seen, and No types ESC, which cancels the
+  dialog in both TUIs and can never approve.
 - There is neither a TodoWrite nor a Task tool, so progress stays hidden.
 
 ## ply-hook

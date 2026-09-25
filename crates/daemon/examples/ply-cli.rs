@@ -8,7 +8,7 @@
 //! cargo run -p ply-daemon --example ply-cli -- create claude /path "prompt"   # open an agent or shell pane
 //! cargo run -p ply-daemon --example ply-cli -- watch 60       # print C1 events for 60 s, stamped in Unix ms
 //! cargo run -p ply-daemon --example ply-cli -- type 3 '/exit\r'  # type into pane 3 (\r, \n and \e are escapes)
-//! cargo run -p ply-daemon --example ply-cli -- answer 3 3     # pane.answer: press 3 in pane 3's dialog
+//! cargo run -p ply-daemon --example ply-cli -- answer 3 no    # pane.answer: refuse pane 3's dialog (ESC)
 //! cargo run -p ply-daemon --example ply-cli -- close 3        # pane.close {kill:true}
 //! ```
 //!
@@ -50,15 +50,14 @@ fn main() -> ExitCode {
             Err(e) => Err(format!("seconds {secs:?}: {e}").into()),
         },
         ["type", id, text] => pane_id(id).and_then(|id| type_text(id, text)),
-        ["answer", id, choice] => pane_id(id).and_then(|id| {
-            let choice: u8 = choice.parse().map_err(|e| format!("choice {choice:?}: {e}"))?;
-            simple("pane.answer", json!({"pane_id": id, "choice": choice}))
-        }),
+        ["answer", id, answer @ ("yes" | "no")] => {
+            pane_id(id).and_then(|id| simple("pane.answer", json!({"pane_id": id, "answer": answer})))
+        }
         ["close", id] => {
             pane_id(id).and_then(|id| simple("pane.close", json!({"pane_id": id, "kill": true})))
         }
         _ => Err(
-            "usage: ply-cli demo | list | screen <pane> | create <cli> <cwd> [prompt] | watch <secs> | type <pane> <text> | answer <pane> <1-3> | close <pane>"
+            "usage: ply-cli demo | list | screen <pane> | create <cli> <cwd> [prompt] | watch <secs> | type <pane> <text> | answer <pane> <yes|no> | close <pane>"
                 .into(),
         ),
     };

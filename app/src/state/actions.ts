@@ -1,6 +1,6 @@
 import type {
   AccentName,
-  Choice,
+  Answer,
   Cli,
   Event,
   Layout,
@@ -17,7 +17,7 @@ import type {
 /** ply-proto wire types, re-exported so features reach them through state (they never import ipc, spec 8.2). */
 export type {
   AccentName,
-  Choice,
+  Answer,
   Cli,
   Event,
   Layout,
@@ -96,7 +96,8 @@ export type Action =
   | { type: 'pane/bell'; paneId: number }
   /** The pane's C2 connection reported the process's exit (EXIT), at Unix seconds `at`; C1 `pane.exit` says the same. */
   | { type: 'pane/exited'; paneId: number; code: number; at: number }
-  | { type: 'pane/answer'; paneId: number; choice: Choice }
+  /** Answers the pane's dialog by meaning (R55): plyd types `1` for yes and ESC for no. */
+  | { type: 'pane/answer'; paneId: number; answer: Answer }
   | { type: 'pane/resume'; paneId: number }
   | { type: 'pane/resumed'; pane: Pane }
   | { type: 'pane/create'; request: NewPaneRequest }

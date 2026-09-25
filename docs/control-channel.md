@@ -82,7 +82,9 @@ below 2^53, so a JavaScript number holds them. Times are Unix seconds, UTC.
    ```
 
 The rule is equality, not "at least". Version 1 is frozen; a change to any
-message bumps it. The client checks `welcome.v` the same way.
+message bumps it, with one exception: `pane.answer`'s R55 field, whose mismatch
+`deny_unknown_fields` already turns into `bad_request` (see there). The client
+checks `welcome.v` the same way.
 
 Anything else as the first line also ends the connection: a `req` is answered
 `bad_request` ("send hello first") on its own id, and an unreadable line is
@@ -136,7 +138,7 @@ the results are made of are under **Records**.
 | `pane.list` | `{workspace_id}` | `Pane[]` |
 | `pane.create` | `{workspace_id, tab_id?, cli, cwd, worktree?: {name}, prompt?}` | `Pane` |
 | `pane.close` | `{pane_id, kill}` | `{}` |
-| `pane.answer` | `{pane_id, choice}` | `{}` |
+| `pane.answer` | `{pane_id, answer}` | `{}` |
 | `pane.resume` | `{pane_id}` | `Pane` |
 | `session.list` | `{workspace_id, include_closed}` | `Session[]` |
 | `theme.set` | `{palette}` | `{}` |
@@ -221,11 +223,17 @@ A closed pane's record stays in the database and is returned by
 
 ### `pane.answer`
 
-Writes `choice` (1, 2 or 3; anything else is `bad_request`) to the pane's pty
-as that digit, which is how the CLIs' permission dialogs are answered. The pane
-must be `waiting_permission` or `waiting_input`, else `invalid_state`. The
-digit also counts as a key typed, so the pane moves to `running`
-(`docs/agents.md`).
+Answers the CLI's dialog by meaning (Ruling R55): `answer` is `"yes"` or
+`"no"` (anything else, a digit or the old `choice` field included, is
+`bad_request`). plyd types `1` for yes — the first option, "Yes" in every Claude
+Code and Codex dialog seen — and ESC (`0x1B`) for no, which cancels the dialog
+in both TUIs, so a no can never approve, however the options are numbered (they
+differ by CLI, version and permission mode). The pane must be
+`waiting_permission` or `waiting_input`, else `invalid_state`. The keys also
+count as a key typed, so the pane moves to `running` (`docs/agents.md`). This
+replaced the positional `choice` within protocol version 1: a plyd from before
+refuses the new field with `bad_request`, so the mismatch is loud, and the app
+can still send it `daemon.shutdown` to replace it.
 
 ### `pane.resume`
 

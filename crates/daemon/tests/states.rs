@@ -228,13 +228,42 @@ fn any_key_typed_or_an_answer_moves_a_waiting_pane_to_running() {
     e.next(id, Running);
     e.claude_hook(&fake, id, "PermissionRequest", write_call(None));
     e.next(id, WaitingPermission);
-    e.c.call("pane.answer", json!({"pane_id": id, "choice": 1}))
+    e.c.call("pane.answer", json!({"pane_id": id, "answer": "yes"}))
         .unwrap();
     e.next(id, Running);
     let refused =
-        e.c.call("pane.answer", json!({"pane_id": id, "choice": 1}))
+        e.c.call("pane.answer", json!({"pane_id": id, "answer": "no"}))
             .unwrap_err();
     assert_eq!(refused.code, ErrorCode::InvalidState);
+}
+
+#[test]
+fn an_answer_types_1_for_yes_and_escape_for_no_never_another_digit() {
+    let mut e = env("st-answer");
+    let (id, fake) = e.claude();
+    e.claude_hook(&fake, id, "UserPromptSubmit", json!({"prompt": "go"}));
+    e.next(id, Running);
+    let ready = e.sb.home.join("fake-keys.ready");
+    let keys = e.sb.home.join("fake-keys.log");
+    let typed = || std::fs::read_to_string(&keys).unwrap_or_default();
+    for (answer, want) in [("no", "1b"), ("yes", "1b31")] {
+        e.claude_hook(&fake, id, "PermissionRequest", write_call(None));
+        e.next(id, WaitingPermission);
+        fake.send("keys 1");
+        assert!(
+            eventually(WAIT, || ready.exists()),
+            "the fake reads its keys"
+        );
+        e.c.call("pane.answer", json!({"pane_id": id, "answer": answer}))
+            .unwrap();
+        e.next(id, Running);
+        assert!(
+            eventually(WAIT, || typed() == want),
+            "{answer}: {}",
+            typed()
+        );
+        assert!(eventually(WAIT, || !ready.exists()));
+    }
 }
 
 #[test]

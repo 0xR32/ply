@@ -191,10 +191,19 @@ fn c1_unknown_fields_are_rejected_everywhere() {
 fn c1_unknown_method_and_bad_params_keep_the_id() {
     let r = ClientMsg::decode(br#"{"t":"req","id":9,"m":"pane.explode","p":{}}"#).unwrap_err();
     assert_eq!((r.id, r.error.code), (Some(9), ErrorCode::UnknownMethod));
-    let r =
-        ClientMsg::decode(br#"{"t":"req","id":10,"m":"pane.answer","p":{"pane_id":1,"choice":4}}"#)
-            .unwrap_err();
-    assert_eq!((r.id, r.error.code), (Some(10), ErrorCode::BadRequest));
+    for p in [
+        r#"{"pane_id":1,"answer":"always"}"#,
+        r#"{"pane_id":1,"choice":3}"#,
+        r#"{"pane_id":1,"answer":3}"#,
+    ] {
+        let line = format!(r#"{{"t":"req","id":10,"m":"pane.answer","p":{p}}}"#);
+        let r = ClientMsg::decode(line.as_bytes()).unwrap_err();
+        assert_eq!(
+            (r.id, r.error.code),
+            (Some(10), ErrorCode::BadRequest),
+            "R55: a pane is answered yes or no, never by position: {p}"
+        );
+    }
     let r = ClientMsg::decode(br#"{"t":"req","id":11,"m":"pane.close"}"#).unwrap_err();
     assert_eq!((r.id, r.error.code), (Some(11), ErrorCode::BadRequest));
     let r = ClientMsg::decode(b"not json").unwrap_err();

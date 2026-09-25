@@ -53,6 +53,7 @@ while IFS= read -r line <&3; do
     hook) hook "${rest%% *}" "${rest#* }" ;;
     out) printf '%s\r\n' "$rest" ;;
     spin) i=0; while [ "$i" -lt "$rest" ]; do printf '.'; sleep 0.1; i=$((i + 1)); done; printf '\r\n' ;;
+    keys) stty raw -echo; : > "$HOME/fake-keys.ready"; dd bs=1 count="$rest" 2>/dev/null | od -An -tx1 | tr -d ' \n' >> "$HOME/fake-keys.log"; stty sane; rm -f "$HOME/fake-keys.ready" ;;
     exit) rm -f "$fifo"; exit "$rest" ;;
   esac
 done

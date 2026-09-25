@@ -206,7 +206,7 @@ describe.if(E2E)('journeys on the full app and a real plyd', () => {
       await j.app.keys('cmd-j');
       await j.obs.waitFocus(b.id, '⌘J to wrap around');
 
-      await j.app.click(`answer-${b.id}-1`);
+      await j.app.click(`answer-${b.id}-yes`);
       await j.obs.waitPane(b.id, (p) => p.status === 'running', 'the answered pane to run');
       await until(async () => !(await j.app.has(`pane-${b.id}-waiting`)), 'the strip to go');
       await j.app.waitForText('1 needs you');

@@ -11,9 +11,9 @@
 use std::sync::Arc;
 
 use ply_proto::control::{
-    Call, ClientMsg, DaemonShutdownParams, Empty, ErrorBody, ErrorCode, Event, HANDSHAKE_ID,
-    MAX_LINE_BYTES, PaneAnswerParams, PaneCloseParams, Response, ServerMsg, ThemeSetParams,
-    Welcome, encode_line,
+    Answer, Call, ClientMsg, DaemonShutdownParams, Empty, ErrorBody, ErrorCode, Event,
+    HANDSHAKE_ID, MAX_LINE_BYTES, PaneAnswerParams, PaneCloseParams, Response, ServerMsg,
+    ThemeSetParams, Welcome, encode_line,
 };
 use ply_proto::pane::{PaneStatus, Settings};
 use ply_term::Palette;
@@ -342,6 +342,14 @@ async fn close(shared: &Shared, p: PaneCloseParams) -> Result<Value, ErrorBody> 
     ok(&Empty {})
 }
 
+/// The keys for `answer` (R55): `1` is the first option, "Yes" in every dialog seen; ESC cancels, so No never approves.
+pub fn answer_keys(answer: Answer) -> &'static [u8] {
+    match answer {
+        Answer::Yes => b"1",
+        Answer::No => b"\x1b",
+    }
+}
+
 async fn answer(shared: &Shared, p: PaneAnswerParams) -> Result<Value, ErrorBody> {
     let handle = {
         let reg = shared.registry();
@@ -354,9 +362,10 @@ async fn answer(shared: &Shared, p: PaneAnswerParams) -> Result<Value, ErrorBody
         }
         entry.handle.clone()
     };
-    let digit = b'0' + p.choice.get();
+    let keys = answer_keys(p.answer).to_vec();
+    tracing::info!(pane_id = p.pane_id, answer = ?p.answer, "answering the pane's dialog");
     match handle {
-        Some(handle) if handle.send(PaneCmd::Write(vec![digit])).await.is_ok() => ok(&Empty {}),
+        Some(handle) if handle.send(PaneCmd::Write(keys)).await.is_ok() => ok(&Empty {}),
         _ => {
             tracing::warn!(pane_id = p.pane_id, "the pane task is gone; answer dropped");
             Err(refuse(ErrorCode::Internal, "the pane task is gone"))
@@ -436,6 +445,12 @@ mod tests {
         assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
         let mut r = BufReader::new(&b""[..]);
         assert!(!read_line(&mut r, &mut Vec::new()).await.unwrap());
+    }
+
+    #[test]
+    fn a_no_is_a_cancel_and_a_yes_the_first_option() {
+        assert_eq!(answer_keys(Answer::Yes), b"1");
+        assert_eq!(answer_keys(Answer::No), [0x1b], "ESC, never a digit");
     }
 
     #[test]

@@ -289,35 +289,14 @@ pub struct PaneCloseParams {
     pub kill: bool,
 }
 
-/// A dialog choice for `pane.answer`: 1, 2 or 3, written to the pty as that digit.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[serde(try_from = "u8", into = "u8")]
-#[ts(type = "1 | 2 | 3")]
-pub struct Choice(u8);
-
-impl Choice {
-    /// The digit, always 1, 2 or 3.
-    pub fn get(self) -> u8 {
-        self.0
-    }
-}
-
-impl TryFrom<u8> for Choice {
-    type Error = String;
-
-    fn try_from(v: u8) -> std::result::Result<Self, String> {
-        if (1..=3).contains(&v) {
-            Ok(Self(v))
-        } else {
-            Err(format!("choice must be 1, 2 or 3, got {v}"))
-        }
-    }
-}
-
-impl From<Choice> for u8 {
-    fn from(c: Choice) -> Self {
-        c.0
-    }
+/// What `pane.answer` says to the CLI's dialog, by meaning, since option positions differ by CLI, version and mode (R55).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum Answer {
+    /// Allow this once: the dialog's first option, "Yes" in every Claude Code and Codex dialog.
+    Yes,
+    /// Refuse: the dialog is cancelled, which both CLIs read as no; it can never approve.
+    No,
 }
 
 /// `pane.answer` params.
@@ -326,8 +305,8 @@ impl From<Choice> for u8 {
 pub struct PaneAnswerParams {
     /// Pane showing the CLI's dialog.
     pub pane_id: PaneId,
-    /// Option to pick.
-    pub choice: Choice,
+    /// The answer.
+    pub answer: Answer,
 }
 
 /// `session.list` params.

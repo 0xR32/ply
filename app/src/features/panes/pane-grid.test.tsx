@@ -161,20 +161,21 @@ describe.if(hasNativeTestRenderer)('PaneGrid', () => {
     }
   });
 
-  test('the needs-you strip answers the CLI dialog by mouse through pane.answer', () => {
+  test('the needs-you strip answers a dialog Yes or No by meaning, with no positional choice', () => {
     const { store, renderer, unmount } = mountWithStore(grid, demo());
     const seen: Action[] = [];
     store.addEffect((a) => seen.push(a));
     try {
       expect(renderer.getAllText()).toContain('claude wants to edit guide-dot.tsx');
-      expect(renderer.getAllText()).toContain('answer in claude');
-      const yes = bounds(renderer, 'answer-2-1');
+      expect(renderer.getAllText()).toContain('other options in the pane');
+      expect(renderer.getAllText()).not.toContain('Always');
+      const yes = bounds(renderer, 'answer-2-yes');
       renderer.nativeSimulateClick(yes.x + yes.width / 2, yes.y + yes.height / 2);
-      const no = bounds(renderer, 'answer-2-3');
+      const no = bounds(renderer, 'answer-2-no');
       renderer.nativeSimulateClick(no.x + no.width / 2, no.y + no.height / 2);
       expect(seen).toEqual([
-        { type: 'pane/answer', paneId: 2, choice: 1 },
-        { type: 'pane/answer', paneId: 2, choice: 3 },
+        { type: 'pane/answer', paneId: 2, answer: 'yes' },
+        { type: 'pane/answer', paneId: 2, answer: 'no' },
       ]);
       expect(renderer.findByTestId('pane-1-waiting')).toBeUndefined();
     } finally {

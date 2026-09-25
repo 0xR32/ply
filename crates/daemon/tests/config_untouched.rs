@@ -87,7 +87,7 @@ fn a_claude_and_a_codex_session_leave_the_users_cli_config_byte_identical() {
     };
     hook("PermissionRequest", write_call(None));
     wait_status(&mut c, claude, PaneStatus::WaitingPermission, WAIT);
-    c.call("pane.answer", json!({"pane_id": claude, "choice": 1}))
+    c.call("pane.answer", json!({"pane_id": claude, "answer": "yes"}))
         .unwrap();
     hook("PostToolUse", write_call(Some("toolu_example1")));
     hook("Stop", json!({}));

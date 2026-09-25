@@ -177,7 +177,7 @@ export function startEffects(store: Store, options: EffectsOptions): () => void 
     switch (action.type) {
       case 'pane/answer':
         client
-          .request('pane.answer', { pane_id: action.paneId, choice: action.choice })
+          .request('pane.answer', { pane_id: action.paneId, answer: action.answer })
           .catch((error) => failed('Answering the pane', error));
         break;
       case 'pane/resume':

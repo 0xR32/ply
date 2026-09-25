@@ -4,9 +4,6 @@
 /** An opaque sRGB colour, `"#RRGGBB"`. */
 export type Rgb = string;
 
-/** A `pane.answer` choice, written to the pty as that digit. */
-export type Choice = 1 | 2 | 3;
-
 export type JsonValue =
   | number
   | string
@@ -568,6 +565,11 @@ export type PaneCloseParams = {
 };
 
 /**
+ * What `pane.answer` says to the CLI's dialog, by meaning, since option positions differ by CLI, version and mode (R55).
+ */
+export type Answer = 'yes' | 'no';
+
+/**
  * `pane.answer` params.
  */
 export type PaneAnswerParams = {
@@ -576,9 +578,9 @@ export type PaneAnswerParams = {
    */
   pane_id: number;
   /**
-   * Option to pick.
+   * The answer.
    */
-  choice: Choice;
+  answer: Answer;
 };
 
 /**

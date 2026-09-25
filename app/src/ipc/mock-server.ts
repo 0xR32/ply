@@ -5,7 +5,7 @@ import type { Socket, UnixSocketListener } from 'bun';
 import { log } from './log';
 import { controlSocketPath } from './paths';
 import {
-  type Choice,
+  type Answer,
   type Cli,
   type ClientMsg,
   type ErrorCode,
@@ -456,9 +456,9 @@ export class MockServer {
     if (pane.status !== 'waiting_permission' && pane.status !== 'waiting_input') {
       throw new MethodError('invalid_state', 'the pane shows no dialog');
     }
-    const choice: Choice = params.choice;
+    const answer: Answer = params.answer;
     this.later(0, () => {
-      this.setStatus(pane.id, 'running', choice === 3 ? 'told no' : undefined);
+      this.setStatus(pane.id, 'running', answer === 'no' ? 'told no' : undefined);
       if (this.options.live) this.later(1500, () => this.setStatus(pane.id, 'idle'));
     });
     return {};

@@ -211,9 +211,9 @@ describe('effects', () => {
 
   test('answers go to pane.answer, notices clear themselves, and a reconnect reloads the session', async () => {
     const { server, store, until, state, seen } = await setup();
-    store.dispatch({ type: 'pane/answer', paneId: 2, choice: 2 });
+    store.dispatch({ type: 'pane/answer', paneId: 2, answer: 'no' });
     await until(() => state().panes[2]?.status === 'running', 'the answered pane');
-    expect(server.requestsOf('pane.answer')).toEqual([{ pane_id: 2, choice: 2 }]);
+    expect(server.requestsOf('pane.answer')).toEqual([{ pane_id: 2, answer: 'no' }]);
     store.dispatch({ type: 'notice/show', text: 'hello' });
     await until(() => state().notice === null, 'the notice to clear');
     server.addPane({ id: 9, cli: 'shell', tab_id: 2 });

@@ -183,12 +183,12 @@ describe.if(hasNativeTestRenderer)('journeys, keyboard only', () => {
 
   test('the needs-you strip answers by mouse and the pane runs again', async () => {
     const j = await start('demo');
-    const strip = j.renderer.findByTestId('answer-2-1');
+    const strip = j.renderer.findByTestId('answer-2-yes');
     const b = strip && j.renderer.getElementBounds(strip.id);
     if (!b) throw new Error('the answer button did not paint');
     j.renderer.nativeSimulateClick(b.x + b.width / 2, b.y + b.height / 2);
     await j.until((s) => s.panes[2]?.status === 'running', 'the answered pane to run');
-    expect(j.server.requestsOf('pane.answer')).toEqual([{ pane_id: 2, choice: 1 }]);
+    expect(j.server.requestsOf('pane.answer')).toEqual([{ pane_id: 2, answer: 'yes' }]);
     expect(j.renderer.findByTestId('pane-2-waiting')).toBeUndefined();
   });
 

@@ -11,8 +11,8 @@ use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 use ply_proto::control::{
-    Call, ClientMsg, DaemonShutdownParams, DaemonStopping, Empty, ErrorBody, ErrorCode, Event,
-    HANDSHAKE_ID, Hello, LayoutSaveParams, MAX_LINE_BYTES, METHODS, PaneAnswerParams,
+    Answer, Call, ClientMsg, DaemonShutdownParams, DaemonStopping, Empty, ErrorBody, ErrorCode,
+    Event, HANDSHAKE_ID, Hello, LayoutSaveParams, MAX_LINE_BYTES, METHODS, PaneAnswerParams,
     PaneCloseParams, PaneCreateParams, PaneExit, PaneMeta, PaneProgress, PaneRef, PaneRemoved,
     PaneStatusChanged, Request, Response, ServerMsg, SessionListParams, SettingsSetParams,
     ThemeSetParams, Welcome, WorkspaceOpenParams, WorkspaceRef, WorktreeOption,
@@ -26,14 +26,8 @@ use ply_proto::{C2_VERSION, HOOK_VERSION, PROTOCOL_VERSION};
 use ts_rs::{Config, TS};
 
 /// Types whose Rust side overrides the TypeScript shape (`#[ts(type = ..)]`): name, TypeScript type, doc.
-const ALIASES: [(&str, &str, &str); 2] = [
-    ("Rgb", "string", "An opaque sRGB colour, `\"#RRGGBB\"`."),
-    (
-        "Choice",
-        "1 | 2 | 3",
-        "A `pane.answer` choice, written to the pty as that digit.",
-    ),
-];
+const ALIASES: [(&str, &str, &str); 1] =
+    [("Rgb", "string", "An opaque sRGB colour, `\"#RRGGBB\"`.")];
 
 struct Decl {
     name: String,
@@ -86,6 +80,7 @@ fn generate() -> String {
         decl::<WorktreeOption>(&cfg),
         decl::<PaneCreateParams>(&cfg),
         decl::<PaneCloseParams>(&cfg),
+        decl::<Answer>(&cfg),
         decl::<PaneAnswerParams>(&cfg),
         decl::<SessionListParams>(&cfg),
         decl::<ThemeSetParams>(&cfg),
@@ -216,9 +211,10 @@ fn method_table_matches_call() {
             pane_id: 1,
             kill: false,
         }),
-        Call::PaneAnswer(
-            serde_json::from_str::<PaneAnswerParams>(r#"{"pane_id":1,"choice":1}"#).unwrap(),
-        ),
+        Call::PaneAnswer(PaneAnswerParams {
+            pane_id: 1,
+            answer: Answer::No,
+        }),
         Call::PaneResume(PaneRef { pane_id: 1 }),
         Call::SessionList(SessionListParams {
             workspace_id: 1,

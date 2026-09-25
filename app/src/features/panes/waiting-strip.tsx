@@ -1,4 +1,4 @@
-import type { Choice } from '../../state/actions';
+import type { Answer } from '../../state/actions';
 import type { PaneState } from '../../state/reducer';
 import { useDispatch } from '../../state/store';
 import { useChrome } from '../../theme/chrome';
@@ -8,10 +8,10 @@ import { Dot } from '../../ui/chip';
 import { Kbd } from '../../ui/kbd';
 import { Text } from '../../ui/text';
 
-const ANSWERS: readonly { choice: Choice; label: string }[] = [
-  { choice: 1, label: 'Yes' },
-  { choice: 2, label: 'Always' },
-  { choice: 3, label: 'No' },
+/** The two answers that mean the same in every dialog (R55): plyd types `1` for Yes and ESC for No, which never approves. */
+const ANSWERS: readonly { answer: Answer; label: string; key: string }[] = [
+  { answer: 'yes', label: 'Yes', key: '1' },
+  { answer: 'no', label: 'No', key: 'esc' },
 ];
 
 function waitText(pane: PaneState): string {
@@ -21,7 +21,7 @@ function waitText(pane: PaneState): string {
     : `${pane.cli} is waiting for your answer`;
 }
 
-/** The needs-you strip under a waiting pane; its buttons send the dialog's digits through `pane.answer` (7.4). */
+/** The needs-you strip under a waiting pane; a permission dialog gets Yes and No through `pane.answer` (R55), the rest is answered in the pane. */
 export function WaitingStrip({ pane }: { pane: PaneState }) {
   const dispatch = useDispatch();
   const { z } = useChrome();
@@ -53,29 +53,29 @@ export function WaitingStrip({ pane }: { pane: PaneState }) {
       </Text>
       <div style={{ flexGrow: 1 }} />
       <Text color={tokens.text2} variant="small" weight={400}>
-        {`answer in ${pane.cli}`}
+        {dialog ? 'other options in the pane' : `answer in ${pane.cli}`}
       </Text>
       {dialog
-        ? ANSWERS.map(({ choice, label }) => {
-            const first = choice === 1;
+        ? ANSWERS.map(({ answer, label, key }) => {
+            const first = answer === 'yes';
             return (
               <Button
-                key={choice}
-                testId={`answer-${pane.id}-${choice}`}
-                label={`Answer ${choice}, ${label}`}
+                key={answer}
+                testId={`answer-${pane.id}-${answer}`}
+                label={`Answer ${label}`}
                 variant={first ? 'amber' : 'secondary'}
                 height={28}
                 paddingLeft={5}
                 paddingRight={10}
                 gap={7}
                 radius={7}
-                onClick={() => dispatch({ type: 'pane/answer', paneId: pane.id, choice })}
+                onClick={() => dispatch({ type: 'pane/answer', paneId: pane.id, answer })}
               >
                 <Kbd
-                  label={String(choice)}
+                  label={key}
                   height={18}
                   minWidth={18}
-                  paddingX={0}
+                  paddingX={first ? 0 : 4}
                   color={first ? tokens.onAmber : tokens.text}
                   background={first ? tokens.onAmberKey : tokens.white[8]}
                   ring={null}

@@ -118,7 +118,7 @@ PLY_HOME=/tmp/ply-dev cargo run -p ply-daemon --example ply-cli -- screen 1
 
 `demo` opens a shell pane, runs an `echo`, detaches, reattaches and compares the two screens, then closes the pane;
 `list` prints every workspace's panes; `screen` attaches at 80 × 24 (which resizes the pane) and prints its screen.
-`create <cli> <cwd> [prompt]`, `type <pane> <text>` (`\r`, `\n` and `\e` are escapes), `answer <pane> <1-3>`,
+`create <cli> <cwd> [prompt]`, `type <pane> <text>` (`\r`, `\n` and `\e` are escapes), `answer <pane> <yes|no>`,
 `close <pane>` and `watch <secs>` (every C1 event, stamped in Unix milliseconds) drive an agent pane by hand, for
 example to time a real CLI's hooks against its `pane.status` events.
 
