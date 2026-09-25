@@ -74,7 +74,10 @@ codec must decode and re-encode `golden/c2/*.bin` byte for byte. `bun run gen`
 must leave `proto.gen.ts` unchanged (`checkGeneratedTypes`).
 
 **Layers are checked, not agreed.** `checkCrateLayers` and `checkAppLayers`
-enforce the tables below; `checkRustStandards` rejects `unwrap`/`expect` and
+enforce the tables below: a crate's normal dependencies must all be in its row
+(dev- and build-dependencies may go beyond it, never to a forbidden crate), and
+`check-rules.test.ts` fails when the table and the check disagree;
+`checkRustStandards` rejects `unwrap`/`expect` and
 `unsafe` where they are not allowed; `checkExactPins` wants `=x.y.z`.
 
 **Every dependency is admitted.** A new direct dependency needs a row in
@@ -208,9 +211,9 @@ GPUIX's test renderer (`@gpuix/react/testing`) and the mock daemon
 |---|---|---|
 | ply-proto | serde, serde_json, ts-rs, thiserror | any ply crate |
 | ghostty-sys | nothing at runtime; Zig, curl, shasum and tar at build time | any ply crate |
-| ply-term | ply-proto, tracing; ghostty-sys only with `engine` | gpui, tokio, any I/O crate |
+| ply-term | ply-proto, thiserror, tracing; ghostty-sys only with `engine` | gpui, tokio, any I/O crate |
 | ply-agents | ply-proto, serde, serde_json, thiserror | ply-term, tokio, gpui |
-| ply-daemon | ply-proto, ply-term (`engine`), ply-agents, rustix, tokio, rusqlite, notify, tracing, libc | gpui |
+| ply-daemon | ply-proto, ply-term (`engine`), ply-agents, anyhow (in `main.rs`), notify, rusqlite, rustix, serde, serde_json, thiserror, tokio, toml, tracing, tracing-appender, tracing-subscriber | gpui |
 | ply-hook | serde_json | everything else, tokio included |
 | app/src/features | state, ui, keymap types, theme, terminal | another feature, ipc |
 | app/src/ui | theme | state, ipc, features |

@@ -10,7 +10,9 @@ import {
   checkInv5Palette,
   checkInv7Worktrees,
   checkInv11PersonalData,
+  crateLayerViolations,
   ghosttyPinProblems,
+  LAYERS,
 } from './check-rules';
 import { listRepoFiles } from './lib/repo';
 
@@ -114,6 +116,70 @@ describe('check-rules', () => {
       'GHOSTTY_ARCHIVE_SHA256 is not a 64-hex SHA-256',
     ]);
     expect(ghosttyPinProblems('')).toHaveLength(3);
+  });
+
+  test('crate layers: every crate has an allow-list; dev and build dependencies may go beyond it', () => {
+    const pkg = (name: string, deps: [string, string | null][]) => ({
+      name,
+      manifest_path: `/repo/crates/${name}/Cargo.toml`,
+      dependencies: deps.map(([dep, kind]) => ({ name: dep, kind })),
+    });
+    const messages = (p: ReturnType<typeof pkg>) =>
+      crateLayerViolations('/repo', p).map((v) => v.message);
+    expect(
+      messages(
+        pkg('ply-daemon', [
+          ['tokio', null],
+          ['ply-term', null],
+          ['regex', null],
+        ]),
+      ),
+    ).toEqual([
+      'ply-daemon may depend only on anyhow, notify, rusqlite, rustix, serde, serde_json, thiserror, tokio, toml, tracing, tracing-appender, tracing-subscriber; found regex',
+    ]);
+    expect(messages(pkg('ply-term', [['serde', null]]))).toHaveLength(1);
+    expect(messages(pkg('ply-term', [['tokio', 'dev']]))).toEqual([
+      'ply-term must not have tokio as a dev-dependency',
+    ]);
+    expect(messages(pkg('ply-agents', [['ply-term', null]]))).toEqual([
+      'ply-agents must not depend on ply-term',
+    ]);
+    expect(
+      messages(
+        pkg('ply-agents', [
+          ['tempfile', 'dev'],
+          ['cc', 'build'],
+        ]),
+      ),
+    ).toEqual([]);
+    expect(
+      messages(
+        pkg('ply-hook', [
+          ['ply-proto', 'dev'],
+          ['cc', 'build'],
+        ]),
+      ),
+    ).toEqual([]);
+    expect(messages(pkg('ply-hook', [['ply-proto', null]]))).toEqual([
+      'ply-hook must not depend on ply-proto',
+    ]);
+    expect(messages(pkg('ply-extra', []))).toEqual(['ply-extra has no row in the layer table']);
+  });
+
+  test('crate layers: the table in CLAUDE.md lists exactly the allow-lists', () => {
+    const claude = readFileSync(join(import.meta.dir, '..', 'CLAUDE.md'), 'utf8');
+    for (const [name, rule] of Object.entries(LAYERS)) {
+      const line = claude.split('\n').find((l) => l.startsWith(`| ${name} |`));
+      expect(line, name).toBeDefined();
+      // ghostty-sys's row names build tools, not crates.
+      if (name === 'ghostty-sys') continue;
+      const listed = ((line ?? '').split('|')[2] ?? '')
+        .split(/[,;]/)
+        .map((item) => item.trim().split(/\s/)[0] ?? '')
+        .filter((dep) => dep !== '')
+        .sort();
+      expect(listed, name).toEqual([...rule.onlyAllowed, ...rule.allowedPly].sort());
+    }
   });
 
   test('layer rules: features never import another feature or ipc; ui imports only theme', () => {

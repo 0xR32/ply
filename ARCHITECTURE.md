@@ -163,7 +163,8 @@ the lost panes that have no session to resume as fresh shells, and serves until
   (`checkInv17Ghostty`, which also checks that `ghostty-sys/build.rs` pins
   the ghostty commit, an archive URL naming it and the archive's SHA-256).
 - Each crate's dependencies are checked against the table in `CLAUDE.md`
-  (`checkCrateLayers`); ply-proto and ply-hook may depend on nothing else, and
+  (`checkCrateLayers`): every crate has an allow-list, so a new dependency
+  needs a row change (dev- and build-dependencies may go beyond it), and
   ply-agents does no I/O beyond reading the files it is given.
 - In the app, features import state, ui, keymap types, theme and terminal but
   never ipc; ui imports only theme; ipc and terminal never import features or ui

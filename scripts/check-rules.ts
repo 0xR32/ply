@@ -8,6 +8,7 @@ import {
   matchLines,
   readText,
   run,
+  type Violation,
 } from './lib/repo';
 
 const ROOT = normalize(join(import.meta.dir, '..'));
@@ -495,13 +496,18 @@ export function checkInv17Ghostty(root: string): CheckResult {
   return res;
 }
 
-interface LayerRule {
-  onlyAllowed?: string[];
+/** One crate's row of CLAUDE.md's "Dependency layers" table: the only crates it may use, and the ones it must not. */
+export interface LayerRule {
+  /** The third-party crates it may depend on; any other normal dependency is a violation. */
+  onlyAllowed: string[];
+  /** The ply crates it may depend on. */
   allowedPly: string[];
+  /** Crates it must not depend on in any section, dev and build included. */
   forbidden: string[];
 }
 
-const LAYERS: Record<string, LayerRule> = {
+/** CLAUDE.md's "Dependency layers" table for the crates, row for row. */
+export const LAYERS: Record<string, LayerRule> = {
   'ply-proto': {
     onlyAllowed: ['serde', 'serde_json', 'ts-rs', 'thiserror'],
     allowedPly: [],
@@ -509,18 +515,85 @@ const LAYERS: Record<string, LayerRule> = {
   },
   'ghostty-sys': { onlyAllowed: [], allowedPly: [], forbidden: [] },
   'ply-term': {
+    onlyAllowed: ['thiserror', 'tracing'],
     allowedPly: ['ply-proto', 'ghostty-sys'],
     forbidden: [...GPUI_CRATES, ...IO_CRATES, ...HTTP_CRATES],
   },
-  'ply-agents': { allowedPly: ['ply-proto'], forbidden: [...GPUI_CRATES, 'tokio'] },
+  'ply-agents': {
+    onlyAllowed: ['serde', 'serde_json', 'thiserror'],
+    allowedPly: ['ply-proto'],
+    forbidden: [...GPUI_CRATES, 'tokio'],
+  },
   'ply-daemon': {
+    onlyAllowed: [
+      'anyhow',
+      'notify',
+      'rusqlite',
+      'rustix',
+      'serde',
+      'serde_json',
+      'thiserror',
+      'tokio',
+      'toml',
+      'tracing',
+      'tracing-appender',
+      'tracing-subscriber',
+    ],
     allowedPly: ['ply-proto', 'ply-term', 'ply-agents'],
     forbidden: [...GPUI_CRATES],
   },
   'ply-hook': { onlyAllowed: ['serde_json'], allowedPly: [], forbidden: ['tokio'] },
 };
 
-/** Spec 8.2 for crates: each crate's direct dependencies against its allowed and forbidden lists. */
+/** A workspace crate as `cargo metadata` describes it, reduced to what the layer check reads. */
+export interface LayerPackage {
+  name: string;
+  manifest_path: string;
+  dependencies: Pick<CargoDep, 'name' | 'kind'>[];
+}
+
+/** The layer violations of one crate: a ply crate or third-party crate outside its row, or a forbidden one; dev- and build-dependencies may use crates outside the row. */
+export function crateLayerViolations(
+  root: string,
+  pkg: LayerPackage,
+  layers: Record<string, LayerRule> = LAYERS,
+): Violation[] {
+  const file = relative(root, pkg.manifest_path);
+  const rule = layers[pkg.name];
+  if (!rule) {
+    return [{ check: 'LAYER', file, message: `${pkg.name} has no row in the layer table` }];
+  }
+  const out: Violation[] = [];
+  for (const dep of pkg.dependencies) {
+    const isPly = PLY_CRATES.includes(dep.name);
+    const tooling = dep.kind === 'dev' || dep.kind === 'build';
+    const where =
+      dep.kind === 'dev'
+        ? 'dev-dependency'
+        : dep.kind === 'build'
+          ? 'build-dependency'
+          : 'dependency';
+    if (rule.forbidden.includes(dep.name)) {
+      out.push({
+        check: 'LAYER',
+        file,
+        message: `${pkg.name} must not have ${dep.name} as a ${where}`,
+      });
+    } else if (tooling) {
+    } else if (isPly && !rule.allowedPly.includes(dep.name)) {
+      out.push({ check: 'LAYER', file, message: `${pkg.name} must not depend on ${dep.name}` });
+    } else if (!isPly && !rule.onlyAllowed.includes(dep.name)) {
+      out.push({
+        check: 'LAYER',
+        file,
+        message: `${pkg.name} may depend only on ${rule.onlyAllowed.join(', ') || 'nothing'}; found ${dep.name}`,
+      });
+    }
+  }
+  return out;
+}
+
+/** Spec 8.2 for crates: each crate's direct dependencies against its row of the layer table (`LAYERS`). */
 export function checkCrateLayers(root: string): CheckResult {
   const res = ok();
   const meta = cargoMetadata(root);
@@ -529,44 +602,7 @@ export function checkCrateLayers(root: string): CheckResult {
     return res;
   }
   for (const pkg of meta.packages.filter((p) => meta.workspace_members.includes(p.id))) {
-    const rule = LAYERS[pkg.name];
-    const file = relative(root, pkg.manifest_path);
-    if (!rule) {
-      res.violations.push({
-        check: 'LAYER',
-        file,
-        message: `${pkg.name} has no row in the layer table`,
-      });
-      continue;
-    }
-    for (const dep of pkg.dependencies) {
-      const isPly = PLY_CRATES.includes(dep.name);
-      const where = dep.kind === 'dev' ? 'dev-dependency' : 'dependency';
-      if (isPly && !rule.allowedPly.includes(dep.name) && dep.kind !== 'dev') {
-        res.violations.push({
-          check: 'LAYER',
-          file,
-          message: `${pkg.name} must not depend on ${dep.name}`,
-        });
-      } else if (rule.forbidden.includes(dep.name)) {
-        res.violations.push({
-          check: 'LAYER',
-          file,
-          message: `${pkg.name} must not have ${dep.name} as a ${where}`,
-        });
-      } else if (
-        rule.onlyAllowed &&
-        !isPly &&
-        dep.kind !== 'dev' &&
-        !rule.onlyAllowed.includes(dep.name)
-      ) {
-        res.violations.push({
-          check: 'LAYER',
-          file,
-          message: `${pkg.name} may depend only on ${rule.onlyAllowed.join(', ') || 'nothing'}; found ${dep.name}`,
-        });
-      }
-    }
+    res.violations.push(...crateLayerViolations(root, pkg));
   }
   return res;
 }
