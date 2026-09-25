@@ -35,7 +35,8 @@ the process spawns, so a hook the CLI fires at once already finds them:
 
 The pane task hands the session every `AgentEvent`
 (`crates/agents/src/adapter.rs`): `Hook` for each C3 envelope, `RolloutLine`
-for each tailed line, `Osc9` for each OSC 9 body the engine reports (OSC 777
+for each tailed line (`RolloutHistory` for a resumed thread's past, see
+**Rollouts**), `Osc9` for each OSC 9 body the engine reports (OSC 777
 carries a title and is some other program's), `FirstOutput` for the process's
 first pty byte, and `KeyTyped` for every key typed — a KEY frame that encoded to
 bytes, INPUT_RAW, or a `pane.answer` digit — with `enter` when those bytes
@@ -328,6 +329,19 @@ and switches files for a new thread (above). Requests from the pane (a notify's
 thread, the Enter window) sit in a shared list, so filesystem events cannot
 crowd them out. It only ever reads under `$CODEX_HOME`.
 
+**A resumed thread's past is history.** What a file already holds when the
+tailer binds it, up to the first end of file, is the thread's past when the
+file is the resumed thread's or was created before the process (and so is a
+file read again from its start): the tailer sends those lines as history
+(`TailMsg::History`, `AgentEvent::RolloutHistory`), and the session takes the
+binding, the model, the directory and the plan from them but no turn. So a
+resumed pane does not replay every `task_started` and `task_complete` it ever
+had through the status machine, and a rollout whose last turn never completed
+(a pane lost mid-turn) resumes `idle`, not `running` for good with the
+keep-awake assertion held
+(`a_codex_pane_lost_mid_turn_resumes_idle_without_replaying_its_past_turns`,
+`a_resumed_threads_history_binds_and_reports_but_starts_and_ends_no_turn`).
+
 **Delivery never delays the terminal** (I4). The tailer drops, on its own
 thread, every line the session cannot use (`plyd_reads`: only `session_meta`,
 `turn_context`, the turn `event_msg`s, `response_item`s mentioning
@@ -459,7 +473,9 @@ Transitions not in the table are ignored and counted.
   on is restarted rather than left due, so a pane task never wakes in a loop.
 - **Codex turns come from the rollout** (Ruling R48). `task_started` makes the
   pane `running`, `task_complete` and `turn_aborted` (Esc) make it `idle`; a
-  `task_complete` of an older turn than the last one started is ignored. Enter
+  `task_complete` of an older turn than the last one started is ignored, and
+  the turns of a resumed thread's history count for nothing (see
+  **Rollouts**). Enter
   typed in an `idle` Codex pane is a fast path to `running` that the rollout
   must confirm: without a `task_started` within 3 s (`TURN_START_WAIT`, an
   Enter on an empty composer) the pane is `idle` again. OSC 9 approvals and
@@ -570,9 +586,10 @@ terminal and the CLI repaints it.
 - `crates/daemon/tests/resume.rs`: journey J6 (kill plyd, restart it, the
   agent panes are `lost` and the shell is back by itself, `pane.resume` brings a
   `--worktree` Claude pane and a Codex pane back with the same option and
-  directory), a pane without a session id reopening as a shell by itself, and
-  F3 (closed sessions keep status, times, exit codes and session ids across app
-  and plyd restarts).
+  directory), a pane without a session id reopening as a shell by itself, a
+  Codex pane lost mid-turn resuming `idle` with its plan and no replayed turn,
+  and F3 (closed sessions keep status, times, exit codes and session ids across
+  app and plyd restarts).
 - `crates/daemon/tests/lifecycle.rs`:
   `an_agent_pane_runs_the_cli_from_the_login_path_with_its_launch_spec` (a fake
   `claude` on the login `PATH` gets the adapter's argv, environment and files)

@@ -92,13 +92,18 @@ impl Agent {
         msg
     }
 
-    /// One message of the pane's rollout tailer: a switch to another file (R49) or lines the session reads.
+    /// One message of the pane's rollout tailer: a switch to another file (R49), lines the session reads, or the thread's past.
     pub fn on_tail(&mut self, shared: &Arc<Shared>, msg: TailMsg, now: Instant) {
         match msg {
             TailMsg::Switched => self.on_event(shared, AgentEvent::RolloutSwitched, now),
             TailMsg::Lines(lines) => {
                 for line in &lines {
                     self.on_event(shared, AgentEvent::RolloutLine(line), now);
+                }
+            }
+            TailMsg::History(lines) => {
+                for line in &lines {
+                    self.on_event(shared, AgentEvent::RolloutHistory(line), now);
                 }
             }
         }

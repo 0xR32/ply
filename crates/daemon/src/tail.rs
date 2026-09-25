@@ -13,7 +13,10 @@
 //! Lines go to the pane's agent on a channel of [`TAIL_QUEUE`] messages that the pane task reads last, after its pty
 //! output, commands and timers (I4): [`TailMsg::Switched`] when another file starts, then [`TailMsg::Lines`] batches
 //! of at most [`LINES_PER_BATCH`] lines and [`MAX_BATCH_BYTES`], holding only the lines the session reads
-//! ([`ply_agents::codex::rollout::plyd_reads`], checked on this thread so the pane task never parses the rest).
+//! ([`ply_agents::codex::rollout::plyd_reads`], checked on this thread so the pane task never parses the rest). The
+//! lines a file already held when it was bound, up to the first end of file, are [`TailMsg::History`] instead when the
+//! file is the resumed thread's or was created before the process, and so are those of a file read again from its
+//! start: they are the thread's past, whose turns must not replay through the status machine.
 //!
 //! It wakes on filesystem events for `sessions/` (FSEvents through `notify`, once the directory exists; plyd never
 //! creates it; a failed watch is retried every [`WATCH_RETRY`]) and polls besides ([`POLL`] until it is bound or
@@ -101,6 +104,8 @@ pub enum TailMsg {
     Switched,
     /// Complete lines the session reads, without newlines, in file order.
     Lines(Vec<Vec<u8>>),
+    /// Like [`TailMsg::Lines`], but written before this process (see the module docs): they start and end no turn.
+    History(Vec<Vec<u8>>),
 }
 
 #[derive(Debug, Default)]
@@ -135,6 +140,7 @@ impl Tailer {
                 .spawned_at
                 .checked_sub(SPAWN_SLACK)
                 .unwrap_or(options.spawned_at),
+            started_at: options.spawned_at,
             resumed: options.thread,
             wanted: Vec::new(),
             since: None,
@@ -210,12 +216,14 @@ struct Bound {
     file: File,
     offset: u64,
     lines: LineBuffer,
+    history: bool,
 }
 
 struct TailState {
     sessions: PathBuf,
     cwd: String,
     spawned_at: SystemTime,
+    started_at: SystemTime,
     resumed: Option<String>,
     wanted: Vec<String>,
     since: Option<(SystemTime, Instant)>,
@@ -305,18 +313,20 @@ impl TailState {
                 return true;
             }
         };
+        let thread = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .and_then(rollout_thread_id)
+            .map(str::to_owned);
+        let history = (thread.is_some() && thread == self.resumed) || self.predates_spawn(&path);
         if let Some(old) = self.bound.take() {
             tracing::info!(pane_id = self.pane_id, from = %old.path.display(), to = %path.display(), "Codex started another thread; following its rollout");
             self.shared.release_rollout(&old.path);
             self.resumed = None;
         } else {
-            tracing::info!(pane_id = self.pane_id, rollout = %path.display(), "following the Codex rollout");
+            tracing::info!(pane_id = self.pane_id, rollout = %path.display(), history, "following the Codex rollout");
         }
-        if let Some(thread) = path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .and_then(rollout_thread_id)
-        {
+        if let Some(thread) = &thread {
             self.wanted.retain(|t| t != thread);
         }
         self.since = None;
@@ -325,8 +335,20 @@ impl TailState {
             file,
             offset: 0,
             lines: LineBuffer::default(),
+            history,
         });
         self.send(TailMsg::Switched)
+    }
+
+    /// Whether `path` was created before the pane's process started, so what it holds now is the thread's past.
+    fn predates_spawn(&self, path: &Path) -> bool {
+        match std::fs::metadata(path).and_then(|m| m.created().or(m.modified())) {
+            Ok(created) => created < self.started_at,
+            Err(e) => {
+                tracing::debug!(pane_id = self.pane_id, rollout = %path.display(), error = %e, "cannot stat the rollout; reading all of it as new");
+                false
+            }
+        }
     }
 
     fn discover(&mut self) -> Option<PathBuf> {
@@ -465,6 +487,7 @@ impl TailState {
                 bound.file = file;
                 bound.offset = 0;
                 bound.lines = LineBuffer::default();
+                bound.history = true;
             }
             Err(e) => {
                 tracing::warn!(pane_id = self.pane_id, rollout = %bound.path.display(), error = %e, "cannot reopen the rollout");
@@ -472,7 +495,7 @@ impl TailState {
         }
     }
 
-    /// Hands every complete new line the session reads to the pane's agent, in batches; false once the agent is gone.
+    /// Hands every complete new line the session reads to the pane's agent, in batches, history ending at the first end of file; false once the agent is gone.
     fn pump(&mut self) -> bool {
         let Some(bound) = self.bound.as_mut() else {
             return true;
@@ -481,9 +504,20 @@ impl TailState {
         let mut buf = vec![0u8; READ_CHUNK];
         let mut batch = Vec::new();
         let mut bytes = 0;
+        let message = |history: bool, lines| {
+            if history {
+                TailMsg::History(lines)
+            } else {
+                TailMsg::Lines(lines)
+            }
+        };
+        let mut at_end = false;
         loop {
             match bound.file.read(&mut buf) {
-                Ok(0) => break,
+                Ok(0) => {
+                    at_end = true;
+                    break;
+                }
                 Ok(n) => {
                     bound.offset += n as u64;
                     for framed in bound.lines.push(&buf[..n]) {
@@ -499,11 +533,8 @@ impl TailState {
                         }
                         if batch.len() >= LINES_PER_BATCH || bytes >= MAX_BATCH_BYTES {
                             bytes = 0;
-                            if self
-                                .out
-                                .blocking_send(TailMsg::Lines(std::mem::take(&mut batch)))
-                                .is_err()
-                            {
+                            let full = message(bound.history, std::mem::take(&mut batch));
+                            if self.out.blocking_send(full).is_err() {
                                 return false;
                             }
                         }
@@ -516,7 +547,12 @@ impl TailState {
                 }
             }
         }
-        batch.is_empty() || self.send(TailMsg::Lines(batch))
+        let history = bound.history;
+        if at_end && history {
+            bound.history = false;
+            tracing::debug!(pane_id, rollout = %bound.path.display(), "read the thread's past; following its new lines");
+        }
+        batch.is_empty() || self.send(message(history, batch))
     }
 
     fn send(&self, msg: TailMsg) -> bool {

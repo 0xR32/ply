@@ -253,6 +253,7 @@ impl AgentSession for ClaudeSession {
             AgentEvent::KeyTyped { .. } => Ok(vec![status(StatusSignal::KeyTyped)]),
             AgentEvent::Osc9(_)
             | AgentEvent::RolloutLine(_)
+            | AgentEvent::RolloutHistory(_)
             | AgentEvent::FirstOutput
             | AgentEvent::RolloutSwitched => Ok(vec![]),
         }

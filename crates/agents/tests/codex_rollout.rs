@@ -193,6 +193,63 @@ fn rollout_turn_events_start_and_end_turns_and_an_older_turns_end_is_ignored() {
 }
 
 #[test]
+fn a_resumed_threads_history_binds_and_reports_but_starts_and_ends_no_turn() {
+    let line = |v: Value| v.to_string().into_bytes();
+    let event = |kind: &str, turn: &str| {
+        line(json!({"type": "event_msg", "payload": {"type": kind, "turn_id": turn}}))
+    };
+    let plan =
+        json!({"plan": [{"step": "a", "status": "completed"}, {"step": "b", "status": "pending"}]});
+    let history = [
+        line(
+            json!({"type": "session_meta", "payload": {"id": REAL_THREAD, "cwd": "/example/workspace"}}),
+        ),
+        line(
+            json!({"type": "turn_context", "payload": {"model": "gpt-example", "cwd": "/example/workspace"}}),
+        ),
+        event("task_started", "t8"),
+        line(
+            json!({"type": "response_item", "payload": {"type": "function_call", "name": "update_plan", "arguments": plan.to_string(), "call_id": "call_example1"}}),
+        ),
+        event("task_complete", "t8"),
+        event("task_started", "t9"),
+    ];
+    let mut s = session(Some(REAL_THREAD));
+    let signals: Vec<AdapterSignal> = history
+        .iter()
+        .flat_map(|l| s.handle(AgentEvent::RolloutHistory(l)).unwrap())
+        .collect();
+    assert!(
+        !signals
+            .iter()
+            .any(|sig| matches!(sig, AdapterSignal::Status(_))),
+        "history moves no status: {signals:?}"
+    );
+    assert!(signals.iter().any(
+        |sig| matches!(sig, AdapterSignal::Meta(m) if m.model.as_deref() == Some("gpt-example"))
+    ));
+    assert_eq!(
+        s.progress(),
+        Some(&Progress {
+            done: 1,
+            total: 2,
+            current: None
+        })
+    );
+    assert_eq!(
+        s.handle(AgentEvent::RolloutLine(&event("task_started", "t10")))
+            .unwrap(),
+        [AdapterSignal::Status(StatusSignal::TurnStarted)],
+        "the process's own turns count again"
+    );
+    assert_eq!(
+        s.handle(AgentEvent::RolloutLine(&event("task_complete", "t10")))
+            .unwrap(),
+        [TURN_COMPLETE]
+    );
+}
+
+#[test]
 fn a_new_thread_rebinds_the_session_when_plyd_switches_files_or_a_notify_named_it() {
     let meta = |thread: &str| {
         json!({"type": "session_meta", "payload": {"id": thread, "cwd": "/example/workspace"}})

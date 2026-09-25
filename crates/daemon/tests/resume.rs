@@ -198,6 +198,57 @@ fn a_pane_without_a_session_id_reopens_as_a_fresh_shell_by_itself() {
 }
 
 #[test]
+fn a_codex_pane_lost_mid_turn_resumes_idle_without_replaying_its_past_turns() {
+    let sb = Sandbox::new("cx-mid");
+    install(&sb);
+    hook_program();
+    let mut plyd = sb.start();
+    let (mut c, ws) = sb.control();
+    let codex = create(&mut c, ws, json!({"cli": "codex", "cwd": sb.home}));
+    wait_status(&mut c, codex, PaneStatus::Idle, WAIT);
+    let fake = Fake::ready(&sb, codex);
+    let plan =
+        json!({"plan": [{"step": "a", "status": "completed"}, {"step": "b", "status": "pending"}]});
+    fake.send("session");
+    fake.send(&format!(
+        "record {}",
+        json!({"type": "response_item", "payload": {"type": "function_call", "name": "update_plan", "arguments": plan.to_string(), "call_id": "call_example1"}})
+    ));
+    fake.send("turn task_started t8");
+    fake.send("turn task_complete t8");
+    fake.send("turn task_started t9");
+    for status in [PaneStatus::Running, PaneStatus::Idle, PaneStatus::Running] {
+        wait_status(&mut c, codex, status, WAIT);
+    }
+    drop(c);
+
+    plyd.child.kill().unwrap();
+    plyd.child.wait().unwrap();
+    let _plyd = sb.start();
+    let (mut c, _) = sb.control();
+    assert_eq!(listed(&mut c, ws, codex)["status"], "lost");
+    c.call("pane.resume", json!({"pane_id": codex})).unwrap();
+    let running = c.wait_event(
+        Duration::from_secs(3),
+        |e| matches!(e, Event::PaneStatus(s) if s.pane_id == codex && s.status == PaneStatus::Running),
+    );
+    assert!(
+        running.is_none(),
+        "the rollout's past turns replayed: {running:?}"
+    );
+    let pane = listed(&mut c, ws, codex);
+    assert_eq!(
+        pane["status"], "idle",
+        "t9 never completed, yet the resumed pane is idle: {pane}"
+    );
+    assert_eq!(
+        pane["progress"],
+        json!({"done": 1, "total": 2}),
+        "the plan comes from the past"
+    );
+}
+
+#[test]
 fn f3_closed_sessions_keep_status_times_and_exit_codes_across_app_and_plyd_restarts() {
     let sb = Sandbox::new("f3");
     install(&sb);

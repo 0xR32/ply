@@ -121,6 +121,8 @@ pub enum AgentEvent<'a> {
     Osc9(&'a str),
     /// One complete line of the pane's Codex rollout file, without its newline (C4).
     RolloutLine(&'a [u8]),
+    /// A rollout line that was already in the file when plyd began to follow it, which predates the process (a resumed thread's past): binding, meta and plan apply, its turn events start and end nothing.
+    RolloutHistory(&'a [u8]),
     /// The user typed into the pane; `enter` is true when the input was the Enter key.
     KeyTyped {
         /// Whether the key was Enter (`\r`).

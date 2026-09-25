@@ -219,10 +219,12 @@ impl CodexSession {
         }])
     }
 
-    fn on_rollout_line(&mut self, line: &[u8]) -> Result<Vec<AdapterSignal>> {
+    /// One rollout line; a `history` line (the thread's past, before this process) never starts or ends a turn.
+    fn on_rollout_line(&mut self, line: &[u8], history: bool) -> Result<Vec<AdapterSignal>> {
         let record = parse_record(line).inspect_err(|_| self.stats.malformed_rollout_lines += 1)?;
         let mut signals = Vec::new();
         match record {
+            RolloutRecord::Turn(_) if history => {}
             RolloutRecord::SessionMeta(meta) => {
                 let switched = std::mem::take(&mut self.switched);
                 let rebind = self.bound.as_ref().is_some_and(|b| *b != meta.thread_id)
@@ -303,7 +305,8 @@ impl AgentSession for CodexSession {
                 },
                 Osc9Kind::TurnComplete => StatusSignal::TurnComplete,
             })]),
-            AgentEvent::RolloutLine(line) => self.on_rollout_line(line),
+            AgentEvent::RolloutLine(line) => self.on_rollout_line(line, false),
+            AgentEvent::RolloutHistory(line) => self.on_rollout_line(line, true),
             AgentEvent::KeyTyped { enter } => {
                 let mut signals = vec![status(StatusSignal::KeyTyped)];
                 if enter {
