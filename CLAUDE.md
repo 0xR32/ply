@@ -127,9 +127,11 @@ what the session reports. All ply does is manage terminal panes, and track and s
   `last-assistant-message`) and fire after each completed turn. The first notify can come from a title-generation
   micro-turn with a different thread id: bind a pane to a notify's `thread-id` only once a rollout with that id exists;
   until then find the rollout by cwd (newest rollout created after spawn whose `session_meta.cwd` equals the pane cwd).
-- OSC 9: the known prefixes (ADR-0004's table) mean approval → `waiting_permission`, question/plan prompt →
-  `waiting_input`; any other body means the turn completed (→ `idle`). libghostty-vt swallows bodies that start with
-  `5` or `12` as ConEmu sub-commands.
+- OSC 9 classification, checking these fixed prefixes in order: `Approval requested: <cmd>`, `Codex wants to edit
+  <path>` / `Codex wants to edit <n> files`, `Approval requested by <mcp server>` → `waiting_permission`;
+  `Plan mode prompt: <title>`, `Question: <title>` → `waiting_input`. Any other body is the assistant's own final text
+  (or `Agent turn complete`) and means the turn completed (→ `idle`). libghostty-vt swallows bodies that start with
+  `5` or `12` (and `1;`…`12;`) as ConEmu sub-commands, so those never reach the classifier.
 - Progress: the latest `update_plan` call in the rollout — a `function_call` with JSON arguments `{explanation?, plan:
   [{step, status}]}`, or a code-mode `custom_tool_call` named `exec` whose JS input calls `tools.update_plan({...})`.
 - The model comes from the rollout's `turn_context.model`. Resume with `codex resume <thread_uuid>`.
@@ -207,7 +209,7 @@ ply/
 │     ├─ features/                                 panes/ · tabs/ · statusbar/ · palette/ · new-pane/
 │     └─ ui/                                       presentational primitives
 ├─ packaging/ · scripts/ (check-rules.ts, check-deps.ts, check-pr.ts, gen.ts)
-├─ docs/                                           spec/ · adr/ · perf/ · development.md
+├─ docs/                                           spec/ply-spec.html · development.md · perf/
 └─ .github/workflows/                              ci.yml · release.yml
 ```
 
@@ -347,5 +349,6 @@ The owner asked for proper code documentation. Documentation is required; inline
 - Stage explicit paths (`git add <paths>`), never `git add -A`. There is no remote; never push.
 - Never run a CLI in a way that changes the user's real configuration. Never pass permission-skipping flags to
   `claude` or `codex`.
-- Reference docs: the spec (`docs/spec/ply-spec.html`) and the ADRs in `docs/adr/` record the verified CLI and library
-  facts summarised above; this file wins where they still describe the removed native GPUI terminal element.
+- Reference docs: `docs/spec/ply-spec.html` (spec 6.0.0) and `docs/development.md`. The WP0 spike records (ADRs
+  0001–0008) are in git history at commit 2944769 (`git show 2944769:docs/adr/<file>`); the facts that matter are
+  summarised in this file, which wins where they describe the removed native GPUI terminal element.

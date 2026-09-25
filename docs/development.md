@@ -1,0 +1,104 @@
+# Development
+
+## Toolchain
+
+| Tool | Version | Install |
+|---|---|---|
+| Rust | 1.97.1 | `rustup toolchain install 1.97.1 --profile minimal --component rustfmt,clippy` (`rust-toolchain.toml` selects it inside the repository) |
+| Zig | 0.16.0 | from ziglang.org; put `zig` on `PATH` or point `$ZIG` at it. `crates/ghostty-sys/build.rs` runs it to build libghostty-vt |
+| Bun | 1.3.10 | `curl -fsSL https://bun.sh/install \| bash -s bun-v1.3.10` (`package.json` records it as `packageManager`) |
+| just | any recent | `brew install just` |
+| cargo-nextest, cargo-deny | any recent | `brew install cargo-nextest cargo-deny` or `cargo install --locked cargo-nextest cargo-deny` |
+
+After cloning, run `bun install` once. `bunfig.toml` selects Bun's hoisted linker (so `bunx tsc` and `bunx biome`
+resolve from the root) and makes `bun add` write exact versions.
+
+Never run `zig build` by hand inside `vendor/libghostty-vt`: without the flags `ghostty-sys` passes it fetches packages
+into the vendor tree, and `check-rules` then reports the tree as modified.
+
+## just recipes
+
+| Recipe | Runs |
+|---|---|
+| `just check` (default) | `cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo doc --workspace --no-deps` with warnings as errors, `scripts/check-rules.ts`, `scripts/check-deps.ts`, `biome check`, `tsc -p app`, `tsc -p scripts` |
+| `just test` | `cargo nextest run --workspace`, the doctests (`cargo test --doc`) and `bun test ./app ./scripts` |
+| `just deny` | `cargo deny check` (licences, advisories, banned crates) |
+| `just gen` | `bun scripts/gen.ts`: runs ply-proto's `export_bindings` test with `PLY_GEN_OUT`, formats the ts-rs output with Biome and writes `app/src/ipc/proto.gen.ts` (`--check` compares instead) |
+| `just dev` | `bun --hot app/src/main.tsx` |
+| `just fmt` | `cargo fmt --all` and `biome check --write` |
+
+`bun run dev`, `bun run check`, `bun run test` and `bun run gen` are the same entry points for the TypeScript side.
+`PLY_WINDOW_FOCUS=0 bun run dev` opens the window without taking focus, which keeps scripted or agent-driven runs from
+pulling it in front of your editor.
+
+## Where ply keeps its files
+
+| What | Path |
+|---|---|
+| Database | `~/Library/Application Support/ply/ply.db` |
+| Settings | `~/Library/Application Support/ply/config.toml` |
+| Sockets and per-pane files | `~/Library/Application Support/ply/run/` (mode 0700): `plyd.sock` (C1), `data.sock` (C2), `hook.sock` (C3), `panes/<id>/claude-settings.json` and `panes/<id>/launch.json` |
+| Logs | `~/Library/Logs/ply/app.YYYY-MM-DD.log` and `plyd.YYYY-MM-DD.log`, kept 14 days |
+| LaunchAgent | `~/Library/LaunchAgents/dev.ply.app.plyd.plist` |
+
+Socket paths must stay under 104 bytes, the macOS limit for a Unix socket path.
+
+## Running plyd in the foreground
+
+```sh
+PLY_HOME=/tmp/ply-dev cargo run -p ply-daemon -- --foreground
+```
+
+`PLY_HOME` moves every path above (database, settings, run directory, logs) under one directory, so a development
+daemon never touches the installed one and a test can start from an empty state. `--foreground` keeps plyd attached
+to the terminal instead of expecting launchd. The daemon arrives in WP4; until then the binary exits at once.
+
+Tests that start real or fake CLIs also set a sandboxed `HOME` (and `CODEX_HOME`), so `~/.claude/settings.json` and
+`~/.codex/config.toml` are never written (INV-8).
+
+## The gates
+
+CI (`.github/workflows/ci.yml`) runs three jobs on macOS: `rust` (rustfmt, clippy, nextest, doctests, cargo-deny, rustdoc), `ts`
+(Biome, tsc, bun test) and `rules` (check-rules, check-deps, and check-pr on pull requests). `just check` runs the
+same checks locally, except nextest and cargo-deny.
+
+- **Lints.** The workspace sets `missing_docs = "warn"` and rustdoc `broken_intra_doc_links = "deny"`; clippy runs
+  with `-D warnings`, so an undocumented public item fails. `clippy::unwrap_used` and `expect_used` are denied outside
+  tests (`clippy.toml`).
+- **`scripts/check-rules.ts`** prints one line per violation and exits non-zero on any. One function per rule:
+  INV-1 (no network API in `app/`), INV-2 (no byte fields in C1 types, no pty API in `app/`), INV-3 (no ply crate
+  reaches `gpui`), INV-4 (`onKeyDown` only in the keymap dispatcher, the overlay forms and the terminal view), INV-5
+  (colour literals only in `app/src/theme/tokens.ts` and fixtures), INV-7 (no `git worktree` call, no worktree column
+  but `worktree_seen`), INV-11 (no real home path or committer identity outside `vendor/`), INV-13 (GPUIX pinned
+  exactly at 0.10.0 from npm, unpatched), INV-17 (`ghostty-sys` reaches only `plyd` through `ply-term`, and
+  `vendor/libghostty-vt` matches the content hash in its `vendor.json`), the dependency layers of spec 8.2 for crates
+  and for `app/src` imports, the unsafe and `anyhow` rules of spec 9.1, exact version pins, and the freshness of
+  `proto.gen.ts`. A check that needs code a later work package writes prints a `notice:` line instead.
+  `bun scripts/check-rules.ts --vendor-hash` prints the vendor tree's current hash.
+- **`scripts/check-deps.ts`** fails when a direct dependency of any `Cargo.toml` or `package.json` is missing from
+  `deps.allow.toml`, or when its recorded numbers fail INV-16.
+- **`scripts/check-pr.ts`** requires a `Spec: x.y.z` line and a `WP: n` line in the pull-request body (`$PR_BODY`, or a
+  file given as the first argument).
+- **cargo-deny** (`deny.toml`) bans HTTP client crates and `gpui` for every ply crate (INV-1, INV-3), allows only the
+  listed licences and fails on advisories.
+
+## Adding a dependency
+
+INV-16 admits a direct third-party dependency only with at least 1 000 stars, a commit in the last six months, at
+least three contributors with five or more commits, and no "experimental" label from its maintainers. GPUIX (D4) and
+libghostty-vt (D5) are the only exceptions, by decision.
+
+1. Check the numbers and add the entry in one step (needs an authenticated `gh`):
+
+   ```sh
+   bun scripts/check-deps.ts --refresh --add cargo:tokio=tokio-rs/tokio
+   ```
+
+   `--add <cargo|npm|vendor>:<name>=<owner/repo>` records `repo`, `stars`, `last_commit`, `contributors_5plus` and
+   `checked` in `deps.allow.toml`. `--refresh` alone re-checks every entry; `--refresh cargo:serde` re-checks one.
+2. If `check-deps` reports that the dependency fails INV-16, do not add it: pick an admitted alternative or write the
+   code yourself.
+3. Pin it exactly: a Rust crate goes into `[workspace.dependencies]` of the root `Cargo.toml` as `"=x.y.z"` and each
+   crate uses `name.workspace = true`; an npm package is added with `bun add --exact`.
+4. Check that the crate's row of the layer table allows it (`scripts/check-rules.ts`, spec 8.2) and that cargo-deny
+   accepts its licence.

@@ -45,7 +45,7 @@ app/                              the React app (src/) and bundled fonts (assets
 vendor/libghostty-vt              ghostty 44f2a44, pristine (vendor.json, patches.md)
 scripts/                          repository gates: check-rules, check-deps, check-pr, gen
 deps.allow.toml                   every admitted dependency with its INV-16 numbers
-docs/spec, docs/adr               the specification and the architecture decision records
+docs/spec                          the specification
 docs/development.md               toolchain, run directory, logs, gates, adding a dependency
 ```
 
@@ -75,6 +75,5 @@ macOS 13 or later on Apple Silicon, with:
 ## Documentation
 
 - [Specification](docs/spec/ply-spec.html): stack, architecture, protocols, keymap, invariants and the work packages.
-- [Architecture decision records](docs/adr/): every change to the specification and the WP0 spike results.
 - [Development guide](docs/development.md): toolchain setup, the run directory and logs, running plyd in the
   foreground, how the gates work, and how to admit a dependency.
