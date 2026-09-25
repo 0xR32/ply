@@ -443,8 +443,7 @@ impl Engine {
         self.scrollback_lines
     }
 
-    /// Feeds pty output (any split, any size); returns what it produced for the pty and the pane besides screen changes. Never fails.
-    /// [`Engine::scrollback_base`] stays exact while one write adds fewer lines than the scrollback holds; past that it skips every line the terminal held before.
+    /// Feeds pty output (any split, any size); returns what it produced for the pty and the pane besides screen changes; never fails; [`Engine::scrollback_base`] stays exact while one write adds fewer lines than the scrollback holds, past that it skips every line held before.
     pub fn write(&mut self, bytes: &[u8]) -> EngineOutput {
         // SAFETY: the terminal is live and no reference to the effects is held across the call.
         unsafe { sys::ghostty_terminal_vt_write(self.term.raw, bytes.as_ptr(), bytes.len()) };

@@ -194,9 +194,7 @@ struct Subtype<'a> {
     kind: Option<&'a str>,
 }
 
-/// Whether [`parse_record`] can make anything of `line`: the tailer drops the rest before it reaches the pane (the
-/// known records ply ignores, `event_msg` subtypes it ignores, response items with no `update_plan`); unknown and
-/// malformed lines pass, so the session still counts them.
+/// Whether [`parse_record`] can make anything of `line`, so the tailer drops the rest (known ignored records and `event_msg` subtypes, response items without `update_plan`) and passes unknown and malformed lines for the session to count.
 pub fn plyd_reads(line: &[u8]) -> bool {
     let Ok(record) = serde_json::from_slice::<Line<'_>>(line) else {
         return true;

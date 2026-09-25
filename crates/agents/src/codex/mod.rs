@@ -153,11 +153,7 @@ pub fn toml_string(s: &str) -> String {
     out
 }
 
-/// Per-pane interpreter of Codex notify payloads, OSC 9 bodies and the pane's rollout lines.
-///
-/// The session follows one thread at a time: the first `session_meta` it is fed binds it, and a later one for another
-/// thread rebinds it when plyd switched rollout files (`AgentEvent::RolloutSwitched`, after `/new` or `/clear`) or a
-/// notify named that thread (Ruling R49); the session id then follows the new thread.
+/// Per-pane interpreter of Codex notify payloads, OSC 9 bodies and rollout lines, following one thread: the first `session_meta` binds it, and another thread's rebinds it (session id included) after `AgentEvent::RolloutSwitched` or a notify naming that thread (R49).
 #[derive(Debug, Clone, Default)]
 pub struct CodexSession {
     meta: SessionMeta,

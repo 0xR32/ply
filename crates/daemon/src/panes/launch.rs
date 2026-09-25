@@ -332,9 +332,7 @@ pub fn restore(shared: &Arc<Shared>) {
     }
 }
 
-/// Reopens, as fresh shells in their directories, the panes plyd's start left `lost` that have no session to resume:
-/// shells and agent panes whose CLI never reported a session id (Ruling R50, spec 11.3). Panes with a session stay
-/// `lost` for `pane.resume`. Runs after the sockets are bound, since a first start may have to wait for `theme.set`.
+/// Reopens as fresh shells the `lost` panes with no session to resume (shells, agent panes whose CLI reported no id; R50, spec 11.3), leaving the rest for `pane.resume`; run after binding, since a first start may wait for `theme.set`.
 pub async fn reopen_sessionless(shared: Arc<Shared>) {
     let panes: Vec<PaneId> = {
         let reg = shared.registry();
