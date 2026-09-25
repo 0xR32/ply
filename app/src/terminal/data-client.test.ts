@@ -106,7 +106,7 @@ describe('C2 data client', () => {
     const server = plyd();
     const { conn, states, frames } = open(server.path);
     await until('attach', () => conn.state.kind === 'attached');
-    expect(server.received[0]).toEqual({ kind: 'attach', v: 1, paneId: 7, ...size });
+    expect(server.received[0]).toEqual({ kind: 'attach', v: 2, paneId: 7, ...size });
     expect(frames.map((f) => f.kind)).toEqual(['snapshot']);
     await until('ack', () => server.received.some((f) => f.kind === 'ack'));
     expect(server.received[1]).toEqual({ kind: 'ack', seq: 1 });

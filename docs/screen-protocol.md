@@ -182,7 +182,7 @@ blank. It never carries more.
 
 | Offset | Field | Type | Meaning |
 |---|---|---|---|
-| 0 | `v` | u16 | `C2_VERSION`, 1. |
+| 0 | `v` | u16 | `C2_VERSION`, 2. |
 | 2 | `pane_id` | u64 | The C1 `Pane.id`. |
 | 10 | `cols` | u16 | Grid columns the view shows. |
 | 12 | `rows` | u16 | Grid rows. |
@@ -297,8 +297,13 @@ after it.
 52, UTF-8 filling the payload; empty clears the clipboard. plyd sends it at once
 to every attached client (a write while none is attached is dropped) and only
 the `text/plain` part of the write; a write that does not fit one frame is
-dropped and logged. Clipboard reads are never answered. This kind was added to
-version 1 (nothing had been released), so `C2_VERSION` is still 1.
+dropped and logged. Clipboard reads are never answered.
+
+**Versions.** `C2_VERSION` is 2. Version 2 added `scrollback_base` to SNAPSHOT
+and DELTA and the CLIPBOARD_WRITE kind; a view and a plyd of different
+versions never exchange a screen frame, because plyd answers the other
+version's ATTACH with reason 1 and the view shows that message instead of
+re-attaching in a loop.
 
 ## Attaching
 
@@ -443,7 +448,7 @@ The golden ATTACH (`crates/proto/tests/golden/c2/attach.bin`), 23 bytes:
 ```
 12 00 00 00                len 18
 10                         ATTACH
-01 00                      v 1
+02 00                      v 2
 ff ff ff ff ff ff 1f 00    pane_id 2^53 − 1
 a8 00                      cols 168
 32 00                      rows 50

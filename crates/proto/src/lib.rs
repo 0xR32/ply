@@ -9,8 +9,8 @@
 //!   Rulings R20 and R21), hand-encoded little-endian with no serialisation crate.
 //! - [`hook`]: C3 hook ingress, the envelope `ply-hook` writes to `run/hook.sock` (spec 4.3).
 //! - [`pane`]: the records C1 carries (panes, workspaces, tabs, layouts, sessions, the palette, settings).
-//! - [`version`]: [`PROTOCOL_VERSION`], [`C2_VERSION`] and [`HOOK_VERSION`]. Version 1 of all three is frozen:
-//!   a change follows spec rule 0.1.1 (an ADR and a spec bump).
+//! - [`version`]: [`PROTOCOL_VERSION`], [`C2_VERSION`] and [`HOOK_VERSION`]. A released version is frozen: a
+//!   change to its messages bumps it (C2 is at 2 since `scrollback_base` and CLIPBOARD_WRITE; C1 and C3 are at 1).
 //!
 //! Every JSON struct rejects unknown fields and every C2 decoder rejects out-of-range values (INV-10); no C1 type
 //! carries pty bytes (INV-2). The crate holds types and their codecs only: no I/O beyond reading a given stream,

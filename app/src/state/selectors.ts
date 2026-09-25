@@ -126,6 +126,16 @@ export function selectWaitingCount(state: AppState): number {
   return n;
 }
 
+/** Whether the connected plyd was built from another commit than the app (C1 `welcome.daemon_version` against the app's build id). */
+export function selectForeignDaemon(state: AppState): boolean {
+  const { connection, env } = state;
+  return (
+    connection.kind === 'connected' &&
+    env.buildId !== undefined &&
+    connection.daemonVersion !== env.buildId
+  );
+}
+
 /** Open panes per program, for the status bar's "n claude · n codex · n zsh". */
 export function selectCliCounts(state: AppState): Record<Cli, number> {
   const counts: Record<Cli, number> = { claude: 0, codex: 0, shell: 0 };

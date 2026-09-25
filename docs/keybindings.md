@@ -92,6 +92,11 @@ are sent as KEY frames and plyd encodes them against the pane's modes
 - **A lost pane resumes by mouse or palette.** The Resume button of the strip
   under it and the palette's "Resume <pane>" command both send `pane.resume`;
   neither binds a key.
+- **plyd is replaced from the palette** (Ruling R53). "Restart plyd" stops it
+  without the sessions and the app starts the current build; "Quit ply and stop
+  sessions" asks first, then stops every pane's process and quits
+  (`docs/control-channel.md`, `daemon.shutdown`). Neither binds a key: ⌘Q
+  belongs to GPUIX and quits only the window's app, leaving plyd running.
 
 **⌥ is not Meta by default.** `option_as_meta` (Settings, "⌥ as Meta") is
 `off`, `left`, `right` or `both`. With `off`, ⌥ types the layout's character,
@@ -112,7 +117,7 @@ travelling on, so each stage decides for itself:
    every key without ⌘ to plyd and never a ⌘ chord (`keyFrame` returns `null`
    for one). Of the ⌘ chords it runs only the four terminal commands, and
    ignores the rest.
-2. **An open overlay's form** (palette, new pane, settings, close
+2. **An open overlay's form** (palette, new pane, settings, close and quit
    confirmation) handles its own keys, listed below.
 3. **The dispatcher** (`app/src/keymap/dispatcher.ts`) is the window-level
    listener. It runs only ⌘ chords, and nothing at all while an overlay is
@@ -121,9 +126,9 @@ travelling on, so each stage decides for itself:
 
 `onKeyDown` appears in exactly these places: `keymap/dispatcher.ts`,
 `features/panes/terminal-view.tsx`, `features/palette/palette.tsx`,
-`features/new-pane/new-pane.tsx`, `features/settings/settings.tsx` and
-`features/panes/close-confirm.tsx` (`checkInv4KeyHandlers` in
-`scripts/check-rules.ts`).
+`features/new-pane/new-pane.tsx`, `features/settings/settings.tsx`,
+`features/panes/close-confirm.tsx` and `features/palette/quit-confirm.tsx`
+(`checkInv4KeyHandlers` in `scripts/check-rules.ts`).
 
 **Keystrokes** are written canonically as `[ctrl-][alt-]cmd-[shift-]<key>`, for
 example `cmd-shift-]` or `cmd--`. `keysOfEvent` turns a GPUIX event into that
@@ -142,6 +147,7 @@ While an overlay is open it takes the keys; global chords do nothing.
 | New pane, New tab (⌘N, ⌘T) | ←→ choose the CLI, or 1 Claude Code, 2 Codex, 3 Shell while the CLI field has focus · Tab / ⇧Tab move between fields · Space or ⏎ toggles the worktree switch or presses a button · ⌘⏎ open · esc cancel |
 | Settings (⌘,) | Tab / ⇧Tab move between fields · ←→ change the accent or ⌥ as Meta · Space or ⏎ toggles a switch · esc close |
 | Close confirmation (⌘⇧W on a live pane) | ⏎ close and stop · esc cancel |
+| Quit confirmation ("Quit ply and stop sessions") | ⏎ quit and stop · esc cancel |
 | Unsafe paste (in a pane) | ⏎ paste anyway · esc cancel · any other key cancels the paste and is typed as usual |
 | Find bar (⌘F in a pane) | Type to search · ↑ or ⏎ older match · ↓ newer match · esc close; nothing typed here reaches the pty |
 

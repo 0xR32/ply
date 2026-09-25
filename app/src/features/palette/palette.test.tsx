@@ -67,6 +67,24 @@ describe('palette commands', () => {
     expect(paletteItems(lost, 'resume', 0)).toEqual([]);
   });
 
+  test('plyd can be restarted, or stopped with every session after a confirmation (R53)', () => {
+    const find = (s: ReturnType<typeof state>, id: string) =>
+      paletteItems(s, 'plyd', 0).find((i) => i.id === id);
+    const restart = find(state(), 'daemon-restart');
+    expect(restart?.label).toBe('Restart plyd');
+    expect(restart?.actions).toEqual([{ type: 'overlay/close' }, { type: 'daemon/restart' }]);
+    expect(restart?.hint).not.toContain('another build');
+    const quit = paletteItems(state(), 'quit', 0);
+    expect(quit.map((i) => i.label)).toEqual(['Quit ply and stop sessions']);
+    expect(quit[0]?.actions).toEqual([{ type: 'overlay/open', overlay: { kind: 'quit-confirm' } }]);
+    const base = state();
+    const foreign = { ...base, env: { ...base.env, buildId: '0.1.0+0a1b2c3d4e5f' } };
+    expect(find(foreign, 'daemon-restart')).toMatchObject({
+      dot: 'amber',
+      hint: 'plyd is from another build; starts the current build, running sessions come back lost',
+    });
+  });
+
   test('a query filters commands, tabs and panes by every word', () => {
     const items = paletteItems(state(), 'notes', 0);
     expect(items.map((i) => [i.section, i.label])).toEqual([

@@ -80,7 +80,7 @@ impl Hello {
 pub struct Welcome {
     /// Protocol version plyd speaks.
     pub v: u16,
-    /// plyd build version (semver).
+    /// plyd's build id, `<semver>+<commit>`: the 12-character commit hash it was built from (`t<unix seconds>` outside git).
     pub daemon_version: String,
 }
 

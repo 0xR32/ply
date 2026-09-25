@@ -835,7 +835,7 @@ fn c2_encoding_refuses_inconsistent_graphemes() {
 fn c2_version_mismatch_is_detectable() {
     let mut wire = Vec::new();
     Frame::Attach(Attach {
-        v: 2,
+        v: 1,
         pane_id: 1,
         cols: 80,
         rows: 24,
@@ -847,14 +847,17 @@ fn c2_version_mismatch_is_detectable() {
     let Some(Frame::Attach(a)) = FrameReader::new(wire.as_slice()).read_frame().unwrap() else {
         panic!("not an attach");
     };
-    assert!(matches!(
-        version::check_version("C2", C2_VERSION, a.v),
-        Err(Error::VersionMismatch {
-            protocol: "C2",
-            expected: 1,
-            found: 2
-        })
-    ));
+    assert!(
+        matches!(
+            version::check_version("C2", C2_VERSION, a.v),
+            Err(Error::VersionMismatch {
+                protocol: "C2",
+                expected: 2,
+                found: 1
+            })
+        ),
+        "a version-1 client (before scrollback_base and CLIPBOARD_WRITE) is told so"
+    );
 }
 
 #[test]

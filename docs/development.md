@@ -69,7 +69,8 @@ short: the socket paths below it must stay under 104 bytes.
 | `--foreground` | also log to stderr (launchd starts plyd without it; both modes serve the same way) |
 | `--run-dir <dir>` | put the sockets and `panes/` in another absolute directory |
 | `PLY_LOG` | log level: `error`, `warn`, `info` (default), `debug`, `trace` |
-| `plyd install-agent [--dry-run]` | write `~/Library/LaunchAgents/dev.ply.app.plyd.plist` for this plyd binary and `launchctl bootstrap` + `kickstart` it; while a plyd runs (it holds the instance lock) a changed plist is left alone, since booting the old agent out would kill every session. `--dry-run` prints the plist and the commands instead. Refused while `PLY_HOME` is set |
+| `plyd install-agent [--dry-run]` | write `~/Library/LaunchAgents/dev.ply.app.plyd.plist` for this plyd binary and `launchctl bootstrap` + `kickstart` it; while a plyd runs (it holds the instance lock) a changed plist is left alone, since booting the old agent out would kill every session, and the report names how to stop that plyd (below). `--dry-run` prints the plist and the commands instead. Refused while `PLY_HOME` is set |
+| `plyd --version` | prints the build id, `plyd <version>+<commit>` |
 
 plyd refuses to start a second time for the same data directory (it prints the running pid and exits 0), refuses a
 database written by a newer plyd (also with status 0, so launchd does not restart it in a loop), and has no idle
@@ -82,6 +83,26 @@ checkout, there is no bundle). With `PLY_HOME` set it spawns that binary as `ply
 detached; otherwise it runs `plyd install-agent` with it, so `bun run dev` without `PLY_HOME` installs a LaunchAgent
 pointing at the cargo-built plyd. plyd is the only writer of that plist. `docs/configuration.md` lists everything a
 run writes to the machine.
+
+### Replacing a running plyd
+
+A rebuilt plyd runs only once the running one stops: plyd has no idle exit, and `install-agent` never boots out an
+agent whose plyd holds the lock. The status bar says "plyd is from another build — Restart plyd" whenever the
+connected plyd's build id (`welcome.daemon_version`, `<version>+<commit>`, stamped by `crates/daemon/build.rs`)
+differs from the app's (`<version>+<commit>` of the checkout). Three ways to stop it:
+
+- **"Restart plyd"** in the palette (⌘K) sends `daemon.shutdown {kill_panes:false}`. The app reconnects, finds nothing
+  and starts the cargo-built plyd as always (`install-agent`, or `--foreground` under `PLY_HOME`); running agents
+  lose their pty with the old plyd and come back `lost`, to be resumed, and shells reopen by themselves.
+- **"Quit ply and stop sessions"** asks first, sends `daemon.shutdown {kill_panes:true}` and quits the app; the next
+  `bun run dev` starts the new plyd.
+- **From a shell**, with the app open or not: `launchctl kill TERM gui/$(id -u)/dev.ply.app.plyd` stops the
+  LaunchAgent's plyd cleanly (a SIGTERM stop exits 0, so launchd does not restart it), and
+  `kill $(cat "$PLY_HOME/plyd.lock")` one under `PLY_HOME`. `install-agent` names the palette commands and the
+  `launchctl` line when it leaves a running plyd's changed plist alone.
+
+A C2 change bumps `C2_VERSION` and a C1 change `PROTOCOL_VERSION`, so an app and a plyd of different protocol versions
+refuse each other cleanly (ATTACH_REFUSED reason 1, `version_mismatch`) rather than misreading frames.
 
 A command-line client drives a running plyd through C1 and C2:
 

@@ -426,12 +426,15 @@ fn handshakes_check_versions_and_panes() {
 
     let (_, refused) = Data::attach(&sb.data_socket(), 999, 80, 24).unwrap();
     assert!(matches!(refused, Frame::AttachRefused(r) if r.reason == RefuseReason::UnknownPane));
-    let (_, refused) = Data::attach_v(&sb.data_socket(), 9, 1, 80, 24).unwrap();
-    assert!(
-        matches!(refused, Frame::AttachRefused(r) if r.reason == RefuseReason::VersionMismatch)
-    );
+    for v in [9, 1] {
+        let (_, refused) = Data::attach_v(&sb.data_socket(), v, 1, 80, 24).unwrap();
+        assert!(
+            matches!(refused, Frame::AttachRefused(r) if r.reason == RefuseReason::VersionMismatch),
+            "C2 version {v}"
+        );
+    }
     let mut future = std::os::unix::net::UnixStream::connect(sb.data_socket()).unwrap();
-    let payload = [&2u16.to_le_bytes()[..], &[0xAB; 28]].concat();
+    let payload = [&3u16.to_le_bytes()[..], &[0xAB; 28]].concat();
     let mut wire = u32::try_from(payload.len()).unwrap().to_le_bytes().to_vec();
     wire.push(ply_proto::data::kind::ATTACH);
     wire.extend_from_slice(&payload);

@@ -10,6 +10,7 @@ import {
   resumeHow,
   selectActiveTab,
   selectFocusedPane,
+  selectForeignDaemon,
   selectWaitingCount,
   statusView,
   tabDot,
@@ -100,8 +101,34 @@ function commands(state: AppState): PaletteItem[] {
     command('font.up', 'Bigger text', `${state.settings.font_size} pt now`, 'dim'),
     command('font.down', 'Smaller text', `${state.settings.font_size} pt now`, 'dim'),
     command('font.reset', 'Reset text size', '', 'dim'),
+    ...daemonItems(state),
   );
   return items;
+}
+
+/** Replacing plyd (Ruling R53): a restart that the launcher follows with the current build, and a confirmed quit. */
+function daemonItems(state: AppState): PaletteItem[] {
+  const foreign = selectForeignDaemon(state);
+  return [
+    {
+      id: 'daemon-restart',
+      section: 'Commands',
+      label: 'Restart plyd',
+      hint: `${foreign ? 'plyd is from another build; ' : ''}starts the current build, running sessions come back lost`,
+      keys: '',
+      dot: foreign ? 'amber' : 'dim',
+      actions: [{ type: 'overlay/close' }, { type: 'daemon/restart' }],
+    },
+    {
+      id: 'daemon-quit',
+      section: 'Commands',
+      label: 'Quit ply and stop sessions',
+      hint: 'stops every process plyd runs, asks first',
+      keys: '',
+      dot: 'dim',
+      actions: [{ type: 'overlay/open', overlay: { kind: 'quit-confirm' } }],
+    },
+  ];
 }
 
 function tabItems(state: AppState): PaletteItem[] {

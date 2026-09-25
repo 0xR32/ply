@@ -87,7 +87,7 @@ async fn connection(stream: UnixStream, shared: Arc<Shared>) {
     let events = shared.events.subscribe();
     let welcome = ServerMsg::Welcome(Welcome {
         v: ply_proto::PROTOCOL_VERSION,
-        daemon_version: env!("CARGO_PKG_VERSION").to_owned(),
+        daemon_version: crate::daemon::BUILD_ID.to_owned(),
     });
     if !write_now(&mut wr, &welcome).await {
         return;
@@ -432,5 +432,16 @@ mod tests {
         assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
         let mut r = BufReader::new(&b""[..]);
         assert!(!read_line(&mut r, &mut Vec::new()).await.unwrap());
+    }
+
+    #[test]
+    fn the_welcome_names_the_commit_plyd_was_built_from() {
+        let (version, commit) = crate::daemon::BUILD_ID.split_once('+').unwrap();
+        assert_eq!(version, env!("CARGO_PKG_VERSION"));
+        let hash = commit.len() == 12 && commit.bytes().all(|b| b.is_ascii_hexdigit());
+        let time = commit
+            .strip_prefix('t')
+            .is_some_and(|t| t.parse::<u64>().is_ok());
+        assert!(hash || time, "{commit}");
     }
 }

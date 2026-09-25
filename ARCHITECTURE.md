@@ -14,7 +14,9 @@ emulates no terminal. plyd is a per-user LaunchAgent, not a child of the app, so
 quitting, closing or crashing the app stops nothing: every pty and every agent
 keeps running, and reopening the app shows each pane's current screen because
 every attach is answered with a Snapshot. plyd has no idle exit; only closing a
-pane or `daemon.shutdown {kill_panes:true}` stops a process.
+pane or `daemon.shutdown {kill_panes:true}` (the palette's "Quit ply and stop
+sessions") stops a process, and a rebuilt plyd replaces the running one after
+"Restart plyd" (`docs/development.md`).
 
 ply makes no network request (INV-1). It never calls a model, holds a key,
 rewrites a prompt or picks a model; everything it knows about a session comes
@@ -38,7 +40,8 @@ source; `bun run gen` writes `app/src/ipc/proto.gen.ts` from them with ts-rs, an
 `run/data.sock`, one connection per attached pane, `len:u32 LE · kind:u8 ·
 payload`, at most 1 MiB, encoded by hand in `crates/proto/src/data.rs` and again
 in `app/src/terminal/frames.ts`; golden frames in `crates/proto/tests/golden/c2/`
-keep the two byte-identical. The client sends ATTACH, RESIZE, KEY, MOUSE, PASTE,
+keep the two byte-identical, and ATTACH carries `C2_VERSION` (2), which plyd
+checks first. The client sends ATTACH, RESIZE, KEY, MOUSE, PASTE,
 FOCUS, FETCH_HISTORY and ACK; plyd sends SNAPSHOT, DELTA (changed rows only),
 HISTORY, TITLE, BELL, EXIT, PASTE_REJECTED, ATTACH_REFUSED and CLIPBOARD_WRITE
 (OSC 52, which the app writes to the pasteboard). Scrollback is addressed by

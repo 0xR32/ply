@@ -1,6 +1,6 @@
 import { commandKeyLabel } from '../../keymap/keymap';
 import type { CommandId } from '../../state/actions';
-import { selectActiveTab, selectCliCounts } from '../../state/selectors';
+import { selectActiveTab, selectCliCounts, selectForeignDaemon } from '../../state/selectors';
 import { shallowEqual, useAppSelector, useDispatch } from '../../state/store';
 import { useChrome } from '../../theme/chrome';
 import { tokens } from '../../theme/tokens';
@@ -36,6 +36,7 @@ export function StatusBar() {
   const counts = useAppSelector(selectCliCounts, shallowEqual);
   const shellName = useAppSelector((s) => s.env.shellName);
   const notice = useAppSelector((s) => s.notice);
+  const foreign = useAppSelector(selectForeignDaemon);
   return (
     <div
       testId="statusbar"
@@ -73,6 +74,10 @@ export function StatusBar() {
       {notice ? (
         <Text color={tokens.amber} variant="small" weight={400} ellipsis testId="notice">
           {notice.text}
+        </Text>
+      ) : foreign ? (
+        <Text color={tokens.amber} variant="small" weight={400} ellipsis testId="foreign-daemon">
+          plyd is from another build — Restart plyd
         </Text>
       ) : null}
       <Text color={tokens.hint} variant="label" mono testId="cli-counts">

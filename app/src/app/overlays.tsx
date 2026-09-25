@@ -1,5 +1,6 @@
 import { NewPane } from '../features/new-pane/new-pane';
 import { Palette } from '../features/palette/palette';
+import { QuitConfirm } from '../features/palette/quit-confirm';
 import { CloseConfirm } from '../features/panes/close-confirm';
 import { Settings } from '../features/settings/settings';
 import { useAppSelector, useDispatch } from '../state/store';
@@ -34,6 +35,12 @@ export function Overlays() {
       return (
         <Backdrop onClose={close}>
           <CloseConfirm paneId={overlay.paneId} />
+        </Backdrop>
+      );
+    case 'quit-confirm':
+      return (
+        <Backdrop onClose={close}>
+          <QuitConfirm />
         </Backdrop>
       );
   }

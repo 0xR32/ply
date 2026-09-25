@@ -198,6 +198,7 @@ const KEY_HANDLER_FILES = new Set([
   'app/src/features/new-pane/new-pane.tsx',
   'app/src/features/settings/settings.tsx',
   'app/src/features/panes/close-confirm.tsx',
+  'app/src/features/palette/quit-confirm.tsx',
 ]);
 
 /** INV-4: `onKeyDown` only in the keymap dispatcher, the overlay forms and the terminal view. */

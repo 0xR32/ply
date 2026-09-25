@@ -83,7 +83,7 @@ const rows = (first: number): Row[] => [
 const expected: Record<string, Frame> = {
   attach: {
     kind: 'attach',
-    v: 1,
+    v: 2,
     paneId: MAX_SAFE,
     cols: 168,
     rows: 50,

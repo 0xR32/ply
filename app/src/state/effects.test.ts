@@ -8,6 +8,7 @@ import { accentAlternatives } from '../theme/tokens';
 import type { Action } from './actions';
 import { startEffects } from './effects';
 import { type AppState, initialState } from './reducer';
+import { selectForeignDaemon } from './selectors';
 import { createStore } from './store';
 
 const HOME = '/Users/example';
@@ -28,6 +29,7 @@ async function setup(before: (server: MockServer) => void = () => {}) {
   const seen: Action[] = [];
   store.addEffect((a) => seen.push(a));
   const client = createControlClient({ socketPath, appVersion: '0.1.0', initialBackoffMs: 10 });
+  const quits: number[] = [];
   cleanups.push(
     startEffects(store, {
       client,
@@ -35,6 +37,8 @@ async function setup(before: (server: MockServer) => void = () => {}) {
       settingsSaveDelayMs: 5,
       noticeMs: 30,
       reducedMotion: async () => true,
+      buildId: async () => '0.1.0+0a1b2c3d4e5f',
+      quit: () => quits.push(Date.now()),
     }),
   );
   const until = async (check: () => boolean, what: string) => {
@@ -46,7 +50,7 @@ async function setup(before: (server: MockServer) => void = () => {}) {
   };
   const state = (): AppState => store.getState();
   await until(() => state().workspace !== null, 'the session');
-  return { server, store, seen, until, state };
+  return { server, store, seen, until, state, quits };
 }
 
 describe('effects', () => {
@@ -76,13 +80,38 @@ describe('effects', () => {
   });
 
   test('a theme.set that fails leaves the load going and says why', async () => {
-    const { state } = await setup((server) =>
+    const { state, seen } = await setup((server) =>
       server.refuseNext('theme.set', 'internal', 'cannot write config.toml'),
     );
     expect(state().tabs.map((t) => t.pane_ids)).toEqual([[1, 2, 3], [4]]);
-    expect(state().notice?.text).toBe(
-      'Setting the terminal colours failed: cannot write config.toml',
-    );
+    expect(seen).toContainEqual({
+      type: 'notice/show',
+      text: 'Setting the terminal colours failed: cannot write config.toml',
+    });
+  });
+
+  test('Restart plyd stops it without the sessions and the app reconnects and reloads', async () => {
+    const { server, store, until, seen, quits } = await setup();
+    store.dispatch({ type: 'daemon/restart' });
+    await until(() => seen.filter((a) => a.type === 'session/loaded').length === 2, 'a reload');
+    expect(server.requestsOf('daemon.shutdown')).toEqual([{ kill_panes: false }]);
+    expect(quits).toEqual([]);
+  });
+
+  test('Quit ply and stop sessions asks first, then stops every session and quits', async () => {
+    const { server, store, until, state, quits } = await setup();
+    store.dispatch({ type: 'overlay/open', overlay: { kind: 'quit-confirm' } });
+    expect(server.requestsOf('daemon.shutdown')).toEqual([]);
+    store.dispatch({ type: 'daemon/quit' });
+    expect(state().overlay).toBeNull();
+    await until(() => quits.length === 1, 'the quit');
+    expect(server.requestsOf('daemon.shutdown')).toEqual([{ kill_panes: true }]);
+  });
+
+  test('the app knows its build id and whether plyd is from another build', async () => {
+    const { state } = await setup();
+    expect(state().env.buildId).toBe('0.1.0+0a1b2c3d4e5f');
+    expect(selectForeignDaemon(state())).toBe(true);
   });
 
   test('a settings change is saved, and an accent change also re-sends the palette', async () => {

@@ -145,6 +145,9 @@ written by a newer plyd is refused the same way, with status 0. Any other
 startup failure (a socket that cannot be bound, a socket path too long) exits
 1; a usage error exits 2.
 
+`--version` prints plyd's build id, `plyd <version>+<commit>` (the id
+`welcome.daemon_version` carries, `docs/control-channel.md`).
+
 `--replay` (and the `--replay-feed` it runs in each pane) exists only in debug
 builds, for the P1 bench; `docs/development.md` describes it.
 
@@ -159,6 +162,10 @@ commands and writes nothing. It refuses to run under `PLY_HOME`, which a
 LaunchAgent would not see. plyd is the only writer of the plist
 (`crates/daemon/src/launchd.rs`). Its tests run the same steps with a recording
 runner in place of `launchctl` (`install_with`), so they never touch launchd.
+When it leaves the plist alone because a plyd runs, its report names the ways
+to stop that plyd: the palette's "Restart plyd" or "Quit ply and stop
+sessions", or `launchctl kill TERM gui/$(id -u)/dev.ply.app.plyd`
+(`docs/development.md`, "Replacing a running plyd").
 
 The agent is `Label` `dev.ply.app.plyd` with plyd as its only argument,
 `RunAtLoad` false (it does not start at login; the app starts it), `KeepAlive`
@@ -183,8 +190,9 @@ PLY_HOME=/tmp/ply-dev bun run dev
 - No LaunchAgent, no power assertion, nothing under `~/Library`.
 - The spawned plyd outlives the app, as it is meant to. Stop it with
   `kill $(cat /tmp/ply-dev/plyd.lock)` (SIGTERM, a clean stop) or a C1
-  `daemon.shutdown`, which nothing in the app sends yet; panes whose process was
-  still running come back `lost` next time (shells reopen by themselves).
+  `daemon.shutdown`, which the palette's "Restart plyd" and "Quit ply and stop
+  sessions" send; panes whose process was still running come back `lost` next
+  time (shells reopen by themselves).
 
 A plyd started by hand with `PLY_HOME=/tmp/ply-dev cargo run -p ply-daemon --
 --foreground` is found by the app the same way.
@@ -213,7 +221,8 @@ holds it.
 - The panes' programs run as the user, in the user's `HOME`, and write what they
   always write — Claude Code under `~/.claude/`, Codex under `~/.codex/` — but
   ply never writes the CLIs' configuration files (INV-8, `docs/agents.md`).
-- The app runs `defaults read com.apple.universalaccess reduceMotion` once at
+- The app runs `defaults read com.apple.universalaccess reduceMotion` and
+  `git rev-parse --short=12 HEAD` in its checkout (its build id) once at
   startup, and `pbcopy` or `pbpaste` when you copy or paste in a pane.
 - Geist and Geist Mono are used only when installed (in `~/Library/Fonts` or
   `/Library/Fonts`), because GPUIX cannot load a font file; otherwise the chrome
@@ -229,7 +238,9 @@ from `codeload.github.com`, checks its SHA-256, and keeps it in
 `~/Library/Caches/ply/ghostty/<commit>/`; Zig fetches the library's packages
 into its own cache when they are missing. Everything else a build writes stays
 under `target/`. With `PLY_GHOSTTY_SRC` set nothing is downloaded for the
-source (`docs/terminal.md`).
+source (`docs/terminal.md`). `crates/daemon/build.rs` runs `git rev-parse` in
+the checkout for plyd's build id (read-only, offline) and runs again when
+`HEAD` or a branch moves.
 
 ### Removing it
 
@@ -240,5 +251,6 @@ rm -r ~/Library/Application\ Support/ply ~/Library/Logs/ply ~/Library/Caches/ply
 ```
 
 `bootout` stops plyd with SIGTERM, and the panes' processes lose their pty with
-it. To end them first, close each pane with ⌘⇧W, which stops a live process
-before it closes the pane.
+it. To end them first, run "Quit ply and stop sessions" from the palette, or
+close each pane with ⌘⇧W, which stops a live process before it closes the
+pane.

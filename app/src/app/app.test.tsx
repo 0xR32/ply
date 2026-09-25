@@ -123,4 +123,38 @@ describe.if(hasNativeTestRenderer)('App', () => {
       unmount();
     }
   });
+
+  test('a plyd of another build is named in the footer, and the palette quits only after ⏎ confirms', async () => {
+    const state = canvasState();
+    const store = createStore({ ...state, env: { ...state.env, buildId: '0.1.0+0a1b2c3d4e5f' } });
+    const { renderer, unmount } = mount(store);
+    const seen: string[] = [];
+    store.addEffect((a) => seen.push(a.type));
+    try {
+      expect(renderer.getAllText()).toContain('plyd is from another build — Restart plyd');
+      renderer.simulateKeystrokes('cmd-k');
+      for (const k of ['q', 'u', 'i', 't']) renderer.simulateKeystrokes(k);
+      renderer.simulateKeystrokes('enter');
+      renderer.flush();
+      expect(store.getState().overlay).toEqual({ kind: 'quit-confirm' });
+      expect(seen).not.toContain('daemon/quit');
+      expect(renderer.getAllText()).toContain('Quit ply and stop every session?');
+      expect(renderer.getAllText().join(' ')).toContain(
+        '4 panes run a process; each one is stopped.',
+      );
+      renderer.simulateKeystrokes('enter');
+      renderer.flush();
+      expect(seen).toContain('daemon/quit');
+      expect(store.getState().overlay).toBeNull();
+      store.dispatch({
+        type: 'connection/changed',
+        state: { kind: 'connected', daemonVersion: '0.1.0+0a1b2c3d4e5f' },
+      });
+      await Bun.sleep(10);
+      renderer.flush();
+      expect(renderer.getAllText()).not.toContain('plyd is from another build — Restart plyd');
+    } finally {
+      unmount();
+    }
+  });
 });

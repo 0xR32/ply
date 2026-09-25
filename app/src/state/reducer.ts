@@ -40,6 +40,8 @@ export interface Environment {
   home: string;
   shellName: string;
   geistAvailable: boolean;
+  /** The app's build id, `<version>+<commit>` of the checkout it runs from; absent until read, or when git cannot tell. */
+  buildId?: string;
 }
 
 /** The whole app state; tabs are in bar order with `position` equal to their index. */
@@ -425,6 +427,10 @@ function reduceAction(state: AppState, action: Action): AppState {
       return { ...state, create: { pending: false, error: action.message } };
     case 'pane/closeConfirmed':
       return state.overlay?.kind === 'close-confirm' ? { ...state, overlay: null } : state;
+    case 'daemon/restart':
+      return state;
+    case 'daemon/quit':
+      return state.overlay?.kind === 'quit-confirm' ? { ...state, overlay: null } : state;
     case 'overlay/open':
       return { ...state, overlay: action.overlay };
     case 'overlay/close':
@@ -439,5 +445,10 @@ function reduceAction(state: AppState, action: Action): AppState {
       return state.reducedMotion === action.value
         ? state
         : { ...state, reducedMotion: action.value };
+    case 'env/buildId': {
+      if ((state.env.buildId ?? null) === action.value) return state;
+      const { buildId: _old, ...env } = state.env;
+      return { ...state, env: action.value === null ? env : { ...env, buildId: action.value } };
+    }
   }
 }

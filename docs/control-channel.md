@@ -62,14 +62,19 @@ below 2^53, so a JavaScript number holds them. Times are Unix seconds, UTC.
 
 ```
 → {"t":"hello","v":1,"client":"ply-app","app_version":"0.1.0"}
-← {"t":"welcome","v":1,"daemon_version":"0.1.0"}
+← {"t":"welcome","v":1,"daemon_version":"0.1.0+0a1b2c3d4e5f"}
 ```
 
 1. The client sends `hello` as its first line: `v` is the protocol version it
    speaks, `client` its name (`"ply-app"` for the app) and `app_version` its
    build version.
 2. If `v` equals plyd's `PROTOCOL_VERSION` (1, `crates/proto/src/version.rs`),
-   plyd answers `welcome` with its own `v` and `daemon_version`.
+   plyd answers `welcome` with its own `v` and `daemon_version`, its build id
+   `<package version>+<commit>`: the first 12 hex digits of the checkout's
+   `HEAD` when plyd was built (`crates/daemon/build.rs`), or `t<unix seconds>`
+   of the build outside a git checkout. Two plyd builds of one version but
+   different commits say so here; the protocol version does not change with
+   them.
 3. Otherwise plyd answers a `version_mismatch` error on request id 0 and closes:
 
    ```
@@ -295,6 +300,14 @@ to 4 s for them. It then stops serving, removes its sockets and exits. Without
 `lost` on the next start. The first shutdown request wins; SIGTERM, SIGINT and
 SIGHUP stop plyd the same way with `kill_panes: false`.
 
+The app sends it from two palette commands (Ruling R53): "Restart plyd" sends
+`kill_panes: false`, and the reconnect that follows starts the build in
+`target/` (see **Starting plyd** below), whose panes come back as a restart
+leaves them (a shell reopens by itself, an agent pane is `lost` until
+resumed); "Quit ply and stop sessions" asks first, sends `kill_panes: true`
+and quits the app once the answer arrives (or at once when plyd is not
+connected).
+
 ## Events
 
 ```
@@ -438,6 +451,12 @@ module that calls it.
   cannot be reached, with the reason and the next retry. `incompatible` when
   plyd answered `version_mismatch` or a `welcome` with another version; the grid
   shows the reason.
+- **Another build.** At start the app reads its own build id,
+  `<app/package.json version>+<commit>`, with `git rev-parse --short=12 HEAD`
+  in its checkout (`readBuildId`, `app/src/ipc/os.ts`). While it is connected
+  to a plyd whose `daemon_version` differs, the status bar says "plyd is from
+  another build — Restart plyd" (`selectForeignDaemon`); with no id (git
+  cannot tell) it says nothing.
 - **Reconnect.** A failed connect or a closed connection retries after 100 ms,
   doubling to at most 2 s; a `welcome` resets the delay. The retries continue
   in `incompatible` too, until a compatible plyd answers.
@@ -478,7 +497,7 @@ where the whole object is shown elsewhere.
 
 ```
 → {"t":"hello","v":1,"client":"ply-app","app_version":"0.1.0"}
-← {"t":"welcome","v":1,"daemon_version":"0.1.0"}
+← {"t":"welcome","v":1,"daemon_version":"0.1.0+0a1b2c3d4e5f"}
 → {"t":"req","id":1,"m":"settings.get","p":{}}
 ← {"t":"res","id":1,"ok":true,"r":{"accent":"blue","option_as_meta":"off","keep_awake_while_running":true,"use_ply_colours_in_claude":true,"codex_plan_tool":true,"scrollback_lines":10000,"font_size":12.5}}
 → {"t":"req","id":2,"m":"theme.set","p":{"palette":{"ansi":[…16 colours…],"fg":…,"bg":…,"cursor":…,"cursorText":…,"selectionBg":…,"selectionFg":…}}}

@@ -24,6 +24,9 @@ pub const LABEL: &str = "dev.ply.app.plyd";
 
 const TEMPLATE: &str = include_str!("../../../packaging/plyd.plist.template");
 
+/// The shell command that stops the agent's plyd from outside ply (a clean SIGTERM stop, so launchd does not restart it).
+pub const KILL_HINT: &str = "launchctl kill TERM gui/$(id -u)/dev.ply.app.plyd";
+
 /// `launchctl bootstrap` statuses that mean the agent is already loaded: EIO, EEXIST, EALREADY.
 const ALREADY_LOADED: [i32; 3] = [5, 17, 37];
 
@@ -144,7 +147,7 @@ pub fn install_with(
             tracing::warn!(pid, plist = %plan.plist.display(), "plyd is running; not replacing its LaunchAgent");
             let _ = writeln!(
                 report,
-                "plyd (pid {pid}) is running; {} was left unchanged so its sessions keep running. Stop it with \"Quit ply and stop sessions\" and run install-agent again to switch to {}",
+                "plyd (pid {pid}) is running; {} was left unchanged so its sessions keep running. To switch to {}, run \"Restart plyd\" in ply's command palette (⌘K; running sessions come back lost, to be resumed) or \"Quit ply and stop sessions\", or stop plyd with `{KILL_HINT}`; ply installs this plyd the next time it starts one",
                 plan.plist.display(),
                 plyd.display()
             );
@@ -329,6 +332,12 @@ mod tests {
         )
         .unwrap();
         assert!(report.contains("is running"), "{report}");
+        assert!(
+            report.contains("\"Restart plyd\"")
+                && report.contains("\"Quit ply and stop sessions\"")
+                && report.contains(KILL_HINT),
+            "the report names the palette commands and the launchctl fallback: {report}"
+        );
         assert!(
             calls.is_empty(),
             "a running plyd's agent is never booted out"

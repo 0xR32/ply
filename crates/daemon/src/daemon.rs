@@ -37,6 +37,9 @@ use crate::server::{control, data, hooks};
 /// C1 events buffered per connected client before a slow one is dropped.
 pub const EVENT_CAPACITY: usize = 1024;
 
+/// This build of plyd, `<package version>+<commit>` (see `build.rs`); `welcome.daemon_version` and `--version` carry it.
+pub const BUILD_ID: &str = env!("PLYD_BUILD_ID");
+
 /// The view size a pane starts with before any client attached: 80 × 24 cells of 8 × 16 pixels.
 pub const DEFAULT_GEOMETRY: Geometry = Geometry {
     cols: 80,

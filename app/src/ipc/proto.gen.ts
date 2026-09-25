@@ -392,7 +392,7 @@ export type Welcome = {
    */
   v: number;
   /**
-   * plyd build version (semver).
+   * plyd's build id, `<semver>+<commit>`: the 12-character commit hash it was built from (`t<unix seconds>` outside git).
    */
   daemon_version: string;
 };
@@ -806,7 +806,7 @@ export type Method = keyof Methods;
 export const PROTOCOL_VERSION = 1;
 
 /** C2 version sent in ATTACH. */
-export const C2_VERSION = 1;
+export const C2_VERSION = 2;
 
 /** C3 envelope version. */
 export const HOOK_VERSION = 1;

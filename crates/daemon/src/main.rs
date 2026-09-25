@@ -95,7 +95,7 @@ fn main() -> ExitCode {
             ExitCode::from(2)
         }
         Ok(Mode::Version) => {
-            println!("plyd {}", env!("CARGO_PKG_VERSION"));
+            println!("plyd {}", ply_daemon::daemon::BUILD_ID);
             ExitCode::SUCCESS
         }
         Ok(Mode::Help) => {
@@ -206,7 +206,7 @@ fn serve(foreground: bool, run_dir: Option<PathBuf>) -> anyhow::Result<()> {
     init_logging(&paths.log_dir, foreground)?;
     let _lock = InstanceLock::acquire(&paths.lock())?;
     tracing::info!(
-        version = env!("CARGO_PKG_VERSION"),
+        version = ply_daemon::daemon::BUILD_ID,
         data_dir = %paths.data_dir.display(),
         sandboxed = paths.sandboxed,
         "plyd starting"

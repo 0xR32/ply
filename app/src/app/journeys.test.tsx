@@ -44,6 +44,7 @@ async function start(scenario: 'demo' | 'empty' = 'empty'): Promise<Journey> {
       layoutSaveDelayMs: 5,
       settingsSaveDelayMs: 5,
       reducedMotion: async () => true,
+      buildId: async () => null,
     }),
   );
   const root = createTestRoot({ width: 1440, height: 900, ...windowKeyListeners(store) });

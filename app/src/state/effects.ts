@@ -1,6 +1,6 @@
 import { type ControlClient, RequestError } from '../ipc/control-client';
 import { log } from '../ipc/log';
-import { readReducedMotion } from '../ipc/os';
+import { readBuildId, readReducedMotion } from '../ipc/os';
 import type { Layout, PaneCreateParams, Workspace } from '../ipc/proto.gen';
 import { terminalThemeFor } from '../theme/tokens';
 import type { Action, Event, NewPaneRequest } from './actions';
@@ -8,13 +8,17 @@ import type { AppState } from './reducer';
 import { isAlive, selectActiveTab, selectFocusedPane } from './selectors';
 import type { Store } from './store';
 
-/** Timing and OS hooks of the effects; tests shorten the delays and stub the reduce-motion read. */
+/** Timing and OS hooks of the effects; tests shorten the delays and stub the OS reads and the quit. */
 export interface EffectsOptions {
   client: ControlClient;
   layoutSaveDelayMs?: number;
   settingsSaveDelayMs?: number;
   noticeMs?: number;
   reducedMotion?: () => Promise<boolean>;
+  /** The app's build id (`readBuildId`); `null` when unknown. */
+  buildId?: () => Promise<string | null>;
+  /** Ends the app after "Quit ply and stop sessions"; defaults to `process.exit(0)`, as GPUIX does when the window closes. */
+  quit?: () => void;
 }
 
 function message(error: unknown): string {
@@ -52,6 +56,7 @@ function layoutOf(state: AppState): Layout {
 /** Connects the store to plyd: the only place that calls ipc (spec 9.2). Returns a function that stops it all. */
 export function startEffects(store: Store, options: EffectsOptions): () => void {
   const { client } = options;
+  const quit = options.quit ?? (() => process.exit(0));
   const layoutDelay = options.layoutSaveDelayMs ?? 250;
   const settingsDelay = options.settingsSaveDelayMs ?? 300;
   const noticeMs = options.noticeMs ?? 5_000;
@@ -189,6 +194,25 @@ export function startEffects(store: Store, options: EffectsOptions): () => void 
           .request('pane.close', { pane_id: action.paneId, kill: true })
           .catch((error) => failed('Closing the pane', error));
         break;
+      case 'daemon/restart':
+        client
+          .request('daemon.shutdown', { kill_panes: false })
+          .then(() => log('info', 'plyd stops; the next connect starts the current build'))
+          .catch((error) => failed('Restarting plyd', error));
+        break;
+      case 'daemon/quit':
+        client
+          .request('daemon.shutdown', { kill_panes: true })
+          .then(() => {
+            log('info', 'plyd stops every session; quitting');
+            quit();
+          })
+          .catch((error) => {
+            // With plyd gone there is no session left to stop.
+            if (error instanceof RequestError && error.code === 'disconnected') quit();
+            else failed('Stopping the sessions', error);
+          });
+        break;
       case 'command':
         if (action.id === 'pane.terminalHere') {
           const cwd = selectFocusedPane(prev)?.cwd ?? next.workspace?.path;
@@ -244,6 +268,9 @@ export function startEffects(store: Store, options: EffectsOptions): () => void 
   (options.reducedMotion ?? readReducedMotion)()
     .then((value) => dispatch({ type: 'env/reducedMotion', value }))
     .catch((error) => log('warn', 'reading reduce motion failed', { error: message(error) }));
+  (options.buildId ?? readBuildId)()
+    .then((value) => dispatch({ type: 'env/buildId', value }))
+    .catch((error) => log('warn', 'reading the build id failed', { error: message(error) }));
 
   return () => {
     stopped = true;

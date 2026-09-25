@@ -65,7 +65,8 @@ export type Overlay =
   | { kind: 'palette' }
   | { kind: 'new-pane'; target: 'pane' | 'tab' }
   | { kind: 'settings' }
-  | { kind: 'close-confirm'; paneId: number };
+  | { kind: 'close-confirm'; paneId: number }
+  | { kind: 'quit-confirm' };
 
 /** What the new-pane form asks for; effects turn it into `pane.create` (`cwd` absolute, `worktree` Claude only). */
 export interface NewPaneRequest {
@@ -102,9 +103,15 @@ export type Action =
   | { type: 'pane/created'; pane: Pane }
   | { type: 'pane/createFailed'; message: string }
   | { type: 'pane/closeConfirmed'; paneId: number }
+  /** "Restart plyd": `daemon.shutdown {kill_panes:false}`; the launcher starts the build in `target/` on the reconnect. */
+  | { type: 'daemon/restart' }
+  /** "Quit ply and stop sessions", confirmed: `daemon.shutdown {kill_panes:true}`, then the app quits. */
+  | { type: 'daemon/quit' }
   | { type: 'overlay/open'; overlay: Overlay }
   | { type: 'overlay/close' }
   | { type: 'settings/change'; settings: Settings }
   | { type: 'notice/show'; text: string }
   | { type: 'notice/clear'; id: number }
-  | { type: 'env/reducedMotion'; value: boolean };
+  | { type: 'env/reducedMotion'; value: boolean }
+  /** The app's own build id (`<version>+<commit>`), compared with `welcome.daemon_version`; `null` when unknown. */
+  | { type: 'env/buildId'; value: string | null };
