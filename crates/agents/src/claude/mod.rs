@@ -32,8 +32,11 @@ pub const ENV_FORCE_SYNC_OUTPUT: &str = "CLAUDE_CODE_FORCE_SYNC_OUTPUT";
 /// A `running` Claude pane with a silent pty and no hook for this long becomes `idle` (R17).
 pub const QUIET_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// `Notification.notification_type` of a permission dialog; every other type means the CLI waits for input (spec 6.3).
+/// `Notification.notification_type` of a permission dialog: `waiting_permission` (Ruling R46).
 pub const PERMISSION_PROMPT: &str = "permission_prompt";
+
+/// `Notification.notification_type` Claude sends after about 60 s at its prompt; the pane stays `idle`, "your turn" (Ruling R46).
+pub const IDLE_PROMPT: &str = "idle_prompt";
 
 /// The Claude Code adapter; see [`crate::adapter`] for the contract.
 #[derive(Debug, Clone, Copy, Default)]
@@ -200,9 +203,16 @@ impl ClaudeSession {
                 }));
             }
             "Notification" => {
-                if str_field(payload, "notification_type") != Some(PERMISSION_PROMPT) {
-                    let detail = str_field(payload, "message").map(str::to_owned);
-                    signals.push(status(StatusSignal::InputRequested { detail }));
+                let detail = str_field(payload, "message").map(str::to_owned);
+                match str_field(payload, "notification_type") {
+                    Some(PERMISSION_PROMPT) => {
+                        signals.push(status(StatusSignal::PermissionRequested {
+                            call: None,
+                            detail,
+                        }));
+                    }
+                    Some(IDLE_PROMPT) => {}
+                    _ => signals.push(status(StatusSignal::InputRequested { detail })),
                 }
             }
             "Stop" | "StopFailure" => signals.push(status(StatusSignal::TurnComplete)),

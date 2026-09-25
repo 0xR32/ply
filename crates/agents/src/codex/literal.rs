@@ -5,6 +5,17 @@ use serde_json::{Map, Number, Value};
 
 const MAX_DEPTH: usize = 64;
 
+/// The offset of the first byte at or after `start` that is not whitespace or a `//` or `/* */` comment.
+pub(crate) fn skip_space(src: &str, start: usize) -> usize {
+    let mut reader = Reader {
+        src: src.as_bytes(),
+        text: src,
+        pos: start,
+    };
+    reader.skip_space();
+    reader.pos
+}
+
 /// The literal starting at byte `start` of `src` and the byte offset just past it; `None` for anything that is not a literal.
 pub(crate) fn parse_literal(src: &str, start: usize) -> Option<(Value, usize)> {
     let mut reader = Reader {

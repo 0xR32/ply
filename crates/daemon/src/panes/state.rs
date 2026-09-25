@@ -9,8 +9,8 @@
 //! | every live state | Ready (Claude SessionStart but a compaction's · Codex first output byte) | `idle` |
 //! | `idle`, `waiting_input` | PromptSubmitted (Claude UserPromptSubmit · Codex Enter typed) | `running` |
 //! | every live state but `waiting_permission` | ToolUse (Claude PreToolUse · PostToolUse) | `running` |
-//! | `running` | PermissionRequested (Claude PermissionRequest · Codex OSC 9 approval) | `waiting_permission` |
-//! | `running` (Claude also `idle`) | InputRequested (Codex OSC 9 question or plan · Claude Notification) | `waiting_input` |
+//! | `running` | PermissionRequested (Claude PermissionRequest or `permission_prompt` Notification · Codex OSC 9 approval) | `waiting_permission` |
+//! | `running` (Claude also `idle`) | InputRequested (Codex OSC 9 question or plan · Claude Notification but `permission_prompt` and `idle_prompt`, R46) | `waiting_input` |
 //! | `waiting_permission`, `waiting_input` | KeyTyped (any key typed in the pane, R17) | `running` |
 //! | `running` (Claude) | QuietTimeout (silent pty, no hook for 5 s, R17) | `idle` |
 //! | `waiting_permission` | CallSettled for the pending call (PostToolUse, PostToolUseFailure, PermissionDenied) | `running` |

@@ -149,6 +149,7 @@ impl Agent {
             unknown_rollout_records = stats.unknown_rollout_records,
             malformed_rollout_lines = stats.malformed_rollout_lines,
             unreadable_progress = stats.unreadable_progress,
+            forgotten_turns = stats.forgotten_turns,
             "agent session finished"
         );
     }

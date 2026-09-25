@@ -36,6 +36,9 @@ pub const NOTIFICATION_CONDITION: &str = r#"tui.notification_condition="always""
 /// Registers the `update_plan` tool, off by default in 0.156.1, so progress has a source (R26, setting `codex_plan_tool`).
 pub const PLAN_TOOL: &str = "tools.update_plan.enabled=true";
 
+/// Notify threads a session remembers until a rollout names one; beyond it the oldest is forgotten and counted.
+pub const PENDING_TURNS: usize = 8;
+
 /// The Codex adapter; see [`crate::adapter`] for the contract.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct CodexAdapter;
@@ -155,7 +158,7 @@ pub fn toml_string(s: &str) -> String {
 pub struct CodexSession {
     meta: SessionMeta,
     bound: Option<String>,
-    pending_turn: Option<String>,
+    pending_turns: Vec<String>,
     progress: Option<Progress>,
     stats: SessionStats,
 }
@@ -180,6 +183,18 @@ impl CodexSession {
         self.bound.as_deref()
     }
 
+    /// Keeps a notify's thread until a rollout names it; the title-generation turn's thread never gets one (R28).
+    fn remember_turn(&mut self, thread: &str) {
+        if self.pending_turns.iter().any(|t| t == thread) {
+            return;
+        }
+        if self.pending_turns.len() == PENDING_TURNS {
+            self.pending_turns.remove(0);
+            self.stats.forgotten_turns += 1;
+        }
+        self.pending_turns.push(thread.to_owned());
+    }
+
     fn on_notify(&mut self, envelope: &HookEnvelope) -> Result<Vec<AdapterSignal>> {
         if envelope.cli != AgentCli::Codex {
             return Err(Error::WrongCli {
@@ -196,7 +211,7 @@ impl CodexSession {
             Some(thread) if *thread == notify.thread_id => vec![status(StatusSignal::TurnComplete)],
             Some(_) => vec![],
             None => {
-                self.pending_turn = Some(notify.thread_id.clone());
+                self.remember_turn(&notify.thread_id);
                 vec![AdapterSignal::FindRollout {
                     thread_id: notify.thread_id,
                 }]
@@ -218,9 +233,10 @@ impl CodexSession {
                 if changed {
                     signals.push(AdapterSignal::Meta(self.meta.clone()));
                 }
-                if self.pending_turn.take().as_deref() == Some(meta.thread_id.as_str()) {
+                if self.pending_turns.contains(&meta.thread_id) {
                     signals.push(status(StatusSignal::TurnComplete));
                 }
+                self.pending_turns.clear();
             }
             RolloutRecord::TurnContext(context) => {
                 let mut changed = false;

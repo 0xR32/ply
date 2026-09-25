@@ -12,7 +12,7 @@ use crate::adapter::str_field;
 use crate::error::{Error, Result, invalid, json};
 use crate::plan::{ItemStatus, progress_of};
 
-use super::literal::parse_literal;
+use super::literal::{parse_literal, skip_space};
 
 /// Longest rollout line kept; longer lines (inline images) are skipped without being buffered.
 pub const MAX_LINE_BYTES: usize = 8 << 20;
@@ -170,13 +170,11 @@ fn last_update_plan_literal(input: &str) -> Option<Value> {
     let needle = "tools.update_plan";
     let mut found = None;
     for (at, _) in input.match_indices(needle) {
-        let rest = &input[at + needle.len()..];
-        let open = rest.len() - rest.trim_start().len();
-        if !rest[open..].starts_with('(') {
+        let open = skip_space(input, at + needle.len());
+        if !input[open..].starts_with('(') {
             continue;
         }
-        let start = at + needle.len() + open + 1;
-        if let Some((value, _)) = parse_literal(input, start) {
+        if let Some((value, _)) = parse_literal(input, open + 1) {
             found = Some(value);
         }
     }

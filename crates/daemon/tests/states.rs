@@ -163,9 +163,9 @@ fn tool_use_runs_the_pane_from_idle_and_waiting_input() {
     e.next(id, Running);
     e.claude_hook(&fake, id, "Stop", json!({}));
     e.next(id, Idle);
-    let idle_prompt =
-        json!({"message": "Claude is waiting for your input", "notification_type": "idle_prompt"});
-    e.claude_hook(&fake, id, "Notification", idle_prompt);
+    let question =
+        json!({"message": "Claude needs your answer", "notification_type": "elicitation_dialog"});
+    e.claude_hook(&fake, id, "Notification", question);
     e.next(id, WaitingInput);
     e.claude_hook(&fake, id, "PostToolUse", write_call(Some("toolu_example1")));
     e.next(id, Running);
@@ -238,25 +238,39 @@ fn any_key_typed_or_an_answer_moves_a_waiting_pane_to_running() {
 }
 
 #[test]
-fn f1_a_notification_waits_for_input_from_idle_and_a_permission_prompt_one_changes_nothing() {
+fn f1_notifications_ask_for_permission_or_input_but_idle_prompt_leaves_the_pane_idle() {
     let mut e = env("st-notif");
     let (id, fake) = e.claude();
     e.claude_hook(&fake, id, "UserPromptSubmit", json!({"prompt": "go"}));
     e.next(id, Running);
     let permission = json!({"message": "Claude needs your permission to use Write", "notification_type": "permission_prompt"});
+    e.claude_hook(&fake, id, "Notification", permission.clone());
+    let (s, _) = next_status(&mut e.c, id, WAIT);
+    assert_eq!(
+        (s.status, s.detail.as_deref()),
+        (
+            WaitingPermission,
+            Some("Claude needs your permission to use Write")
+        ),
+        "R46: a permission prompt without its PermissionRequest hook still asks"
+    );
     e.claude_hook(&fake, id, "Notification", permission);
     no_status(&mut e.c, id, Duration::from_millis(300));
+    e.type_raw(id, b"1");
+    e.next(id, Running);
     e.claude_hook(&fake, id, "Stop", json!({}));
     e.next(id, Idle);
     let idle_prompt =
         json!({"message": "Claude is waiting for your input", "notification_type": "idle_prompt"});
     e.claude_hook(&fake, id, "Notification", idle_prompt);
+    no_status(&mut e.c, id, Duration::from_millis(300));
+    assert_eq!(e.listed(id)["status"], "idle", "R46: still your turn");
+    let question =
+        json!({"message": "Claude needs your answer", "notification_type": "elicitation_dialog"});
+    e.claude_hook(&fake, id, "Notification", question);
     let (s, took) = next_status(&mut e.c, id, WAIT);
     assert_eq!(s.status, WaitingInput);
-    assert_eq!(
-        s.detail.as_deref(),
-        Some("Claude is waiting for your input")
-    );
+    assert_eq!(s.detail.as_deref(), Some("Claude needs your answer"));
     eprintln!("F1 Notification → waiting_input: {took:?} (fake CLI included)");
     assert!(took < F1, "F1: {took:?}");
 }

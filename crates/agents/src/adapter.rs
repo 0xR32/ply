@@ -155,14 +155,14 @@ pub enum StatusSignal {
     PromptSubmitted,
     /// Any live state except `waiting_permission` → `running`: Claude PreToolUse or PostToolUse.
     ToolUse(ToolCall),
-    /// `running` → `waiting_permission`: Claude PermissionRequest (with its call), Codex OSC 9 approval (no call).
+    /// `running` → `waiting_permission`: Claude PermissionRequest (with its call) or `permission_prompt` Notification, Codex OSC 9 approval (no call).
     PermissionRequested {
         /// The tool call the prompt is for, used to match [`StatusSignal::CallSettled`].
         call: Option<ToolCall>,
         /// One line for the pane header, e.g. the tool name or the OSC 9 text.
         detail: Option<String>,
     },
-    /// `running` (and for Claude `idle`) → `waiting_input`: Codex OSC 9 question or plan prompt, Claude non-permission Notification.
+    /// `running` (and for Claude `idle`) → `waiting_input`: Codex OSC 9 question or plan prompt, a Claude Notification but `permission_prompt` and `idle_prompt` (R46).
     InputRequested {
         /// One line for the pane header (the notification message).
         detail: Option<String>,
@@ -224,6 +224,8 @@ pub struct SessionStats {
     pub malformed_rollout_lines: u64,
     /// Claude TodoWrite/Task-tool calls whose input could not be read (the plan kept its value); Codex's count as malformed lines.
     pub unreadable_progress: u64,
+    /// Codex turn-complete notifies forgotten while waiting for their rollout, beyond the threads a session remembers.
+    pub forgotten_turns: u64,
 }
 
 /// Per-pane interpreter of one CLI's signals; plyd owns one per agent pane and calls it from one task at a time.

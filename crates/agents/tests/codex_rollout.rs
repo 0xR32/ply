@@ -183,6 +183,13 @@ fn update_plan_edge_cases() {
                await tools.update_plan ({ plan: [ {step: `a`, status: \"completed\"}, {step: 'b', status: 'in_progress'}, ] });";
     let plan = parse_update_plan(&exec(two)).unwrap().unwrap();
     assert_eq!(plan.steps.len(), 2);
+    for commented in [
+        "await tools.update_plan /* the plan */ ({plan: [{step: 'a', status: 'pending'}]});",
+        "await tools.update_plan // the plan\n  ({plan: [{step: 'a', status: 'pending'}]});",
+    ] {
+        let plan = parse_update_plan(&exec(commented)).unwrap().unwrap();
+        assert_eq!(plan.steps.len(), 1, "{commented}");
+    }
 
     assert!(
         parse_update_plan(&exec("const r = await tools.exec_command({cmd:\"ls\"});"))
@@ -392,6 +399,30 @@ fn a_notify_before_its_rollout_completes_the_turn_once_bound() {
             .unwrap()
             .contains(&TURN_COMPLETE)
     );
+}
+
+#[test]
+fn a_second_notify_before_binding_keeps_the_first_threads_turn() {
+    for order in [
+        ["notify-turn.json", "notify-title-turn.json"],
+        ["notify-title-turn.json", "notify-turn.json"],
+    ] {
+        let mut s = session(None);
+        for file in order {
+            let signals = s.handle(AgentEvent::Hook(&notify(file))).unwrap();
+            assert!(
+                matches!(signals.as_slice(), [AdapterSignal::FindRollout { .. }]),
+                "{signals:?}"
+            );
+        }
+        let first = lines("rollout-approval-and-resume-source.jsonl").remove(0);
+        let signals = s.handle(AgentEvent::RolloutLine(&first)).unwrap();
+        assert!(
+            signals.contains(&TURN_COMPLETE),
+            "{order:?}: the real thread's turn survives the title turn's notify: {signals:?}"
+        );
+        assert_eq!(s.stats().forgotten_turns, 0);
+    }
 }
 
 #[test]

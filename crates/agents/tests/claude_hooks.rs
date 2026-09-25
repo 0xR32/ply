@@ -110,8 +110,8 @@ fn each_registered_event_maps_to_its_spec_6_3_signal() {
         ),
         (
             "Notification",
-            "Notification_idle_prompt.json",
-            "InputRequested",
+            "Notification_permission_prompt.json",
+            "PermissionRequested",
         ),
         ("Stop", "Stop.json", "TurnComplete"),
         ("SessionEnd", "SessionEnd.json", "SessionEnded"),
@@ -182,27 +182,41 @@ fn permission_request_carries_the_call_that_post_tool_use_settles() {
 }
 
 #[test]
-fn permission_prompt_notifications_leave_the_status_alone() {
+fn notifications_ask_for_permission_or_input_and_idle_prompt_asks_for_nothing() {
     let mut s = session();
-    assert!(
+    assert_eq!(
         statuses(&feed(
             &mut *s,
             "Notification",
             "Notification_permission_prompt.json"
-        ))
-        .is_empty()
-    );
-    let idle = statuses(&feed(
-        &mut *s,
-        "Notification",
-        "Notification_idle_prompt.json",
-    ));
-    assert_eq!(
-        idle,
-        [StatusSignal::InputRequested {
-            detail: Some("Claude is waiting for your input".into())
+        )),
+        [StatusSignal::PermissionRequested {
+            call: None,
+            detail: Some("Claude needs your permission".into())
         }]
     );
+    assert!(
+        statuses(&feed(
+            &mut *s,
+            "Notification",
+            "Notification_idle_prompt.json",
+        ))
+        .is_empty(),
+        "R46: an idle pane stays your turn"
+    );
+    let mut question = fixture("Notification_idle_prompt.json");
+    question["notification_type"] = json!("elicitation_dialog");
+    question["message"] = json!("Claude needs your answer");
+    let signals = s
+        .handle(AgentEvent::Hook(&envelope("Notification", question)))
+        .unwrap();
+    assert_eq!(
+        statuses(&signals),
+        [StatusSignal::InputRequested {
+            detail: Some("Claude needs your answer".into())
+        }]
+    );
+    assert_eq!(s.stats().unknown_hook_events, 0);
 }
 
 #[test]

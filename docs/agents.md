@@ -142,6 +142,11 @@ working directory the other hooks report instead.
 - Every payload carries `session_id`, `transcript_path`, `cwd`,
   `permission_mode` and `hook_event_name`; SessionStart carries `model`.
 - `Notification.notification_type` is `permission_prompt` or `idle_prompt`.
+  Claude sends `idle_prompt` after about 60 s at its prompt, so it changes no
+  status: the pane stays `idle`, "your turn" (Ruling R46). `permission_prompt`
+  asks for permission (it follows the PermissionRequest hook, which has already
+  done so, and stands in for it if that hook got lost); any other type asks for
+  input.
 - No PermissionRequest hook, silent or deciding, changes the dialog, and the
   user's own hooks still run beside ply's. A manual deny fires no hook,
   sometimes not even Stop.
@@ -243,9 +248,12 @@ exists (Ruling R28): a notify for the bound thread completes the turn, a notify
 for another thread does nothing, and a notify that arrives before any thread is
 bound asks plyd to look for `rollout-*-<thread-id>.jsonl`
 (`AdapterSignal::FindRollout`) and completes the turn only when that thread's
-`session_meta` binds the pane
+`session_meta` binds the pane. Every thread notified before the binding is
+remembered (up to `PENDING_TURNS`, 8; older ones are forgotten and counted as
+`forgotten_turns`), so the title turn's notify cannot hide the real one's
 (`title_turn_notify_is_ignored_and_the_real_thread_binds`,
-`a_notify_before_its_rollout_completes_the_turn_once_bound`).
+`a_notify_before_its_rollout_completes_the_turn_once_bound`,
+`a_second_notify_before_binding_keeps_the_first_threads_turn`).
 
 ### OSC 9
 
@@ -341,8 +349,9 @@ parsers stay for the versions that do.
 - in code mode, a `custom_tool_call` named `exec` whose JavaScript `input`
   calls `tools.update_plan({…})`. A small reader
   (`crates/agents/src/codex/literal.rs`) takes the object literal: unquoted
-  keys, `'`, `"` and backtick strings, trailing commas, comments, `undefined`,
-  nesting to depth 64. Of several calls in one input the last wins; a call that
+  keys, `'`, `"` and backtick strings, trailing commas, comments (also between
+  `tools.update_plan` and its `(`), `undefined`, nesting to depth 64. Of
+  several calls in one input the last wins; a call that
   passes no literal (`tools.update_plan(plan)`) is an error.
 
 An unknown status counts as `pending`.
@@ -389,8 +398,8 @@ use the same vocabulary. The table lives in
 | any live status | `Ready` | Claude SessionStart (not the one after a compaction) · Codex's first pty output byte | `idle` |
 | `idle`, `waiting_input` | `PromptSubmitted` | Claude UserPromptSubmit · Enter typed in a Codex pane | `running` |
 | any live status but `waiting_permission` | `ToolUse` | Claude PreToolUse or PostToolUse | `running` |
-| `running` | `PermissionRequested` | Claude PermissionRequest · Codex OSC 9 approval | `waiting_permission` |
-| `running` (Claude also `idle`) | `InputRequested` | Codex OSC 9 question or plan prompt · a Claude Notification that is not `permission_prompt` | `waiting_input` |
+| `running` | `PermissionRequested` | Claude PermissionRequest or a `permission_prompt` Notification · Codex OSC 9 approval | `waiting_permission` |
+| `running` (Claude also `idle`) | `InputRequested` | Codex OSC 9 question or plan prompt · a Claude Notification that is neither `permission_prompt` nor `idle_prompt` (R46) | `waiting_input` |
 | `waiting_permission` | `CallSettled`, same call | Claude PostToolUse, PostToolUseFailure or PermissionDenied | `running` |
 | `waiting_permission`, `waiting_input` | `KeyTyped` | any key typed in the pane | `running` |
 | `running` | `TurnComplete` | Claude Stop or StopFailure · Codex notify for the bound thread · Codex OSC 9 of any other body | `idle` |
