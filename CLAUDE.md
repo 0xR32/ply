@@ -3,7 +3,7 @@
 ## What this repository is
 
 **ply**: a local macOS app that runs the real `claude` (Claude Code) and `codex`
-(Codex CLI) TUIs in terminal panes — tabs across the top, several panes per tab —
+(Codex CLI) TUIs in terminal panes — tabs across the top, up to four panes per tab —
 and adds what a terminal multiplexer lacks: status per pane ("needs you", "your
 turn", running, exited), progress from the agent's own plan, the model the
 session reports, stored session history, and the CLIs' own worktrees.

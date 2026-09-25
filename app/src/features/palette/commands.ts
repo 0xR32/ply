@@ -3,7 +3,9 @@ import type { Action, CommandId } from '../../state/actions';
 import type { AppState } from '../../state/reducer';
 import {
   abbreviateHome,
+  FULL_TAB_NOTICE,
   isLost,
+  isTabFull,
   nextWaitingPane,
   panePlace,
   paneTitle,
@@ -28,6 +30,8 @@ export interface PaletteItem {
   keys: string;
   dot: ItemDot;
   actions: Action[];
+  /** Shown dimmed: running it only says why it cannot (a new pane in a full tab). */
+  unavailable?: boolean;
 }
 
 function command(id: CommandId, label: string, hint: string, dot: ItemDot): PaletteItem {
@@ -67,8 +71,15 @@ function commands(state: AppState): PaletteItem[] {
   const tab = selectActiveTab(state);
   const focused = selectFocusedPane(state);
   const place = focused ? panePlace(state, focused.id) : null;
+  const full = isTabFull(tab);
+  const unavailable = (item: PaletteItem): PaletteItem =>
+    full
+      ? { ...item, hint: `unavailable: ${FULL_TAB_NOTICE}`, dot: 'dim', unavailable: true }
+      : item;
   const items = [
-    command('pane.new', 'New pane', 'Claude Code, Codex or a shell, in this tab', 'accent'),
+    unavailable(
+      command('pane.new', 'New pane', 'Claude Code, Codex or a shell, in this tab', 'accent'),
+    ),
     command('tab.new', 'New tab', 'starts with one pane', 'accent'),
   ];
   const waitingId = selectWaitingCount(state) > 0 ? nextWaitingPane(state) : undefined;
@@ -85,7 +96,7 @@ function commands(state: AppState): PaletteItem[] {
     ? `pane ${place.pane} in ${abbreviateHome(here, home)}`
     : abbreviateHome(here, home);
   items.push(
-    command('pane.terminalHere', 'Terminal here', hereHint, 'dim'),
+    unavailable(command('pane.terminalHere', 'Terminal here', hereHint, 'dim')),
     command('pane.zoom', tab?.zoomed ? 'Unzoom pane' : 'Zoom pane', 'fill the tab, toggle', 'dim'),
     command('pane.next', 'Next pane', 'in this tab', 'dim'),
     command('pane.prev', 'Previous pane', 'in this tab', 'dim'),

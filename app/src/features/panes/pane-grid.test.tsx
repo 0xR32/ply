@@ -88,20 +88,86 @@ const demo = () =>
   );
 
 describe.if(hasNativeTestRenderer)('PaneGrid', () => {
-  test('lays out one main pane and a stack with the canvas metrics', () => {
-    const { renderer, unmount } = mountWithStore(grid, demo(), { width: 1440, height: 812 });
+  const W = 1440;
+  const H = 812;
+  const PAD = { x: 14, top: 2, bottom: 10 };
+  const GAP = 10;
+  const inner = { width: W - 2 * PAD.x, height: H - PAD.top - PAD.bottom };
+  const panesIn = (n: number) =>
+    makeState(
+      Array.from({ length: n }, (_, i) =>
+        makePane({ id: i + 1, position: i, cli: 'shell', title: `pane ${i + 1}` }),
+      ),
+    );
+
+  for (const n of [1, 2, 3]) {
+    test(`${n} ${n === 1 ? 'pane fills' : 'panes split'} the tab into equal full-height columns in position order`, () => {
+      const { renderer, unmount } = mountWithStore(grid, panesIn(n), { width: W, height: H });
+      try {
+        const width = (inner.width - (n - 1) * GAP) / n;
+        for (let i = 0; i < n; i++) {
+          const f = frame(renderer, `pane-${i + 1}`);
+          expect(f.x).toBeCloseTo(PAD.x + i * (width + GAP), 0);
+          expect(f.y).toBe(PAD.top);
+          expect(f.width).toBeCloseTo(width, 0);
+          expect(f.height).toBe(inner.height);
+        }
+        expect(bounds(renderer, 'pane-1-focus').height).toBe(42);
+      } finally {
+        unmount();
+      }
+    });
+  }
+
+  test('4 panes form equal quadrants: top-left, top-right, bottom-left, bottom-right', () => {
+    const { renderer, unmount } = mountWithStore(grid, panesIn(4), { width: W, height: H });
     try {
-      const main = frame(renderer, 'pane-1');
-      const second = frame(renderer, 'pane-2');
-      const third = frame(renderer, 'pane-3');
-      expect([main.x, main.y, main.height]).toEqual([14, 2, 812 - 2 - 10]);
-      expect(1440 - (second.x + second.width)).toBe(14);
-      expect(second.x - (main.x + main.width)).toBe(10);
-      expect(third.y - (second.y + second.height)).toBe(10);
-      expect(second.height).toBeCloseTo(third.height, 0);
-      expect(main.width / second.width).toBeCloseTo(1.32, 1);
-      const header = bounds(renderer, 'pane-1-focus');
-      expect(header.height).toBe(42);
+      const width = (inner.width - GAP) / 2;
+      const height = (inner.height - GAP) / 2;
+      const at = [
+        [PAD.x, PAD.top],
+        [PAD.x + width + GAP, PAD.top],
+        [PAD.x, PAD.top + height + GAP],
+        [PAD.x + width + GAP, PAD.top + height + GAP],
+      ];
+      at.forEach(([x, y], i) => {
+        const f = frame(renderer, `pane-${i + 1}`);
+        expect(f.x).toBeCloseTo(x as number, 0);
+        expect(f.y).toBeCloseTo(y as number, 0);
+        expect(f.width).toBeCloseTo(width, 0);
+        expect(f.height).toBeCloseTo(height, 0);
+      });
+    } finally {
+      unmount();
+    }
+  });
+
+  test('closing a quadrant re-flows the other three into columns', async () => {
+    const { store, renderer, unmount } = mountWithStore(grid, panesIn(4), {
+      width: W,
+      height: H,
+    });
+    try {
+      const kept = renderer.findByTestId('pane-3')?.id;
+      store.dispatch({ type: 'daemon/event', event: { e: 'pane.removed', p: { pane_id: 2 } } });
+      await Bun.sleep(10);
+      renderer.flush();
+      expect(renderer.findByTestId('pane-3')?.id).toBe(kept);
+      expect(renderer.findByTestId('pane-2')).toBeUndefined();
+      const width = (inner.width - 2 * GAP) / 3;
+      [1, 3, 4].forEach((id, i) => {
+        const f = frame(renderer, `pane-${id}`);
+        expect(f.x).toBeCloseTo(PAD.x + i * (width + GAP), 0);
+        expect(f.height).toBe(inner.height);
+      });
+    } finally {
+      unmount();
+    }
+  });
+
+  test('the second tab is not painted', () => {
+    const { renderer, unmount } = mountWithStore(grid, demo(), { width: W, height: H });
+    try {
       expect(renderer.findByTestId('pane-4')).toBeUndefined();
     } finally {
       unmount();

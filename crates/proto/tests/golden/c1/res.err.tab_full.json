@@ -1,0 +1,9 @@
+{
+  "t": "res",
+  "id": 7,
+  "ok": false,
+  "err": {
+    "code": "tab_full",
+    "msg": "tab 3 already holds 4 panes"
+  }
+}

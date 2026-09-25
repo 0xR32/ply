@@ -212,7 +212,6 @@ export const tokens = {
     gridPaddingX: 14,
     gridPaddingTop: 2,
     gridPaddingBottom: 10,
-    mainColumnGrow: 1.32,
     overlayTop: 110,
     paletteWidth: 640,
     paletteHeight: 420,

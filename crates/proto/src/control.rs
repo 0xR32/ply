@@ -532,6 +532,8 @@ pub enum ErrorCode {
     SpawnFailed,
     /// plyd is shutting down and accepts no new work.
     ShuttingDown,
+    /// `pane.create` into a tab that already holds [`crate::pane::MAX_PANES_PER_TAB`] panes (Ruling R56).
+    TabFull,
     /// Anything else; details are in plyd's log.
     Internal,
 }

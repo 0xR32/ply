@@ -3,8 +3,8 @@
 ply is a macOS app that runs the real `claude` (Claude Code) and `codex` (Codex CLI) terminal UIs side by side, each
 in its own terminal pane, and adds what a terminal multiplexer lacks: a status per pane (running, needs permission,
 needs input, your turn, exited), progress from the agent's own plan, a stored history of every session, the CLIs' own
-worktrees, and a keyboard-first layout of tabs with several panes each. The agents keep running when the window
-closes.
+worktrees, and a keyboard-first layout of tabs with up to four panes each (side by side up to three, quadrants at
+four). The agents keep running when the window closes.
 
 ply is **not** an LLM wrapper. It makes no network requests, calls no model API, holds no keys, rewrites no prompts,
 hands no transcripts between CLIs and never picks a model or effort level: those are changed inside the CLI session.

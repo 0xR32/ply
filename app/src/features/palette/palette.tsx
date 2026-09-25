@@ -104,7 +104,7 @@ export function Palette() {
         }}
       >
         <Dot color={dotColour(item.dot, chrome)} size={6} />
-        <Text color={tokens.text} weight={500}>
+        <Text color={item.unavailable ? tokens.text3 : tokens.text} weight={500}>
           {item.label}
         </Text>
         <Text color={tokens.text3} ellipsis>

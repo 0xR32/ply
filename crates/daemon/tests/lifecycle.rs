@@ -348,6 +348,56 @@ fn an_exiting_shell_reports_its_code_on_c1_and_c2() {
 }
 
 #[test]
+fn a_tab_takes_four_panes_and_refuses_a_fifth_by_create_or_by_layout() {
+    let sb = Sandbox::new("tab-full");
+    let _plyd = sb.start();
+    let (mut c, ws) = sb.control();
+    let first = c
+        .call(
+            "pane.create",
+            json!({"workspace_id": ws, "cli": "shell", "cwd": sb.home}),
+        )
+        .unwrap();
+    let tab = first["tab_id"].as_u64().unwrap();
+    for _ in 1..4 {
+        c.call(
+            "pane.create",
+            json!({"workspace_id": ws, "tab_id": tab, "cli": "shell", "cwd": sb.home}),
+        )
+        .unwrap();
+    }
+    let fifth = c
+        .call(
+            "pane.create",
+            json!({"workspace_id": ws, "tab_id": tab, "cli": "shell", "cwd": sb.home}),
+        )
+        .unwrap_err();
+    assert_eq!(fifth.code, ErrorCode::TabFull, "{}", fifth.msg);
+    let panes = c.call("pane.list", json!({"workspace_id": ws})).unwrap();
+    assert_eq!(
+        panes.as_array().unwrap().len(),
+        4,
+        "the refusal left no pane behind"
+    );
+    let elsewhere = sb.shell(&mut c, ws);
+    let mut layout = c.call("layout.get", json!({"workspace_id": ws})).unwrap();
+    let before = layout.clone();
+    layout["tabs"][0]["pane_ids"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!(elsewhere));
+    layout["tabs"].as_array_mut().unwrap().truncate(1);
+    let refused = c
+        .call("layout.save", json!({"workspace_id": ws, "layout": layout}))
+        .unwrap_err();
+    assert_eq!(refused.code, ErrorCode::BadRequest);
+    assert_eq!(
+        c.call("layout.get", json!({"workspace_id": ws})).unwrap(),
+        before
+    );
+}
+
+#[test]
 fn an_unwritable_config_toml_is_reported_but_the_palette_and_settings_still_apply() {
     let sb = Sandbox::new("cfg-ro");
     std::fs::create_dir_all(sb.ply_home.join("config.toml.tmp")).unwrap();

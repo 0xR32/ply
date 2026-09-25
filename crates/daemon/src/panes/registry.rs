@@ -2,7 +2,7 @@
 //!
 //! Every C1 method reads or changes state here, under one lock held only for in-memory work and a few short SQLite
 //! writes. Pane ids are the `panes` row ids, so they never repeat and double as the C2 `pane_id` (spec 4.2). A pane's
-//! `position` is its index in its tab (0 is the main pane); positions are renumbered whenever a pane leaves a tab,
+//! `position` is its index in its tab, at most [`MAX_PANES_PER_TAB`] of them; positions are renumbered whenever a pane leaves a tab,
 //! and a tab disappears with its last open pane. Tabs are named after the basename of their first pane's directory
 //! (Ruling R3); one default workspace, the home directory, exists after the first start. Events for C1
 //! (`pane.added`, `pane.removed`, `pane.status`, `pane.meta`, `pane.exit`) are broadcast from here, after the change
@@ -16,8 +16,8 @@ use ply_proto::control::{
     ErrorBody, ErrorCode, Event, PaneExit, PaneMeta, PaneProgress, PaneRemoved, PaneStatusChanged,
 };
 use ply_proto::pane::{
-    Cli, Layout, Pane, PaneId, PaneStatus, Progress, Session, Settings, Tab, TerminalTheme,
-    UnixSeconds, Workspace,
+    Cli, Layout, MAX_PANES_PER_TAB, Pane, PaneId, PaneStatus, Progress, Session, Settings, Tab,
+    TerminalTheme, UnixSeconds, Workspace,
 };
 use tokio::sync::{broadcast, mpsc};
 
@@ -337,7 +337,7 @@ impl Registry {
     }
 
     /// Adds a pane record (no event yet) in tab `tab_id`, at its end, or in a new tab named after `cwd`.
-    /// Fails with `not_found` for an unknown workspace or tab, `internal` if SQLite fails.
+    /// Fails with `not_found` for an unknown workspace or tab, `tab_full` for a tab of [`MAX_PANES_PER_TAB`], `internal` if SQLite fails.
     pub fn insert_pane(&mut self, new: &NewPane<'_>, now: UnixSeconds) -> MethodResult<Pane> {
         let NewPane {
             workspace_id,
@@ -361,6 +361,12 @@ impl Registry {
                             format!("no tab {id} in this workspace"),
                         )
                     })?;
+                if tab.panes.len() >= MAX_PANES_PER_TAB {
+                    return Err(refuse(
+                        ErrorCode::TabFull,
+                        format!("tab {id} already holds {MAX_PANES_PER_TAB} panes"),
+                    ));
+                }
                 (id, count(tab.panes.len()), false)
             }
             None => {
@@ -754,7 +760,7 @@ impl Registry {
     }
 
     /// Applies tab names, order, focus, zoom and pane placement; unnamed panes stay put after the named, empty tabs go.
-    /// Fails with `not_found` for an unknown workspace, `bad_request` for a tab or pane outside it or a repeated pane.
+    /// Fails with `not_found` for an unknown workspace, `bad_request` for a tab or pane outside it, a repeated pane or a tab of more than [`MAX_PANES_PER_TAB`]; a refusal changes nothing.
     pub fn save_layout(&mut self, workspace_id: u64, layout: &Layout) -> MethodResult<()> {
         self.require_workspace(workspace_id)?;
         let mut named = HashSet::new();
@@ -797,13 +803,30 @@ impl Registry {
                 ids.push(t.row.id);
             }
         }
+        let mut lists: HashMap<u64, Vec<PaneId>> = HashMap::new();
         for id in &ids {
-            let wanted = layout.tabs.iter().find(|t| t.id == *id);
-            let Some(tab) = self.tabs.get_mut(id) else {
+            let Some(tab) = self.tabs.get(id) else {
                 continue;
             };
+            let wanted = layout.tabs.iter().find(|t| t.id == *id);
             let mut panes: Vec<PaneId> = wanted.map(|t| t.pane_ids.clone()).unwrap_or_default();
             panes.extend(tab.panes.iter().filter(|p| !named.contains(p)));
+            if panes.len() > MAX_PANES_PER_TAB {
+                return Err(refuse(
+                    ErrorCode::BadRequest,
+                    format!(
+                        "tab {id} would hold {} panes; at most {MAX_PANES_PER_TAB}",
+                        panes.len()
+                    ),
+                ));
+            }
+            lists.insert(*id, panes);
+        }
+        for id in &ids {
+            let wanted = layout.tabs.iter().find(|t| t.id == *id);
+            let (Some(tab), Some(panes)) = (self.tabs.get_mut(id), lists.remove(id)) else {
+                continue;
+            };
             tab.panes = panes;
             if let Some(t) = wanted {
                 tab.row.name.clone_from(&t.name);
@@ -1073,6 +1096,35 @@ mod tests {
         assert_eq!(sessions.len(), 2);
         assert!(sessions.iter().all(|s| s.closed_at.is_some()));
         assert!(reg.sessions(1, false).unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_tab_holds_at_most_four_panes() {
+        let (mut reg, _) = registry();
+        let a = shell(&mut reg, None, "/Users/example/one");
+        for _ in 1..MAX_PANES_PER_TAB {
+            shell(&mut reg, Some(a.tab_id), "/Users/example/one");
+        }
+        let refused = reg
+            .insert_pane(&new_pane(Some(a.tab_id), "/Users/example/one"), 10)
+            .unwrap_err();
+        assert_eq!(refused.code, ErrorCode::TabFull);
+        assert_eq!(
+            reg.layout(1).unwrap().tabs[0].pane_ids.len(),
+            MAX_PANES_PER_TAB
+        );
+        let other = shell(&mut reg, None, "/Users/example/two");
+        let mut layout = reg.layout(1).unwrap();
+        layout.tabs[0].pane_ids.push(other.id);
+        layout.tabs.pop();
+        let before = reg.layout(1).unwrap();
+        assert_eq!(
+            reg.save_layout(1, &layout).unwrap_err().code,
+            ErrorCode::BadRequest,
+            "a fifth pane moved into a full tab"
+        );
+        assert_eq!(reg.layout(1).unwrap(), before, "nothing changed");
+        assert_eq!(reg.entry(other.id).unwrap().pane.tab_id, other.tab_id);
     }
 
     #[test]

@@ -8,6 +8,9 @@ use ts_rs::TS;
 /// Unique id of a pane: C1 names panes by it and C2 ATTACH carries it; ids stay below 2^53 so TypeScript numbers hold them.
 pub type PaneId = u64;
 
+/// Most panes one tab holds (Ruling R56): up to three side by side, four as quadrants; plyd refuses a fifth.
+pub const MAX_PANES_PER_TAB: usize = 4;
+
 /// Unix time in whole seconds, UTC.
 pub type UnixSeconds = u64;
 
@@ -78,7 +81,7 @@ pub struct Pane {
     pub workspace_id: u64,
     /// Tab the pane sits in.
     pub tab_id: u64,
-    /// 0-based place in its tab: 0 is the main pane, 1.. the stack from top to bottom.
+    /// 0-based place in its tab: columns left to right up to three, quadrants in reading order at four (R56).
     pub position: u32,
     /// Program the pane runs.
     pub cli: Cli,
@@ -144,7 +147,7 @@ pub struct Tab {
     pub name: String,
     /// 0-based order in the tab bar.
     pub position: u32,
-    /// Panes in position order: the first is the main pane.
+    /// Panes in position order, at most [`MAX_PANES_PER_TAB`].
     pub pane_ids: Vec<PaneId>,
     /// Pane that has focus in this tab.
     #[serde(default, skip_serializing_if = "Option::is_none")]

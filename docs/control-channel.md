@@ -198,7 +198,8 @@ In order, plyd:
    from its install layout without running it (`cli_too_old` below the minimum;
    an unknown version is logged and allowed; `docs/agents.md`);
 5. records the pane (`not_found` for an unknown workspace or a `tab_id` outside
-   it), writes `run/panes/<id>/` with the launch files and `launch.json`,
+   it; `tab_full` when that tab already holds `MAX_PANES_PER_TAB`, 4, panes,
+   counting any still spawning — Ruling R56), writes `run/panes/<id>/` with the launch files and `launch.json`,
    sizes a new terminal to the last view size any client attached with,
    starts the pane's task with the launch spec, and spawns the process
    (`spawn_failed`; `bad_request` when the adapter refuses a value, such as a
@@ -283,7 +284,8 @@ not plyd restarts; it is absent when unknown.
 Replaces the workspace's arrangement with `layout`:
 
 - every tab id must be a tab of this workspace, every pane id an open pane of
-  it, and no pane may appear twice, else `bad_request` and nothing changes;
+  it, no pane may appear twice, and no tab may end up with more than 4 panes
+  (R56), else `bad_request` and nothing changes;
 - tabs take the order of their `position` values; tabs the layout leaves out
   keep their relative order after the ones it names;
 - each named tab takes `name`, `zoomed` and the panes in `pane_ids` order,
@@ -358,7 +360,7 @@ Defined in `crates/proto/src/pane.rs`.
 | `id` | u64 | The pane id (its `panes` row id); also the C2 `pane_id` a terminal view attaches with. An id that was ever announced is never reused. |
 | `workspace_id` | u64 | |
 | `tab_id` | u64 | |
-| `position` | u32 | 0-based place in its tab: 0 is the main pane, then the stack from top to bottom. |
+| `position` | u32 | 0-based place in its tab, the order the app lays panes out in: columns left to right up to three, quadrants top-left, top-right, bottom-left, bottom-right at four. |
 | `cli` | `"claude"` \| `"codex"` \| `"shell"` | |
 | `cwd` | string | Working directory as last reported, absolute. |
 | `title` | string | The terminal title when the program set one, else `claude`, `codex` or the shell's name. Title changes travel on C2 (TITLE), not as C1 events. |
@@ -377,7 +379,7 @@ Defined in `crates/proto/src/pane.rs`.
 **`Workspace`** — `{id, path, name, opened_at}`; `path` is absolute and unique.
 
 **`Tab`** — `{id, name, position, pane_ids, focus_pane_id?, zoomed}`;
-`pane_ids` in position order, the first being the main pane.
+`pane_ids` in position order, at most 4 (`MAX_PANES_PER_TAB`).
 
 **`Layout`** — `{tabs, active_tab_id?}`.
 
@@ -427,6 +429,7 @@ protocol change.
 | `invalid_state` | The pane's state does not allow the request: `pane.answer` without a dialog, `pane.resume` on a pane that is not `lost`, a spawn with no palette after 5 s. | `pane.answer`, `pane.resume`, `pane.create` |
 | `spawn_failed` | The process could not start: pty, exec, the pane files or a missing launch spec. | `pane.create`, `pane.resume` |
 | `shutting_down` | plyd is stopping and takes no new work. | `pane.create`, `pane.resume` |
+| `tab_full` | The tab named by `tab_id` already holds 4 panes (`MAX_PANES_PER_TAB`, Ruling R56); open a new tab instead. `pane.resume` and R50's shell reopen reuse their pane, so they never meet it. | `pane.create` |
 | `internal` | Anything else, such as a failed SQLite or `config.toml` write (`theme.set` and `settings.set` have applied their values by then); the details are in plyd's log. | any method |
 
 The app's client adds two codes of its own, never sent by plyd: `disconnected`

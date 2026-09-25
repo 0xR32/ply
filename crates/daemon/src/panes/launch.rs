@@ -41,7 +41,7 @@ pub const PALETTE_WAIT: Duration = Duration::from_secs(5);
 pub const ADOPT_WAIT: Duration = Duration::from_secs(5);
 
 /// `pane.create`: validates, spawns, announces `pane.added` and returns the pane (see the module docs).
-/// Fails with `bad_request`, `not_found`, `cli_not_found`, `cli_too_old`, `invalid_state`, `spawn_failed`, `shutting_down`.
+/// Fails with `bad_request`, `not_found`, `tab_full`, `cli_not_found`, `cli_too_old`, `invalid_state`, `spawn_failed`, `shutting_down`.
 pub async fn create(shared: &Arc<Shared>, p: PaneCreateParams) -> MethodResult<Pane> {
     if shared.is_stopping() {
         return Err(refuse(ErrorCode::ShuttingDown, "plyd is shutting down"));

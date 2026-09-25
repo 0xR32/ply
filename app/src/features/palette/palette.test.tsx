@@ -85,6 +85,24 @@ describe('palette commands', () => {
     });
   });
 
+  test('in a full tab New pane and Terminal here show as unavailable and only explain why', () => {
+    const base = state();
+    const four = makeState(
+      [0, 1, 2, 3].map((i) => makePane({ id: i + 1, position: i })),
+      [{ id: 1, name: 'ply' }],
+      { overlay: { kind: 'palette' } },
+    );
+    const items = paletteItems(four, '', 0);
+    for (const id of ['pane.new', 'pane.terminalHere'] as const) {
+      const item = items.find((i) => i.id === id);
+      expect(item).toMatchObject({ unavailable: true, dot: 'dim' });
+      expect(item?.hint).toContain('This tab has 4 panes');
+      expect(item?.actions).toEqual([{ type: 'overlay/close' }, { type: 'command', id }]);
+    }
+    expect(items.find((i) => i.id === 'tab.new')?.unavailable).toBeUndefined();
+    expect(paletteItems(base, '', 0).find((i) => i.id === 'pane.new')?.unavailable).toBeUndefined();
+  });
+
   test('a query filters commands, tabs and panes by every word', () => {
     const items = paletteItems(state(), 'notes', 0);
     expect(items.map((i) => [i.section, i.label])).toEqual([

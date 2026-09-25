@@ -5,7 +5,13 @@ import type { Layout, PaneCreateParams, Workspace } from '../ipc/proto.gen';
 import { terminalThemeFor } from '../theme/tokens';
 import type { Action, Event, NewPaneRequest } from './actions';
 import type { AppState } from './reducer';
-import { isAlive, selectActiveTab, selectFocusedPane } from './selectors';
+import {
+  FULL_TAB_NOTICE,
+  isAlive,
+  isTabFull,
+  selectActiveTab,
+  selectFocusedPane,
+} from './selectors';
 import type { Store } from './store';
 
 /** Timing and OS hooks of the effects; tests shorten the delays and stub the OS reads and the quit. */
@@ -187,7 +193,11 @@ export function startEffects(store: Store, options: EffectsOptions): () => void 
           .catch((error) => failed('Resuming the session', error));
         break;
       case 'pane/create':
-        createPane(createParams(next, action.request), true);
+        if (action.request.target === 'pane' && isTabFull(selectActiveTab(next))) {
+          dispatch({ type: 'pane/createFailed', message: FULL_TAB_NOTICE });
+        } else {
+          createPane(createParams(next, action.request), true);
+        }
         break;
       case 'pane/closeConfirmed':
         client
@@ -215,6 +225,7 @@ export function startEffects(store: Store, options: EffectsOptions): () => void 
         break;
       case 'command':
         if (action.id === 'pane.terminalHere') {
+          if (isTabFull(selectActiveTab(next))) break;
           const cwd = selectFocusedPane(prev)?.cwd ?? next.workspace?.path;
           const params =
             cwd === undefined

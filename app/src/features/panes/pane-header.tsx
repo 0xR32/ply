@@ -106,7 +106,7 @@ function toneColours(tone: StatusTone, c: ChromeTheme): { color: string; backgro
   }
 }
 
-/** Props of `PaneHeader`; `position` is the 1-based place in the tab (main pane first). */
+/** Props of `PaneHeader`; `position` is the 1-based place in the tab, the grid's order. */
 export interface PaneHeaderProps {
   pane: PaneState;
   position: number;

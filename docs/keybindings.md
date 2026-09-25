@@ -95,6 +95,11 @@ are sent as KEY frames and plyd encodes them against the pane's modes
 - **A lost pane resumes by mouse or palette.** The Resume button of the strip
   under it and the palette's "Resume <pane>" command both send `pane.resume`;
   neither binds a key.
+- **A tab holds at most four panes** (Ruling R56): side by side up to three,
+  quadrants at four. In a full tab ⌘N and ⌘D open nothing and the status bar
+  says "This tab has 4 panes — ⌘T opens a new tab" for a few seconds; the
+  palette shows New pane and Terminal here as unavailable, and the new-pane
+  form never adds to a full tab. ⌘T is unaffected.
 - **plyd is replaced from the palette** (Ruling R53). "Restart plyd" stops it
   without the sessions and the app starts the build in `target/`; "Quit ply and stop
   sessions" asks first, then stops every pane's process and quits

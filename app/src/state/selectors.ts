@@ -1,4 +1,5 @@
 import { basename } from 'node:path';
+import { MAX_PANES_PER_TAB } from '../ipc/proto.gen';
 import type { Cli, Pane, Tab } from './actions';
 import type { AppState, PaneState } from './reducer';
 
@@ -83,6 +84,14 @@ export function statusView(pane: PaneState, shellName: string, nowSeconds: numbe
         : { tone: 'idle', label: 'Your turn', pulse: false };
   }
 }
+
+/** Whether `tab` holds the most panes a tab may (Ruling R56); plyd refuses another with `tab_full`. */
+export function isTabFull(tab: Pick<Tab, 'pane_ids'> | undefined): boolean {
+  return tab !== undefined && tab.pane_ids.length >= MAX_PANES_PER_TAB;
+}
+
+/** What ⌘N, ⌘D and the palette say instead of adding a pane to a full tab. */
+export const FULL_TAB_NOTICE = `This tab has ${MAX_PANES_PER_TAB} panes — ⌘T opens a new tab`;
 
 /** The tab shown in the grid, if any. */
 export function selectActiveTab(state: AppState): Tab | undefined {

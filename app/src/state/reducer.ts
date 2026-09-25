@@ -11,7 +11,14 @@ import type {
   Tab,
   Workspace,
 } from './actions';
-import { isAlive, nextWaitingPane, selectActiveTab, tabName } from './selectors';
+import {
+  FULL_TAB_NOTICE,
+  isAlive,
+  isTabFull,
+  nextWaitingPane,
+  selectActiveTab,
+  tabName,
+} from './selectors';
 
 /** A pane as the app holds it: the C1 record plus what only the app observes. */
 export interface PaneState extends Pane {
@@ -313,6 +320,7 @@ function runCommand(state: AppState, id: CommandId): AppState {
     case 'palette.open':
       return { ...state, overlay: { kind: 'palette' } };
     case 'pane.new':
+      if (isTabFull(tab)) return showNotice(state, FULL_TAB_NOTICE);
       return {
         ...state,
         overlay: { kind: 'new-pane', target: tab ? 'pane' : 'tab' },
@@ -360,7 +368,7 @@ function runCommand(state: AppState, id: CommandId): AppState {
     case 'font.reset':
       return withFontSize(state, baseFontSize);
     case 'pane.terminalHere':
-      return state;
+      return isTabFull(tab) ? showNotice(state, FULL_TAB_NOTICE) : state;
     default: {
       const digit = Number(id.slice('tab.go.'.length));
       const target = state.tabs[digit - 1];

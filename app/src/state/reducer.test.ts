@@ -2,8 +2,10 @@ import { describe, expect, test } from 'bun:test';
 import type { Action, Event } from './actions';
 import { type AppState, reduce } from './reducer';
 import {
+  FULL_TAB_NOTICE,
   formatElapsed,
   isLost,
+  isTabFull,
   nextWaitingPane,
   resumeHow,
   selectCliCounts,
@@ -351,6 +353,28 @@ describe('pane creation', () => {
     });
     expect(done.tabs.find((t) => t.id === 5)?.pane_ids).toEqual([8]);
     expect(done.activeTabId).toBe(5);
+  });
+});
+
+describe('four panes per tab (R56)', () => {
+  const full = () =>
+    makeState([0, 1, 2, 3].map((i) => makePane({ id: i + 1, position: i, cli: 'shell' })));
+
+  test('a tab of four is full; ⌘N and ⌘D say so and open nothing, ⌘T still opens a tab', () => {
+    const state = full();
+    expect(isTabFull(state.tabs[0])).toBe(true);
+    expect(isTabFull({ pane_ids: [1, 2, 3] })).toBe(false);
+    expect(isTabFull(undefined)).toBe(false);
+    for (const id of ['pane.new', 'pane.terminalHere'] as const) {
+      const next = run(state, { type: 'command', id });
+      expect(next.overlay).toBeNull();
+      expect(next.notice?.text).toBe(FULL_TAB_NOTICE);
+    }
+    expect(run(state, { type: 'command', id: 'tab.new' }).overlay).toEqual({
+      kind: 'new-pane',
+      target: 'tab',
+    });
+    expect(FULL_TAB_NOTICE).toBe('This tab has 4 panes — ⌘T opens a new tab');
   });
 });
 

@@ -135,7 +135,8 @@ DEC 2026 synchronized output is open no Delta is built (150 ms cap); an idle pan
 sends nothing and is compressed after it goes quiet.
 
 In the app, `terminal-view.tsx` mounts only for the active tab's panes (only the
-focused one when zoomed). `data-client.ts` attaches, `replica.ts` applies frames,
+focused one when zoomed), which the grid lays out as equal columns up to three
+and quadrants at four; plyd caps a tab at four panes (`tab_full`). `data-client.ts` attaches, `replica.ts` applies frames,
 versions and hashes each row, and each visible row renders as one memoized
 `TerminalRow` (`terminal-row.tsx`): a `<div>` whose `<text>` runs are each placed
 absolutely at their own rounded column, `round(col × cell width)`, so neither

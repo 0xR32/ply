@@ -122,6 +122,7 @@ fn c1_goldens_cover_every_method_and_event() {
         "welcome.json",
         "res.ok.pane.json",
         "res.err.json",
+        "res.err.tab_full.json",
     ] {
         assert!(names.contains(n), "no golden {n}");
     }

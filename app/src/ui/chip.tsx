@@ -74,7 +74,7 @@ export interface StatusChipProps {
   testId?: string;
 }
 
-/** The pill at the right of a pane header: dot plus status text. */
+/** The pill at the right of a pane header: dot plus status text, which ellipsizes last when the header runs out of room. */
 export function StatusChip({ label, color, background, pulse = false, testId }: StatusChipProps) {
   const { z } = useChrome();
   return (
@@ -82,7 +82,9 @@ export function StatusChip({ label, color, background, pulse = false, testId }: 
       testId={testId}
       style={{
         height: z(22),
-        flexShrink: 0,
+        flexShrink: 1,
+        minWidth: 0,
+        overflow: 'hidden',
         display: 'flex',
         alignItems: 'center',
         gap: z(7),
@@ -93,7 +95,7 @@ export function StatusChip({ label, color, background, pulse = false, testId }: 
       }}
     >
       <Dot color={color} size={6} pulse={pulse} />
-      <Text color={color} variant="small">
+      <Text color={color} variant="small" ellipsis>
         {label}
       </Text>
     </div>

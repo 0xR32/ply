@@ -243,7 +243,12 @@ The app side lives in `app/src/terminal/` and
 
 **Mounting.** A TerminalView exists only for a visible pane: the active tab's
 panes, only the focused one while the tab is zoomed
-(`app/src/features/panes/pane-grid.tsx`, `visiblePaneIds`). Switching tabs
+(`app/src/features/panes/pane-grid.tsx`, `visiblePaneIds`). The grid lays them
+out by count (Ruling R56, `gridShape`): one fills the tab, two and three are
+equal full-height columns, four are equal quadrants, in position order. Every
+count uses the same grid parent, so a re-flow (a pane added or closed) moves
+the views without remounting them: each one measures its new box and sends a
+RESIZE, not a new ATTACH. Switching tabs
 unmounts the old views, which detach, and mounts the new ones, which attach and
 receive a Snapshot each. Hidden panes keep running and emulating in plyd; their
 status keeps arriving over C1.

@@ -19,8 +19,8 @@ use ply_proto::control::{
 };
 use ply_proto::hook::HookEnvelope;
 use ply_proto::pane::{
-    AccentName, AgentCli, Cli, Layout, OptionAsMeta, Pane, PaneStatus, Progress, Rgb, Session,
-    Settings, Tab, TerminalTheme, Workspace,
+    AccentName, AgentCli, Cli, Layout, MAX_PANES_PER_TAB, OptionAsMeta, Pane, PaneStatus, Progress,
+    Rgb, Session, Settings, Tab, TerminalTheme, Workspace,
 };
 use ply_proto::{C2_VERSION, HOOK_VERSION, PROTOCOL_VERSION};
 use ts_rs::{Config, TS};
@@ -154,6 +154,11 @@ fn generate() -> String {
             "MAX_LINE_BYTES",
             "Longest C1 line in bytes, newline included.",
             MAX_LINE_BYTES as u64,
+        ),
+        (
+            "MAX_PANES_PER_TAB",
+            "Most panes one tab holds; `pane.create` into a full tab is `tab_full`.",
+            MAX_PANES_PER_TAB as u64,
         ),
         (
             "HANDSHAKE_ID",

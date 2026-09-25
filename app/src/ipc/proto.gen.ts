@@ -69,7 +69,7 @@ export type Pane = {
    */
   tab_id: number;
   /**
-   * 0-based place in its tab: 0 is the main pane, 1.. the stack from top to bottom.
+   * 0-based place in its tab: columns left to right up to three, quadrants in reading order at four (R56).
    */
   position: number;
   /**
@@ -169,7 +169,7 @@ export type Tab = {
    */
   position: number;
   /**
-   * Panes in position order: the first is the main pane.
+   * Panes in position order, at most [`MAX_PANES_PER_TAB`].
    */
   pane_ids: Array<number>;
   /**
@@ -459,6 +459,7 @@ export type ErrorCode =
   | 'invalid_state'
   | 'spawn_failed'
   | 'shutting_down'
+  | 'tab_full'
   | 'internal';
 
 /**
@@ -815,6 +816,9 @@ export const HOOK_VERSION = 1;
 
 /** Longest C1 line in bytes, newline included. */
 export const MAX_LINE_BYTES = 1048576;
+
+/** Most panes one tab holds; `pane.create` into a full tab is `tab_full`. */
+export const MAX_PANES_PER_TAB = 4;
 
 /** Response id plyd uses to reject a `hello`; requests start at 1. */
 export const HANDSHAKE_ID = 0;

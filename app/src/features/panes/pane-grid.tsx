@@ -81,7 +81,13 @@ function EmptyTab() {
   );
 }
 
-/** The main area: the active tab's panes as one main pane plus a stack (only the focused pane while zoomed). */
+/** Columns and rows of the grid for `count` panes (Ruling R56): side by side up to three, a 2 × 2 grid of quadrants at four. */
+export function gridShape(count: number): { columns: number; rows: number } {
+  if (count <= 3) return { columns: Math.max(count, 1), rows: 1 };
+  return { columns: 2, rows: Math.ceil(count / 2) };
+}
+
+/** The main area: the active tab's panes as equal columns up to three and quadrants at four, in position order (only the focused pane while zoomed). */
 export function PaneGrid() {
   const { z } = useChrome();
   const connection = useAppSelector((s) => s.connection);
@@ -101,16 +107,21 @@ export function PaneGrid() {
     );
   }
   const ids = visiblePaneIds(tab);
-  const [main, ...stack] = ids;
-  if (!tab || main === undefined) return <EmptyTab />;
+  if (!tab || ids.length === 0) return <EmptyTab />;
   const place = (id: number) => tab.pane_ids.indexOf(id) + 1;
+  const { columns, rows } = gridShape(ids.length);
+  // One grid parent for every count, so a re-flow moves the panes without remounting (and re-attaching) their terminals.
   return (
     <div
       testId="pane-grid"
       style={{
         flexGrow: 1,
         minHeight: 0,
-        display: 'flex',
+        display: 'grid',
+        gridTemplateColumns: columns,
+        gridTemplateRows: rows,
+        gridColumnMin: 'zero',
+        gridRowMin: 'zero',
         gap: z(tokens.layout.gap),
         paddingTop: z(tokens.layout.gridPaddingTop),
         paddingBottom: z(tokens.layout.gridPaddingBottom),
@@ -118,33 +129,9 @@ export function PaneGrid() {
         paddingRight: z(tokens.layout.gridPaddingX),
       }}
     >
-      <div
-        style={{
-          flexGrow: stack.length > 0 ? tokens.layout.mainColumnGrow : 1,
-          flexBasis: 0,
-          minWidth: 0,
-          display: 'flex',
-          flexDirection: 'column',
-        }}
-      >
-        <PaneFrame key={main} paneId={main} position={place(main)} />
-      </div>
-      {stack.length > 0 ? (
-        <div
-          style={{
-            flexGrow: 1,
-            flexBasis: 0,
-            minWidth: 0,
-            display: 'flex',
-            flexDirection: 'column',
-            gap: z(tokens.layout.gap),
-          }}
-        >
-          {stack.map((id) => (
-            <PaneFrame key={id} paneId={id} position={place(id)} />
-          ))}
-        </div>
-      ) : null}
+      {ids.map((id) => (
+        <PaneFrame key={id} paneId={id} position={place(id)} />
+      ))}
     </div>
   );
 }

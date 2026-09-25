@@ -187,14 +187,35 @@ describe('effects', () => {
       cwd: '/Users/example',
       prompt: 'hi',
     });
-    store.dispatch({ type: 'command', id: 'pane.new' });
+    store.dispatch({ type: 'command', id: 'tab.new' });
     store.dispatch({
       type: 'pane/create',
-      request: { target: 'pane', cli: 'claude', cwd: 'relative' },
+      request: { target: 'tab', cli: 'claude', cwd: 'relative' },
     });
     await until(() => state().create.error !== null, 'the error');
     expect(state().create.error).toBe('cwd must be absolute');
     expect(state().overlay?.kind).toBe('new-pane');
+  });
+
+  test('a full tab takes no fifth pane: ⌘D, ⌘N and the form stop short with a notice', async () => {
+    const { server, store, until, state, seen } = await setup();
+    store.dispatch({ type: 'command', id: 'pane.terminalHere' });
+    await until(() => state().tabs[0]?.pane_ids.length === 4, 'the fourth pane');
+    const created = server.requestsOf('pane.create').length;
+    store.dispatch({ type: 'command', id: 'pane.terminalHere' });
+    store.dispatch({ type: 'command', id: 'pane.new' });
+    expect(state().overlay).toBeNull();
+    expect(state().notice?.text).toBe('This tab has 4 panes — ⌘T opens a new tab');
+    store.dispatch({
+      type: 'pane/create',
+      request: { target: 'pane', cli: 'shell', cwd: '/Users/example' },
+    });
+    expect(state().create.error).toBe('This tab has 4 panes — ⌘T opens a new tab');
+    store.dispatch({ type: 'command', id: 'tab.new' });
+    expect(state().overlay).toEqual({ kind: 'new-pane', target: 'tab' });
+    await Bun.sleep(30);
+    expect(server.requestsOf('pane.create')).toHaveLength(created);
+    expect(seen.filter((a) => a.type === 'pane/createFailed')).toHaveLength(1);
   });
 
   test('resuming a lost pane calls pane.resume and takes the relaunched pane', async () => {
