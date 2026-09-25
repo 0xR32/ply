@@ -32,6 +32,35 @@ export const bindings: readonly Binding[] = [
   { keys: 'cmd-,', command: 'settings.open', label: 'Settings' },
 ];
 
+/** What a focused terminal does with the ⌘ chords spec 7.3 gives it; never sent to the pty (K6, K7). */
+export type TerminalCommand =
+  | 'terminal.copy'
+  | 'terminal.paste'
+  | 'terminal.selectAll'
+  | 'terminal.find';
+
+/** A chord a focused terminal handles itself; each is a reserved macOS shortcut used with its standard meaning (K3). */
+export interface TerminalBinding {
+  keys: string;
+  command: TerminalCommand;
+  label: string;
+}
+
+/** Spec 7.3's pane chords, declared here once like every other binding (K4); the dispatcher ignores them. */
+export const terminalBindings: readonly TerminalBinding[] = [
+  { keys: 'cmd-c', command: 'terminal.copy', label: 'Copy' },
+  { keys: 'cmd-v', command: 'terminal.paste', label: 'Paste' },
+  { keys: 'cmd-a', command: 'terminal.selectAll', label: 'Select all' },
+  { keys: 'cmd-f', command: 'terminal.find', label: 'Find' },
+];
+
+const terminalByKeys = new Map(terminalBindings.map((b) => [b.keys, b.command]));
+
+/** The terminal command a canonical keystroke runs while a pane has focus, if any. */
+export function terminalCommandForKeys(keys: string): TerminalCommand | undefined {
+  return terminalByKeys.get(keys);
+}
+
 const byKeys = new Map(bindings.map((b) => [b.keys, b]));
 const byCommand = new Map(bindings.map((b) => [b.command, b]));
 

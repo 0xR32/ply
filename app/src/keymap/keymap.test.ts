@@ -11,6 +11,8 @@ import {
   normalizeKeys,
   parseKeys,
   TAB_DIGITS,
+  terminalBindings,
+  terminalCommandForKeys,
 } from './keymap';
 import { RESERVED, reservedConflict } from './reserved';
 
@@ -87,6 +89,24 @@ describe('keymap (K4, INV-6)', () => {
     expect(keysOfEvent(key('+', { cmd: true, shift: true }))).toBe('cmd-=');
     expect(keysOfEvent(key('=', { cmd: true, shift: true }))).toBe('cmd-=');
     expect(keysOfEvent(key('K', { cmd: true }))).toBe('cmd-k');
+  });
+});
+
+describe('terminal chords (spec 7.3, K7)', () => {
+  test('are the terminal-owned reserved shortcuts with their standard meaning, declared once', () => {
+    const owned = RESERVED.filter((r) => r.owner === 'terminal');
+    for (const b of terminalBindings) {
+      const hit = owned.find((r) => r.keys === b.keys);
+      expect(hit?.meaning).toBe(b.label);
+      expect(normalizeKeys(b.keys)).toBe(b.keys);
+      expect(bindings.some((g) => g.keys === b.keys)).toBe(false);
+    }
+    expect(terminalBindings.map((b) => b.keys)).toEqual(['cmd-c', 'cmd-v', 'cmd-a', 'cmd-f']);
+    expect(terminalCommandForKeys(keysOfEvent(key('c', { cmd: true })) ?? '')).toBe(
+      'terminal.copy',
+    );
+    expect(terminalCommandForKeys('cmd-x')).toBeUndefined();
+    expect(terminalCommandForKeys('ctrl-c')).toBeUndefined();
   });
 });
 
