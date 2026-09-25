@@ -31,6 +31,14 @@ pub enum Error {
         /// The offending one.
         got: u64,
     },
+    /// A Delta's `scrollback_base` was below the one before it.
+    #[error("scrollback base {got} is below {last}")]
+    BaseRegressed {
+        /// Base of the last frame applied.
+        last: u64,
+        /// The offending one.
+        got: u64,
+    },
     /// A cell referred to a style id the client's table does not hold.
     #[error("style id {id} is not in the style table")]
     UnknownStyle {

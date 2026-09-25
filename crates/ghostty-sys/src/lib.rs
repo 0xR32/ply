@@ -6,8 +6,9 @@
 //! ADR-0005 Decision 1) and links `libghostty-vt.a` statically.
 //! This file declares, by hand, the part of the C API ply uses from `vt/terminal.h`, `render.h`, `screen.h`,
 //! `style.h`, `modes.h`, `device.h`, `size_report.h`, `snapshot.h`, `key.h`, `mouse.h`, `focus.h`, `paste.h`,
-//! `search.h`, `grid_ref.h`, `point.h`, `sys.h` and `types.h` (spec 12, ADR-0005 spec delta 11), plus the types those
-//! headers take from `allocator.h`, `color.h`, `io.h` and `selection.h`, and `formatter.h` for tests' plain text.
+//! `search.h`, `grid_ref.h`, `grid_ref_tracked.h`, `point.h`, `sys.h` and `types.h` (spec 12, ADR-0005 spec delta 11),
+//! plus the types those headers take from `allocator.h`, `color.h`, `io.h` and `selection.h`, and `formatter.h` for
+//! tests' plain text.
 //!
 //! It holds no logic and depends on no ply crate (spec 3.2, 8.2). Only `ply-term` uses it, and only through its
 //! `engine` feature, which only `ply-daemon` enables; everything else in ply sees the safe `ply_term::Engine`.
@@ -85,6 +86,8 @@ opaque_handle! {
     GhosttyMouseEvent, GhosttyMouseEventImpl;
     /// Formats a terminal's content as text (`formatter.h`); must be freed before that terminal.
     GhosttyFormatter, GhosttyFormatterImpl;
+    /// A grid reference that follows its cell through scrolling, pruning and reflow (`grid_ref_tracked.h`); freed with [`ghostty_tracked_grid_ref_free`], before or after its terminal.
+    GhosttyTrackedGridRef, GhosttyTrackedGridRefImpl;
 }
 
 /// A packed 8-byte grid cell (`screen.h`); its layout is private to the library, so read it only through [`ghostty_cell_get`].
@@ -951,6 +954,26 @@ unsafe extern "C" {
         grid_ref: *const GhosttyGridRef,
         tag: GhosttyPointTag,
         out: *mut GhosttyPointCoordinate,
+    ) -> GhosttyResult;
+    /// Creates a tracked reference to `point` of the active screen into `*out_ref`; INVALID_VALUE outside the grid; free with [`ghostty_tracked_grid_ref_free`].
+    pub fn ghostty_terminal_grid_ref_track(
+        terminal: GhosttyTerminal,
+        point: GhosttyPoint,
+        out_ref: *mut GhosttyTrackedGridRef,
+    ) -> GhosttyResult;
+    /// Frees a tracked reference; null is ignored; valid after its terminal was freed.
+    pub fn ghostty_tracked_grid_ref_free(grid_ref: GhosttyTrackedGridRef);
+    /// Writes the tracked cell's coordinate in the `tag` space of the screen that owns it to `*out_point`; NO_VALUE once the cell was discarded.
+    pub fn ghostty_tracked_grid_ref_point(
+        grid_ref: GhosttyTrackedGridRef,
+        tag: GhosttyPointTag,
+        out_point: *mut GhosttyPointCoordinate,
+    ) -> GhosttyResult;
+    /// Moves a tracked reference of `terminal` to `point` of the active screen, clearing a lost state; unchanged on OUT_OF_MEMORY.
+    pub fn ghostty_tracked_grid_ref_set(
+        grid_ref: GhosttyTrackedGridRef,
+        terminal: GhosttyTerminal,
+        point: GhosttyPoint,
     ) -> GhosttyResult;
     /// Pastes per the live modes through the write-pty callback (required); REJECTED for unsafe text; `*out_written` may be null.
     pub fn ghostty_terminal_paste(

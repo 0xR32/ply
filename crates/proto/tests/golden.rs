@@ -415,7 +415,7 @@ fn every_frame() -> Vec<Frame> {
             cell_height_px: 19,
         }),
         Frame::FetchHistory(FetchHistory {
-            start: -1000,
+            start: 1000,
             count: 1000,
         }),
         Frame::Ack(Ack { seq: u64::MAX }),
@@ -461,6 +461,7 @@ fn every_frame() -> Vec<Frame> {
                 | Modes::MOUSE_REPORTING
                 | Modes::BRACKETED_PASTE,
             scrollback_rows: 10_300,
+            scrollback_base: 42,
             styles: styles(),
             lines: rows(0),
         }),
@@ -474,12 +475,13 @@ fn every_frame() -> Vec<Frame> {
             },
             modes: Modes::empty(),
             scrollback_rows: 0,
+            scrollback_base: u64::MAX,
             styles_added: vec![],
             lines: rows(0),
         }),
         Frame::History(History {
-            start: -2,
-            lines: rows(-2),
+            start: 10_340,
+            lines: rows(0),
             styles_added: styles(),
         }),
         Frame::Title("claude — example".to_owned()),
@@ -573,10 +575,7 @@ fn c2_layouts_are_the_documented_byte_counts() {
         8
     );
     assert_eq!(
-        size(Frame::FetchHistory(FetchHistory {
-            start: -1,
-            count: 1
-        })),
+        size(Frame::FetchHistory(FetchHistory { start: 1, count: 1 })),
         10
     );
     assert_eq!(size(Frame::Ack(Ack { seq: 1 })), 8);
@@ -614,6 +613,7 @@ fn c2_layouts_are_the_documented_byte_counts() {
             cursor: Cursor::default(),
             modes: Modes::empty(),
             scrollback_rows: 0,
+            scrollback_base: 0,
             styles_added: vec![],
             lines,
         })
@@ -687,6 +687,37 @@ fn c2_malformed_payloads_are_rejected() {
         Frame::decode(kind::FOCUS, &[2]),
         Err(Error::InvalidValue { field: "in", .. })
     ));
+    let misplaced = History {
+        start: 5,
+        lines: vec![Row {
+            index: 1,
+            ..Row::default()
+        }],
+        styles_added: vec![],
+    };
+    assert!(matches!(
+        Frame::History(misplaced).encode(&mut Vec::new()),
+        Err(Error::InvalidValue {
+            field: "history row index",
+            ..
+        })
+    ));
+    let mut history = [
+        5u64.to_le_bytes().as_slice(),
+        &[0, 0, 1, 0],
+        &[1, 0, 0, 0, 0, 0, 0],
+    ]
+    .concat();
+    assert!(matches!(
+        Frame::decode(kind::HISTORY, &history),
+        Err(Error::InvalidValue {
+            field: "history row index",
+            value: 1,
+            ..
+        })
+    ));
+    history[12] = 0;
+    assert!(Frame::decode(kind::HISTORY, &history).is_ok());
     assert!(matches!(
         Frame::decode(kind::FETCH_HISTORY, &[0, 0, 0, 0, 0, 0, 0, 0, 0xE9, 0x03]),
         Err(Error::InvalidValue {
@@ -737,6 +768,7 @@ fn c2_malformed_payloads_are_rejected() {
             cursor: Cursor::default(),
             modes: Modes::empty(),
             scrollback_rows: 0,
+            scrollback_base: 0,
             styles: vec![],
             lines: vec![Row {
                 index: 0,
@@ -750,7 +782,7 @@ fn c2_malformed_payloads_are_rejected() {
         mutate(&mut payload);
         Frame::decode(kind::SNAPSHOT, &payload)
     };
-    let cell_flags_at = 8 + 2 + 2 + 6 + 2 + 4 + 2 + 2 + 4 + 1 + 2 + 4 + 2;
+    let cell_flags_at = 8 + 2 + 2 + 6 + 2 + 4 + 8 + 2 + 2 + 4 + 1 + 2 + 4 + 2;
     assert!(snapshot_with(&|_| {}).is_ok());
     assert!(matches!(
         snapshot_with(&|p| p[cell_flags_at] = 1 << 4),
@@ -775,9 +807,9 @@ fn c2_malformed_payloads_are_rejected() {
 #[test]
 fn c2_encoding_refuses_inconsistent_graphemes() {
     let bad = Frame::History(History {
-        start: -1,
+        start: 1,
         lines: vec![Row {
-            index: -1,
+            index: 0,
             wrapped: false,
             cells: vec![Cell {
                 codepoint: 'e' as u32,

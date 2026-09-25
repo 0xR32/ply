@@ -135,6 +135,7 @@ function screen(lines: string[], patch: Partial<Extract<ServerFrame, { kind: 'sn
     cursor: { col: 0, row: 0, shape: 'block', visible: true, blinking: false },
     modes: Modes.cursorVisible,
     scrollbackRows: 0,
+    scrollbackBase: 0,
     styles: [],
     lines: lines.map((l, i) => textRow(i, l)),
     ...patch,
@@ -372,17 +373,17 @@ describe('TerminalView: input', () => {
   test('the wheel scrolls ply scrollback, fetching the rows it shows', async () => {
     const m = await mount(640, 3 * 15 + 1);
     try {
-      const history = Array.from({ length: 30 }, (_, i) => textRow(i - 30, `old ${i}`));
+      const history = Array.from({ length: 30 }, (_, i) => textRow(i, `old ${i}`));
       await m.deliver([screen(['live 0', 'live 1', 'live 2'], { scrollbackRows: 30 })]);
       const b = m.body();
       m.renderer.nativeSimulateScrollWheel(b.x + 10, b.y + 10, 0, cell.height * 2);
       await settle(m.renderer, () => m.sent().some((f) => f.kind === 'fetchHistory'));
       const fetch = m.sent().find((f) => f.kind === 'fetchHistory');
       if (fetch?.kind !== 'fetchHistory') throw new Error('no FETCH_HISTORY');
-      expect(fetch.start).toBeLessThan(0);
-      const lines = history.filter(
-        (r) => r.index >= fetch.start && r.index < fetch.start + fetch.count,
-      );
+      expect(fetch.start).toBeLessThan(30);
+      const lines = history
+        .slice(fetch.start, fetch.start + fetch.count)
+        .map((r, i) => ({ ...r, index: i }));
       await m.deliver([{ kind: 'history', start: fetch.start, stylesAdded: [], lines }]);
       const painted = m.renderer.getPaintedText();
       expect(painted).toContain('old 28');
@@ -400,7 +401,7 @@ describe('TerminalView: input', () => {
   test('⌘A selects all scrollback and ⌘C copies it once plyd sent every page', async () => {
     const m = await mount();
     try {
-      const history = Array.from({ length: 1500 }, (_, i) => textRow(i - 1500, `h${i}`));
+      const history = Array.from({ length: 1500 }, (_, i) => textRow(i, `h${i}`));
       await m.deliver([screen(['live'], { scrollbackRows: 1500 })]);
       pressed(m, 'cmd-a');
       pressed(m, 'cmd-c');
@@ -411,7 +412,7 @@ describe('TerminalView: input', () => {
         if (ask?.kind !== 'fetchHistory') continue;
         served++;
         const n = served === 1 ? Math.ceil(ask.count / 2) : ask.count;
-        const lines = history.filter((r) => r.index >= ask.start && r.index < ask.start + n);
+        const lines = history.slice(ask.start, ask.start + n).map((r, i) => ({ ...r, index: i }));
         await m.deliver([{ kind: 'history', start: ask.start, stylesAdded: [], lines }]);
       }
       await settle(m.renderer, () => m.fake.clipboard.writes.length === 1);

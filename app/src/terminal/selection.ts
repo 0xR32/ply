@@ -2,7 +2,7 @@ import { CellFlags, type Row } from './frames';
 import type { Replica } from './replica';
 import { type RowSelection, rowText } from './runs';
 
-/** A cell by absolute line number (0 is the oldest scrollback line) and column. */
+/** A cell by absolute line number (the scrollback starts at `Replica.scrollbackBase`) and column. */
 export interface CellPoint {
   line: number;
   col: number;

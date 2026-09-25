@@ -284,9 +284,7 @@ export class TerminalSession {
     if (!gap || this.exhausted.has(gap.start)) return;
     const count = Math.min(gap.count, MAX_HISTORY_ROWS);
     // plyd may answer with fewer rows than asked (1 MiB cap); the next call asks again from the first missing line.
-    if (
-      this.send({ kind: 'fetchHistory', start: gap.start - this.replica.scrollbackRows, count })
-    ) {
+    if (this.send({ kind: 'fetchHistory', start: gap.start, count })) {
       this.fetching = gap.start;
     }
   }
@@ -397,7 +395,7 @@ export class TerminalSession {
     if (needle === '') return [];
     const out: FindMatch[] = [];
     const r = this.replica;
-    for (let line = 0; line < r.screenTop + r.rows; line++) {
+    for (let line = r.scrollbackBase; line < r.screenTop + r.rows; line++) {
       const row = r.line(line)?.row;
       if (!row) continue;
       const { text, cols } = lineText(row);
@@ -432,11 +430,11 @@ export class TerminalSession {
     const r = this.replica;
     if (r.rows === 0) return;
     this.select({
-      anchor: { line: 0, col: 0 },
+      anchor: { line: r.scrollbackBase, col: 0 },
       head: { line: r.screenTop + r.rows - 1, col: Math.max(r.cols - 1, 0) },
       unit: 'cell',
     });
-    void this.loadHistory(0, r.screenTop);
+    void this.loadHistory(r.scrollbackBase, r.screenTop);
   }
 
   /** Copies the selection (⌘C), fetching the scrollback it covers first; does nothing without a selection and never sends ^C. */

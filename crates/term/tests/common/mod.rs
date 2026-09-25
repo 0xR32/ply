@@ -152,16 +152,16 @@ pub fn assert_matches_formatter(engine: &mut Engine, replica: &Replica, context:
     while got.last().is_some_and(|l| l.is_empty()) {
         got.pop();
     }
-    let scrollback = i64::from(engine.scrollback_rows());
+    let top = engine.scrollback_base() + u64::from(engine.scrollback_rows());
     let mut want: Vec<String> = Vec::new();
-    let mut next = -scrollback;
-    while next < 0 {
+    let mut next = engine.scrollback_base();
+    while next < top {
         let page = engine.scroll_history(next, 1000).unwrap();
         assert!(
             !page.lines.is_empty(),
             "{context}: history page at {next} is empty"
         );
-        next += page.lines.len() as i64;
+        next += page.lines.len() as u64;
         want.extend(page.lines.iter().map(|r| ply_term::cells_text(&r.cells)));
     }
     want.extend(replica.screen_text());

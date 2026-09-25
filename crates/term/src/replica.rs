@@ -1,7 +1,8 @@
 //! The reference C2 decoder's grid: what a client that applied every SNAPSHOT, DELTA and HISTORY frame shows.
 //!
 //! A [`Replica`] starts empty; the first Snapshot sizes it and replaces its style table, each Delta replaces the
-//! rows it carries and adds its new styles, and History frames fill a scrollback cache keyed by row index. Frames
+//! rows it carries and adds its new styles, and History frames fill a scrollback cache keyed by absolute line, from
+//! which a Delta whose `scrollback_base` moved on drops the lines plyd no longer keeps. Frames
 //! are validated strictly (sequence order, known style ids, rows within the grid), so a bug in the encoder side shows
 //! up as an [`Error`] rather than a silently wrong screen. Rows keep the cells as sent: trailing default blanks may
 //! be missing and read back as blanks. Each row carries a content hash over its resolved cells (style values, not
@@ -52,7 +53,8 @@ pub struct Replica {
     cursor: Cursor,
     modes: Modes,
     scrollback_rows: u32,
-    history: BTreeMap<i64, ReplicaRow>,
+    scrollback_base: u64,
+    history: BTreeMap<u64, ReplicaRow>,
     last_seq: Option<u64>,
 }
 
@@ -98,12 +100,13 @@ impl Replica {
         self.cursor = snapshot.cursor;
         self.modes = snapshot.modes;
         self.scrollback_rows = snapshot.scrollback_rows;
+        self.scrollback_base = snapshot.scrollback_base;
         self.history.clear();
         self.last_seq = Some(snapshot.seq);
         Ok(())
     }
 
-    /// Replaces the rows a Delta carries and adds its styles; fails before the first Snapshot, on a sequence regression, a re-used style id or a bad row.
+    /// Replaces the rows a Delta carries, adds its styles and forgets history below its `scrollback_base`; fails before the first Snapshot, on a sequence regression, a base that went back, a re-used style id or a bad row.
     pub fn apply_delta(&mut self, delta: &Delta) -> Result<()> {
         if self.last_seq.is_none() {
             return Err(Error::NoSnapshot {
@@ -111,6 +114,12 @@ impl Replica {
             });
         }
         self.check_seq(delta.seq)?;
+        if delta.scrollback_base < self.scrollback_base {
+            return Err(Error::BaseRegressed {
+                last: self.scrollback_base,
+                got: delta.scrollback_base,
+            });
+        }
         let added = new_styles(&self.styles, &delta.styles_added)?;
         let lookup = Styles {
             table: &self.styles,
@@ -128,11 +137,13 @@ impl Replica {
         self.cursor = delta.cursor;
         self.modes = delta.modes;
         self.scrollback_rows = delta.scrollback_rows;
+        self.scrollback_base = delta.scrollback_base;
+        self.history = self.history.split_off(&delta.scrollback_base);
         self.last_seq = Some(delta.seq);
         Ok(())
     }
 
-    /// Stores scrollback rows by index and adds their styles; fails before the first Snapshot, on a re-used style id or a non-negative row index.
+    /// Stores scrollback rows by absolute line (`start + index`) and adds their styles; fails before the first Snapshot, on a re-used style id or a bad row.
     pub fn apply_history(&mut self, history: &History) -> Result<()> {
         if self.last_seq.is_none() {
             return Err(Error::NoSnapshot {
@@ -145,14 +156,11 @@ impl Replica {
             added: &added,
         };
         let mut rows = Vec::with_capacity(history.lines.len());
-        for row in &history.lines {
-            if row.index >= 0 {
-                return Err(Error::RowOutOfRange {
-                    index: row.index,
-                    rows: self.rows,
-                });
+        for (line, row) in (history.start..).zip(&history.lines) {
+            let made = make_row(row, self.cols, &lookup)?;
+            if line >= self.scrollback_base {
+                rows.push((line, made));
             }
-            rows.push((i64::from(row.index), make_row(row, self.cols, &lookup)?));
         }
         self.history.extend(rows);
         self.styles.extend(added);
@@ -184,14 +192,19 @@ impl Replica {
         self.scrollback_rows
     }
 
+    /// Absolute line of the oldest scrollback row, as the last Snapshot or Delta reported it.
+    pub fn scrollback_base(&self) -> u64 {
+        self.scrollback_base
+    }
+
     /// Screen row `y` (0 is the top), or `None` outside the grid.
     pub fn row(&self, y: u16) -> Option<&ReplicaRow> {
         self.lines.get(usize::from(y))
     }
 
-    /// A cached scrollback row by its C2 index (negative), or `None` when no History carried it.
-    pub fn history_row(&self, index: i64) -> Option<&ReplicaRow> {
-        self.history.get(&index)
+    /// A cached scrollback row by absolute line, or `None` when no History carried it (or plyd dropped it since).
+    pub fn history_row(&self, line: u64) -> Option<&ReplicaRow> {
+        self.history.get(&line)
     }
 
     /// The style for `id`; id 0 is always the default style.
@@ -372,6 +385,7 @@ mod tests {
             },
             modes: Modes::CURSOR_VISIBLE,
             scrollback_rows: 0,
+            scrollback_base: 0,
             styles: vec![StyleEntry {
                 id: 1,
                 style: red(),
@@ -405,6 +419,7 @@ mod tests {
             cursor: Cursor::default(),
             modes: Modes::empty(),
             scrollback_rows: 3,
+            scrollback_base: 0,
             styles_added: vec![StyleEntry { id: 2, style: bold }],
             lines: vec![Row {
                 index: 1,
@@ -440,6 +455,7 @@ mod tests {
             cursor: Cursor::default(),
             modes: Modes::empty(),
             scrollback_rows: 0,
+            scrollback_base: 0,
             styles_added: vec![],
             lines: vec![],
         };
@@ -502,19 +518,24 @@ mod tests {
     }
 
     #[test]
-    fn history_rows_are_cached_by_index() {
+    fn history_rows_are_cached_by_absolute_line_until_the_base_passes_them() {
         let mut r = Replica::new();
-        r.apply_snapshot(&snapshot(1)).unwrap();
+        r.apply_snapshot(&Snapshot {
+            scrollback_rows: 3,
+            scrollback_base: 10,
+            ..snapshot(1)
+        })
+        .unwrap();
         r.apply_history(&History {
-            start: -2,
+            start: 10,
             lines: vec![
                 Row {
-                    index: -2,
+                    index: 0,
                     wrapped: false,
                     cells: vec![cell('a', 3)],
                 },
                 Row {
-                    index: -1,
+                    index: 1,
                     wrapped: false,
                     cells: vec![cell('b', 0)],
                 },
@@ -525,10 +546,26 @@ mod tests {
             }],
         })
         .unwrap();
-        assert_eq!(cells_text(&r.history_row(-2).unwrap().cells), "a");
-        assert_eq!(cells_text(&r.history_row(-1).unwrap().cells), "b");
-        assert!(r.history_row(-3).is_none());
-        r.apply_snapshot(&snapshot(2)).unwrap();
-        assert!(r.history_row(-1).is_none());
+        assert_eq!(cells_text(&r.history_row(10).unwrap().cells), "a");
+        assert_eq!(cells_text(&r.history_row(11).unwrap().cells), "b");
+        assert!(r.history_row(12).is_none());
+        let pushed = |seq, base| Delta {
+            seq,
+            cursor: Cursor::default(),
+            modes: Modes::empty(),
+            scrollback_rows: 3,
+            scrollback_base: base,
+            styles_added: vec![],
+            lines: vec![],
+        };
+        r.apply_delta(&pushed(2, 11)).unwrap();
+        assert!(r.history_row(10).is_none(), "line 10 left the scrollback");
+        assert_eq!(cells_text(&r.history_row(11).unwrap().cells), "b");
+        assert!(matches!(
+            r.apply_delta(&pushed(3, 10)),
+            Err(Error::BaseRegressed { last: 11, got: 10 })
+        ));
+        r.apply_snapshot(&snapshot(4)).unwrap();
+        assert!(r.history_row(11).is_none());
     }
 }

@@ -44,8 +44,8 @@ pub const READ_CHUNK: usize = 64 * 1024;
 /// Exit code reported when the child could not be waited for.
 pub const EXIT_UNKNOWN: i32 = -1;
 
-/// Bytes of a Snapshot besides its rows: sequence, size, cursor, modes, scrollback count and row count.
-const SNAPSHOT_HEAD_BYTES: usize = 26;
+/// Bytes of a Snapshot besides its rows: sequence, size, cursor, modes, scrollback count and base, row count.
+const SNAPSHOT_HEAD_BYTES: usize = 34;
 
 /// Bytes kept free in a Snapshot frame for the style table and grapheme clusters.
 const SNAPSHOT_STYLE_RESERVE: usize = 64 * 1024;

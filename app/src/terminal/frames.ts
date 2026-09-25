@@ -114,7 +114,7 @@ export interface StyleEntry {
   style: Style;
 }
 
-/** One row as parallel cell arrays from column 0 (trailing default blanks may be missing); `index` is 0.. on the live screen, negative in scrollback (-1 newest). */
+/** One row as parallel cell arrays from column 0 (trailing default blanks may be missing); `index` is the screen row in a Snapshot or Delta, the position in the page (line `start + index`) in a History. */
 export interface Row {
   index: number;
   /** The text continues on the next row (a soft wrap), so copying joins the two without a newline. */
@@ -191,6 +191,7 @@ export type ClientFrame =
   | AttachFrame
   | { kind: 'inputRaw'; bytes: Uint8Array }
   | { kind: 'resize'; cols: number; rows: number; cellWidthPx: number; cellHeightPx: number }
+  /** `start` is an absolute line (the scrollback runs from `scrollbackBase`). */
   | { kind: 'fetchHistory'; start: number; count: number }
   | { kind: 'ack'; seq: number }
   | KeyFrame
@@ -207,6 +208,8 @@ export interface SnapshotFrame {
   cursor: Cursor;
   modes: number;
   scrollbackRows: number;
+  /** Absolute line of the oldest scrollback row; it only grows while plyd drops old lines, so row 0 is line `scrollbackBase + scrollbackRows`. */
+  scrollbackBase: number;
   styles: StyleEntry[];
   lines: Row[];
 }
@@ -218,6 +221,7 @@ export interface DeltaFrame {
   cursor: Cursor;
   modes: number;
   scrollbackRows: number;
+  scrollbackBase: number;
   stylesAdded: StyleEntry[];
   lines: Row[];
 }
@@ -225,6 +229,7 @@ export interface DeltaFrame {
 /** 0x22: scrollback rows answering FETCH_HISTORY, oldest first, clipped to what exists and to one frame. */
 export interface HistoryFrame {
   kind: 'history';
+  /** Absolute line of the first row (the request's `start` when there is none); row `i` has index `i`. */
   start: number;
   stylesAdded: StyleEntry[];
   lines: Row[];
@@ -313,11 +318,6 @@ class Reader {
   u64(field: string): number {
     const v = this.view.getBigUint64(this.need(8), true);
     if (v > MAX_SAFE) throw this.invalid(field, v);
-    return Number(v);
-  }
-  i64(field: string): number {
-    const v = this.view.getBigInt64(this.need(8), true);
-    if (v > MAX_SAFE || v < -MAX_SAFE) throw this.invalid(field, v);
     return Number(v);
   }
   f32(field: string): number {
@@ -429,7 +429,7 @@ class Reader {
   }
 }
 
-/** Decodes one payload exactly as ply-proto's `Frame::decode`; throws `FrameError` on any malformed input, including u64/i64 values beyond safe integers. */
+/** Decodes one payload exactly as ply-proto's `Frame::decode`; throws `FrameError` on any malformed input, including u64 values beyond safe integers. */
 export function decodeFrame(kind: number, payload: Uint8Array): Frame {
   if (payload.length > MAX_FRAME_LEN) {
     throw new FrameError('tooLarge', kind, `payload of ${payload.length} bytes`);
@@ -472,7 +472,7 @@ function decodePayload(kind: number, r: Reader): Frame {
         cellHeightPx: r.u16(),
       };
     case Kind.fetchHistory: {
-      const start = r.i64('start');
+      const start = r.u64('start');
       const count = r.u16();
       if (count === 0 || count > MAX_HISTORY_ROWS) throw r.invalid('history count', count);
       return { kind: 'fetchHistory', start, count };
@@ -530,6 +530,7 @@ function decodePayload(kind: number, r: Reader): Frame {
         cursor: r.cursor(),
         modes: r.bits('modes', 16, MODES_ALL),
         scrollbackRows: r.u32(),
+        scrollbackBase: r.u64('scrollback_base'),
         styles: r.styles(),
         lines: r.rows(),
       };
@@ -540,11 +541,18 @@ function decodePayload(kind: number, r: Reader): Frame {
         cursor: r.cursor(),
         modes: r.bits('modes', 16, MODES_ALL),
         scrollbackRows: r.u32(),
+        scrollbackBase: r.u64('scrollback_base'),
         stylesAdded: r.styles(),
         lines: r.rows(),
       };
-    case Kind.history:
-      return { kind: 'history', start: r.i64('start'), stylesAdded: r.styles(), lines: r.rows() };
+    case Kind.history: {
+      const start = r.u64('start');
+      const stylesAdded = r.styles();
+      const lines = r.rows();
+      const misplaced = lines.find((row, i) => row.index !== i);
+      if (misplaced) throw r.invalid('history row index', Math.abs(misplaced.index));
+      return { kind: 'history', start, stylesAdded, lines };
+    }
     case Kind.title:
       return { kind: 'title', title: r.restText() };
     case Kind.bell:
@@ -609,11 +617,6 @@ class Writer {
     this.check(field, v, 0, Number.MAX_SAFE_INTEGER);
     const at = this.room(8);
     this.view.setBigUint64(at, BigInt(v), true);
-  }
-  i64(field: string, v: number): void {
-    this.check(field, v, -Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER);
-    const at = this.room(8);
-    this.view.setBigInt64(at, BigInt(v), true);
   }
   f32(field: string, v: number): void {
     if (!Number.isFinite(v)) throw new FrameError('invalidValue', this.kind, `${field} = ${v}`);
@@ -731,7 +734,7 @@ function encodePayload(f: Frame, w: Writer): void {
       w.u16('cell_height_px', f.cellHeightPx);
       return;
     case 'fetchHistory':
-      w.i64('start', f.start);
+      w.u64('start', f.start);
       w.u16('count', f.count);
       return;
     case 'ack':
@@ -769,6 +772,7 @@ function encodePayload(f: Frame, w: Writer): void {
       w.cursor(f.cursor);
       w.u16('modes', f.modes);
       w.u32('scrollback_rows', f.scrollbackRows);
+      w.u64('scrollback_base', f.scrollbackBase);
       w.styles(f.styles);
       w.rows(f.lines);
       return;
@@ -777,11 +781,15 @@ function encodePayload(f: Frame, w: Writer): void {
       w.cursor(f.cursor);
       w.u16('modes', f.modes);
       w.u32('scrollback_rows', f.scrollbackRows);
+      w.u64('scrollback_base', f.scrollbackBase);
       w.styles(f.stylesAdded);
       w.rows(f.lines);
       return;
     case 'history':
-      w.i64('start', f.start);
+      if (f.lines.some((row, i) => row.index !== i)) {
+        throw new FrameError('invalidValue', Kind.history, 'history row index');
+      }
+      w.u64('start', f.start);
       w.styles(f.stylesAdded);
       w.rows(f.lines);
       return;

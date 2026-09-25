@@ -61,9 +61,9 @@ export interface ReplicaChange {
   kind: 'snapshot' | 'delta' | 'history';
   rows: readonly number[];
   historyRows: readonly number[];
-  /** Lines pushed into scrollback by this frame (`scrollbackRows` grew by this much); 0 when unchanged or reset. */
+  /** Lines pushed into scrollback by this frame (the screen's top line moved down by this much); 0 when unchanged or reset. */
   pushed: number;
-  /** The fetched scrollback was dropped (a Snapshot, or scrollback that shrank). */
+  /** Fetched scrollback was dropped: all of it (a Snapshot) or the lines plyd no longer keeps (a Delta whose base moved past them). */
   historyReset: boolean;
 }
 
@@ -105,6 +105,8 @@ export class Replica {
   cursor: Cursor = NO_CURSOR;
   modes = 0;
   scrollbackRows = 0;
+  /** Absolute line of the oldest scrollback row plyd keeps (C2 `scrollback_base`). */
+  scrollbackBase = 0;
   lastSeq: number | null = null;
   /** Bumped by every Snapshot, which replaces the style table (ids may then mean other styles). */
   styleEpoch = 0;
@@ -140,26 +142,26 @@ export class Replica {
     return this.lines[y];
   }
 
-  /** A fetched scrollback row by absolute line number (0 is the oldest line), or `undefined` when not fetched. */
+  /** A fetched scrollback row by absolute line number, or `undefined` when not fetched (or no longer kept). */
   historyRow(line: number): ReplicaRow | undefined {
     return this.history.get(line);
   }
 
-  /** Any line by absolute number: `0..scrollbackRows` is scrollback, `scrollbackRows..+rows` the live screen. */
+  /** Any line by absolute number: `scrollbackBase..screenTop` is scrollback, `screenTop..+rows` the live screen. */
   line(line: number): ReplicaRow | undefined {
-    const y = line - this.scrollbackRows;
+    const y = line - this.screenTop;
     return y >= 0 ? this.lines[y] : this.history.get(line);
   }
 
   /** Absolute line number of the live screen's top row. */
   get screenTop(): number {
-    return this.scrollbackRows;
+    return this.scrollbackBase + this.scrollbackRows;
   }
 
   /** Absolute lines in `[from, to)` of scrollback that no History carried yet, as the first run of them. */
   missingHistory(from: number, to: number): { start: number; count: number } | null {
-    const lo = Math.max(0, from);
-    const hi = Math.min(this.scrollbackRows, to);
+    const lo = Math.max(this.scrollbackBase, from);
+    const hi = Math.min(this.screenTop, to);
     let start = -1;
     for (let l = lo; l < hi; l++) {
       if (this.history.has(l)) {
@@ -227,6 +229,7 @@ export class Replica {
     this.cursor = s.cursor;
     this.modes = s.modes;
     this.scrollbackRows = s.scrollbackRows;
+    this.scrollbackBase = s.scrollbackBase;
     this.history.clear();
     this.lastSeq = s.seq;
     return {
@@ -241,6 +244,11 @@ export class Replica {
   private applyDelta(d: DeltaFrame): ReplicaChange {
     if (this.lastSeq === null) throw new ReplicaError('a Delta before the first Snapshot');
     this.checkSeq(d.seq);
+    if (d.scrollbackBase < this.scrollbackBase) {
+      throw new ReplicaError(
+        `scrollback base went from ${this.scrollbackBase} to ${d.scrollbackBase}`,
+      );
+    }
     const added = this.added(this.styles, d.stylesAdded);
     const known = (id: number) => this.styles.has(id) || added.has(id);
     for (const row of d.lines) {
@@ -255,33 +263,37 @@ export class Replica {
       this.lines[row.index] = this.make(row);
       rows.push(row.index);
     }
-    // Absolute line numbers stay put while scrollback grows; a shrink (clear, reflow) invalidates them.
-    const grew = d.scrollbackRows - this.scrollbackRows;
-    const historyReset = grew < 0 && this.history.size > 0;
-    if (grew < 0) this.history.clear();
+    const pushed = d.scrollbackBase + d.scrollbackRows - this.screenTop;
+    let historyReset = false;
+    if (d.scrollbackBase > this.scrollbackBase) {
+      for (const line of this.history.keys()) {
+        if (line < d.scrollbackBase) {
+          this.history.delete(line);
+          historyReset = true;
+        }
+      }
+    }
     this.cursor = d.cursor;
     this.modes = d.modes;
     this.scrollbackRows = d.scrollbackRows;
+    this.scrollbackBase = d.scrollbackBase;
     this.lastSeq = d.seq;
-    return { kind: 'delta', rows, historyRows: [], pushed: Math.max(grew, 0), historyReset };
+    return { kind: 'delta', rows, historyRows: [], pushed: Math.max(pushed, 0), historyReset };
   }
 
   private applyHistory(h: HistoryFrame): ReplicaChange {
     if (this.lastSeq === null) throw new ReplicaError('a History before the first Snapshot');
     const added = this.added(this.styles, h.stylesAdded);
     const known = (id: number) => this.styles.has(id) || added.has(id);
-    for (const row of h.lines) {
-      if (row.index >= 0) throw new ReplicaError(`history row ${row.index} is not in scrollback`);
-      this.checkRow(row, this.cols, known);
-    }
+    for (const row of h.lines) this.checkRow(row, this.cols, known);
     for (const [id, style] of added) this.styles.set(id, style);
     const historyRows: number[] = [];
-    for (const row of h.lines) {
-      const line = this.scrollbackRows + row.index;
-      if (line < 0) continue;
+    h.lines.forEach((row, i) => {
+      const line = h.start + i;
+      if (line < this.scrollbackBase) return;
       this.history.set(line, this.make(row));
       historyRows.push(line);
-    }
+    });
     return { kind: 'history', rows: [], historyRows, pushed: 0, historyReset: false };
   }
 }

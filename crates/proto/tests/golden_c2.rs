@@ -118,7 +118,7 @@ fn goldens() -> Vec<(&'static str, Frame)> {
         (
             "fetch-history",
             Frame::FetchHistory(FetchHistory {
-                start: -(MAX_SAFE as i64),
+                start: MAX_SAFE,
                 count: 1000,
             }),
         ),
@@ -185,6 +185,7 @@ fn goldens() -> Vec<(&'static str, Frame)> {
                     | Modes::MOUSE_REPORTING
                     | Modes::BRACKETED_PASTE,
                 scrollback_rows: 10_300,
+                scrollback_base: 123_456_789,
                 styles: styles(),
                 lines: rows(0),
             }),
@@ -202,6 +203,7 @@ fn goldens() -> Vec<(&'static str, Frame)> {
                 },
                 modes: Modes::CURSOR_VISIBLE,
                 scrollback_rows: u32::MAX,
+                scrollback_base: MAX_SAFE,
                 styles_added: vec![StyleEntry {
                     id: 3,
                     style: Style {
@@ -217,8 +219,8 @@ fn goldens() -> Vec<(&'static str, Frame)> {
         (
             "history",
             Frame::History(History {
-                start: -2,
-                lines: rows(-2),
+                start: 123_466_787,
+                lines: rows(0),
                 styles_added: styles(),
             }),
         ),

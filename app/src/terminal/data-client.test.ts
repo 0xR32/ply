@@ -21,6 +21,7 @@ const snapshot = (seq: number): ServerFrame => ({
   cursor: { col: 0, row: 0, shape: 'block', visible: true, blinking: false },
   modes: 0,
   scrollbackRows: 0,
+  scrollbackBase: 0,
   styles: [],
   lines: [],
 });
@@ -132,6 +133,7 @@ describe('C2 data client', () => {
         cursor: { col: 1, row: 0, shape: 'bar', visible: true, blinking: false },
         modes: 0,
         scrollbackRows: 0,
+        scrollbackBase: 0,
         stylesAdded: [],
         lines: [],
       };

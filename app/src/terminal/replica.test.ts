@@ -51,6 +51,7 @@ function snapshot(seq: number, lines: Row[] = [row(0, 'hi', 1)]): SnapshotFrame 
     cursor: { col: 1, row: 0, shape: 'block', visible: true, blinking: false },
     modes: 0,
     scrollbackRows: 0,
+    scrollbackBase: 0,
     styles: [{ id: 1, style: red }],
     lines,
   };
@@ -63,6 +64,7 @@ function delta(seq: number, patch: Partial<DeltaFrame> = {}): DeltaFrame {
     cursor: { col: 0, row: 1, shape: 'bar', visible: true, blinking: true },
     modes: 0,
     scrollbackRows: 0,
+    scrollbackBase: 0,
     stylesAdded: [],
     lines: [],
     ...patch,
@@ -150,14 +152,14 @@ describe('Replica bookkeeping', () => {
     expect(screenText(r)).toEqual(['', 'new']);
   });
 
-  test('history rows keep their absolute line while scrollback grows and are dropped when it shrinks', () => {
+  test('history rows keep their absolute line while scrollback grows and are dropped when the base passes them', () => {
     const r = new Replica();
     r.apply({ ...snapshot(1), scrollbackRows: 5 });
     const page: HistoryFrame = {
       kind: 'history',
-      start: -2,
+      start: 3,
       stylesAdded: [{ id: 9, style: red }],
-      lines: [row(-2, 'old', 9), row(-1, 'new')],
+      lines: [row(0, 'old', 9), row(1, 'new')],
     };
     r.apply(page);
     expect(rowText(r.line(3)?.row as Row)).toBe('old');
@@ -168,10 +170,40 @@ describe('Replica bookkeeping', () => {
     expect(grown.pushed).toBe(3);
     expect(rowText(r.historyRow(3)?.row as Row)).toBe('old');
     expect(r.screenTop).toBe(8);
-    const shrunk = r.apply(delta(3, { scrollbackRows: 2 }));
-    expect(shrunk.historyReset).toBe(true);
+    const cleared = r.apply(delta(3, { scrollbackRows: 0, scrollbackBase: 8 }));
+    expect(cleared.historyReset).toBe(true);
+    expect(cleared.pushed).toBe(0);
     expect(r.historyRow(3)).toBeUndefined();
     expect(r.style(9)).toEqual(red);
+    expect(() => r.apply(delta(4, { scrollbackBase: 7 }))).toThrow(ReplicaError);
+  });
+
+  test('past the scrollback cap the base moves on and every kept line keeps its number', () => {
+    const cap = 100;
+    const r = new Replica();
+    r.apply({ ...snapshot(1), cols: 20, scrollbackRows: cap });
+    const page = (start: number, count: number): HistoryFrame => ({
+      kind: 'history',
+      start,
+      stylesAdded: [],
+      lines: Array.from({ length: count }, (_, i) => row(i, `line ${start + i}`)),
+    });
+    r.apply(page(0, cap));
+    let seq = 1;
+    let pushedTotal = 0;
+    for (let base = 10; base <= 250; base += 10) {
+      const change = r.apply(delta(++seq, { scrollbackRows: cap, scrollbackBase: base }));
+      pushedTotal += change.pushed;
+      expect(r.missingHistory(base, base + cap)).toEqual({ start: base + cap - 10, count: 10 });
+      const gap = r.missingHistory(base, base + cap);
+      if (gap) r.apply(page(gap.start, gap.count));
+      for (const line of [base, base + cap / 2, base + cap - 1]) {
+        expect(rowText(r.line(line)?.row as Row)).toBe(`line ${line}`);
+      }
+      expect(r.historyRow(base - 1)).toBeUndefined();
+    }
+    expect(pushedTotal).toBe(250);
+    expect(r.screenTop).toBe(250 + cap);
   });
 
   test('the recorded shell screen and its history pages', () => {

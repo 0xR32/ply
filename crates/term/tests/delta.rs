@@ -6,9 +6,9 @@
 
 mod common;
 
-use common::{Rng, attach, engine, pump, truth, view};
+use common::{Rng, attach, engine, palette, pump, truth, view};
 use ply_proto::data::{CellFlags, Color, Frame, Modes, Style};
-use ply_term::{DeltaBuilder, Replica, Update};
+use ply_term::{DeltaBuilder, Engine, Replica, Update};
 
 /// One random burst of terminal output: text, SGR, cursor motion, erases, scrolling, wide and combined characters.
 fn burst(rng: &mut Rng, cols: u16, rows: u16) -> Vec<u8> {
@@ -318,37 +318,138 @@ fn a_resize_or_a_new_client_gets_a_snapshot() {
 }
 
 #[test]
-fn history_pages_come_from_scrollback_with_negative_indexes() {
+fn history_pages_come_from_scrollback_by_absolute_line() {
     let mut e = engine(30, 5);
     for i in 0..40 {
         e.write(format!("\x1b[3{}mline {i:02}\x1b[0m\r\n", i % 8).as_bytes());
     }
     let (mut client, mut replica) = attach(&mut e);
     assert_eq!(replica.scrollback_rows(), 36);
-    let h = client.history(&mut e, -36, 10).unwrap();
-    assert_eq!(h.start, -36);
+    assert_eq!(replica.scrollback_base(), 0, "nothing dropped yet");
+    let h = client.history(&mut e, 0, 10).unwrap();
+    assert_eq!(h.start, 0);
     assert_eq!(h.lines.len(), 10);
+    assert!(h.lines.iter().enumerate().all(|(i, r)| r.index == i as i32));
     replica.apply(&Frame::History(h)).unwrap();
     assert_eq!(
-        ply_term::cells_text(&replica.history_row(-36).unwrap().cells),
+        ply_term::cells_text(&replica.history_row(0).unwrap().cells),
         "line 00"
     );
     assert_eq!(
-        ply_term::cells_text(&replica.history_row(-27).unwrap().cells),
+        ply_term::cells_text(&replica.history_row(9).unwrap().cells),
         "line 09"
     );
     assert_eq!(replica.resolved_row(0).map(|r| r.len()), Some(7));
 
-    let tail = client.history(&mut e, -3, 1000).unwrap();
+    let tail = client.history(&mut e, 33, 1000).unwrap();
     assert_eq!(
         (tail.start, tail.lines.len()),
-        (-3, 3),
+        (33, 3),
         "clipped to what exists"
     );
     assert_eq!(ply_term::cells_text(&tail.lines[2].cells), "line 35");
-    let none = client.history(&mut e, -100, 10).unwrap();
+    let none = client.history(&mut e, 36, 10).unwrap();
     assert!(none.lines.is_empty());
     assert!(none.styles_added.is_empty());
+    assert_eq!(none.start, 36, "an empty page echoes the request");
+}
+
+#[test]
+fn fetched_lines_keep_their_number_after_the_line_cap_drops_older_ones() {
+    let mut e = Engine::new(3, 40, 5, 100, &palette()).unwrap();
+    let (mut client, mut replica) = attach(&mut e);
+    let mut written = 0u64;
+    let write = |e: &mut Engine, written: &mut u64, n: u64| {
+        for _ in 0..n {
+            e.write(format!("line {written}\r\n").as_bytes());
+            *written += 1;
+        }
+    };
+    let text =
+        |r: &Replica, line: u64| ply_term::cells_text(&r.history_row(line).expect("fetched").cells);
+    write(&mut e, &mut written, 200);
+    pump(&mut e, &mut client, &mut replica);
+    assert_eq!(
+        replica.scrollback_base(),
+        0,
+        "under the cap nothing is dropped"
+    );
+    let page = client.history(&mut e, 0, 1000).unwrap();
+    replica.apply(&Frame::History(page)).unwrap();
+    assert_eq!(text(&replica, 150), "line 150");
+    for _ in 0..40 {
+        write(&mut e, &mut written, 97);
+        pump(&mut e, &mut client, &mut replica);
+    }
+    let base = replica.scrollback_base();
+    assert!(
+        base > 3000,
+        "the cap (100 + 300 rows) dropped lines: base {base}"
+    );
+    assert_eq!(base, e.scrollback_base());
+    assert_eq!(
+        base + u64::from(replica.scrollback_rows()) + 4,
+        written,
+        "every line written is scrollback, dropped or on screen (the last row is the empty prompt line)"
+    );
+    assert!(
+        replica.history_row(150).is_none(),
+        "dropped lines leave the cache"
+    );
+    let page = client.history(&mut e, base, 1000).unwrap();
+    assert_eq!(page.start, base);
+    replica.apply(&Frame::History(page)).unwrap();
+    assert_eq!(text(&replica, base), format!("line {base}"));
+    let last = base + u64::from(replica.scrollback_rows()) - 1;
+    assert_eq!(text(&replica, last), format!("line {last}"));
+    let before = client.history(&mut e, 0, 10).unwrap();
+    assert!(before.lines.is_empty(), "lines below the base are gone");
+    let fetched_end = base + u64::from(replica.scrollback_rows());
+    for _ in 0..100 {
+        write(&mut e, &mut written, 10);
+        pump(&mut e, &mut client, &mut replica);
+        if replica.scrollback_base() > base {
+            break;
+        }
+    }
+    let kept = replica.scrollback_base();
+    assert!(kept > base, "a page was pruned: {base} -> {kept}");
+    assert_eq!(kept, e.scrollback_base());
+    for line in base..fetched_end {
+        match replica.history_row(line) {
+            Some(row) => assert_eq!(ply_term::cells_text(&row.cells), format!("line {line}")),
+            None => assert!(line < kept, "line {line} is still kept, so it stays cached"),
+        }
+    }
+    let page = client.history(&mut e, kept, 1).unwrap();
+    assert_eq!(
+        ply_term::cells_text(&page.lines[0].cells),
+        format!("line {kept}")
+    );
+}
+
+#[test]
+fn clearing_the_scrollback_moves_the_base_past_every_line() {
+    let mut e = engine(30, 5);
+    for i in 0..40 {
+        e.write(format!("line {i}\r\n").as_bytes());
+    }
+    let (mut client, mut replica) = attach(&mut e);
+    let page = client.history(&mut e, 0, 100).unwrap();
+    replica.apply(&Frame::History(page)).unwrap();
+    e.write(b"\x1b[3J");
+    pump(&mut e, &mut client, &mut replica);
+    assert_eq!(replica.scrollback_rows(), 0);
+    assert_eq!(
+        replica.scrollback_base(),
+        36,
+        "the 36 erased lines count as dropped"
+    );
+    assert!(replica.history_row(35).is_none());
+    e.write(b"after\r\n");
+    let before = replica.scrollback_base();
+    pump(&mut e, &mut client, &mut replica);
+    assert_eq!(replica.scrollback_base(), before);
 }
 
 #[test]
@@ -361,7 +462,7 @@ fn a_history_page_never_exceeds_one_frame() {
         e.write(format!("{row}\r\n").as_bytes());
     }
     let mut client = DeltaBuilder::new();
-    let h = client.history(&mut e, -1050, 1000).unwrap();
+    let h = client.history(&mut e, 46, 1000).unwrap();
     assert!(
         !h.lines.is_empty() && h.lines.len() < 1000,
         "1000 full rows of 168 cells exceed 1 MiB: {}",
@@ -389,7 +490,7 @@ fn a_styled_history_page_never_exceeds_one_frame() {
         e.write(format!("{line}\r\n").as_bytes());
     }
     let (mut client, mut replica) = attach(&mut e);
-    let page = client.history(&mut e, -1050, 1000).unwrap();
+    let page = client.history(&mut e, 46, 1000).unwrap();
     assert!(
         page.styles_added.len() > 1000,
         "a style per word: {}",
@@ -409,11 +510,11 @@ fn a_styled_history_page_never_exceeds_one_frame() {
         unreachable!()
     };
     let next = client
-        .history(&mut e, -1050 + page.lines.len() as i64, 1000)
+        .history(&mut e, 46 + page.lines.len() as u64, 1000)
         .unwrap();
     assert_eq!(
         next.start,
-        -1050 + page.lines.len() as i64,
+        46 + page.lines.len() as u64,
         "the next page continues where the cut one stopped"
     );
     replica.apply(&Frame::History(next)).unwrap();

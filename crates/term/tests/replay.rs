@@ -91,12 +91,14 @@ fn dump(engine: &mut Engine, replica: &Replica) -> String {
     }
     let scrollback = engine.scrollback_rows();
     writeln!(out, "scrollback {scrollback}").unwrap();
-    let history = engine.scroll_history(-i64::from(scrollback), 1000).unwrap();
-    for row in &history.lines {
+    let history = engine
+        .scroll_history(engine.scrollback_base(), 1000)
+        .unwrap();
+    for (i, row) in history.lines.iter().enumerate() {
         writeln!(
             out,
             "{:+05}|{}",
-            row.index,
+            i as i64 - i64::from(scrollback),
             ply_term::cells_text(&row.cells)
         )
         .unwrap();

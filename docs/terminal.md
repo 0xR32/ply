@@ -143,9 +143,17 @@ generation at which it last changed. Every attached client's `DeltaBuilder`
 sends the rows newer than its own last frame, so several clients never steal
 each other's changes and a blocked client catches up correctly.
 
+**Absolute lines.** The library does not count the lines its line cap prunes,
+so after every write and resize the engine reads how far a tracked grid
+reference at the top of the live screen moved up, adds that to
+`scrollback_base`, and moves the reference back to the top (on the primary
+screen only). A write that adds more lines than the scrollback holds loses the
+reference; the base then skips every line the terminal held. The bench shows no
+cost (engine alone 134 MB/s on the agent corpus, 707 MB/s on ASCII).
+
 **The rest of the engine**: `resize` reflows the primary screen and ends an open
 DEC 2026 update; `compress_idle` compresses idle scrollback in bounded steps;
-`search` finds matches in the screen and scrollback; `save` and `restore`
+`search` finds matches in the screen and scrollback (in absolute lines); `save` and `restore`
 serialize the whole state, unfinished sequences included (not used by plyd yet:
 screens do not survive a plyd restart).
 
@@ -261,7 +269,10 @@ style or a row outside the grid throws `ReplicaError` and changes nothing, and
 the view drops the connection and re-attaches. Each row keeps its cells as typed
 arrays, a version that changes whenever the row is replaced, and an FNV-1a hash
 of its cells and the style epoch (bumped by every Snapshot, which may reuse
-ids). Scrollback rows it fetched are kept by absolute line number.
+ids). Scrollback rows it fetched are kept by absolute line number
+(`scrollback_base` onwards, `docs/screen-protocol.md`), so they stay right after
+the scrollback cap starts dropping lines, and a Delta whose base moved on drops
+the lines plyd no longer keeps.
 
 **Rendering.** Every pane's changes are flushed by one shared timer, at most
 once per 16 ms and at once for the first change after an idle frame, so all

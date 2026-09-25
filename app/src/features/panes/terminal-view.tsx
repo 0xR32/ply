@@ -295,7 +295,7 @@ export function TerminalView({
         return;
       case 'terminal.find':
         setFind({ matches: [], active: -1 });
-        void session.loadHistory(0, replica.screenTop);
+        void session.loadHistory(replica.scrollbackBase, replica.screenTop);
         return;
       case undefined:
         return;

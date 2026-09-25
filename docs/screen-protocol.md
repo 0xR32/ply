@@ -46,8 +46,8 @@ is above the cap before they buffer the payload.
 Decoding is strict (INV-10): an unknown kind, a payload cut short, bytes left
 over after the last field, a value outside its range, an unknown flag bit and
 invalid UTF-8 are all errors, and the receiver drops the connection. The
-TypeScript codec also refuses a u64 or i64 outside JavaScript's safe-integer
-range (±(2^53 − 1)), so every value plyd sends stays inside it.
+TypeScript codec also refuses a u64 above JavaScript's safe-integer range
+(2^53 − 1), so every value plyd sends stays inside it.
 
 | Kind | Name | Direction | Payload |
 |---|---|---|---|
@@ -137,7 +137,7 @@ A cluster longer than 255 extra codepoints is truncated by plyd (and logged).
 
 | Offset | Field | Type | Meaning |
 |---|---|---|---|
-| 0 | `index` | i32 | 0.. from the top of the live screen; negative for scrollback, -1 being the newest line above the screen. |
+| 0 | `index` | i32 | In SNAPSHOT and DELTA the screen row, 0.. from the top of the live screen; in HISTORY the row's position in the page, 0.., so row `i` is absolute line `start + i` (any other value is invalid). |
 | 4 | `flags` | u8 | 0, or 1: the row soft-wraps onto the next, so copying joins them without a newline. |
 | 5 | `n` | u16 | Cell count. |
 | 7 | cells | `n` cells | From column 0. |
@@ -196,9 +196,9 @@ sets the pty's size and answers this client with a Snapshot. A grid too large
 for one Snapshot frame (see **Attaching**) is ignored, and the Snapshot shows
 the size the pane kept.
 
-**FETCH_HISTORY `0x13`** — `start:i64 · count:u16`, 10 bytes: scrollback rows
-`start .. start + count`. `start` is a row index, so negative; `count` is 1 to
-1 000 (`MAX_HISTORY_ROWS`).
+**FETCH_HISTORY `0x13`** — `start:u64 · count:u16`, 10 bytes: scrollback lines
+`start .. start + count`. `start` is an absolute line (see **Absolute lines**);
+`count` is 1 to 1 000 (`MAX_HISTORY_ROWS`).
 
 **ACK `0x14`** — `seq:u64`, 8 bytes: the newest Snapshot or Delta the client has
 applied.
@@ -247,8 +247,9 @@ only while the program enabled mode 1004.
 | 10 | `rows` | u16 | Grid rows. |
 | 12 | `cursor` | Cursor | |
 | 18 | `modes` | Modes | |
-| 20 | `scrollback_rows` | u32 | Scrollback rows above row 0 (indexes `-scrollback_rows .. 0`); 0 on the alternate screen. |
-| 24 | `styles` | style table | The complete table; it replaces the client's. |
+| 20 | `scrollback_rows` | u32 | Scrollback rows above row 0; 0 on the alternate screen. |
+| 24 | `scrollback_base` | u64 | Absolute line of the oldest scrollback row (see **Absolute lines**). |
+| 32 | `styles` | style table | The complete table; it replaces the client's. |
 | … | `lines` | row list | Every screen row, `0 .. rows`. |
 
 **DELTA `0x21`** — what changed since the client's previous Snapshot or Delta.
@@ -259,16 +260,17 @@ only while the program enabled mode 1004.
 | 8 | `cursor` | Cursor | After the change. |
 | 14 | `modes` | Modes | After the change. |
 | 16 | `scrollback_rows` | u32 | After the change. |
-| 20 | `styles_added` | style table | Styles new to this client. |
+| 20 | `scrollback_base` | u64 | After the change; never below the previous frame's. |
+| 28 | `styles_added` | style table | Styles new to this client. |
 | … | `lines` | row list | Each changed row, replacing the row with the same index. |
 
 **HISTORY `0x22`** — the answer to FETCH_HISTORY.
 
 | Offset | Field | Type | Meaning |
 |---|---|---|---|
-| 0 | `start` | i64 | Index of the first row returned (the request's `start` when no row is returned). |
+| 0 | `start` | u64 | Absolute line of the first row returned (the request's `start` when no row is returned). |
 | 8 | `styles_added` | style table | Styles new to this client. |
-| … | `lines` | row list | Rows `start .. start + n`, oldest first, indexes negative. |
+| … | `lines` | row list | Lines `start .. start + n`, oldest first, row `i` with index `i`. |
 
 **TITLE `0x23`** — the new terminal title (OSC 0 or 2), UTF-8, possibly empty.
 
@@ -324,9 +326,9 @@ plyd builds each client's frames with that client's `DeltaBuilder`
 (`crates/term/src/delta.rs`):
 
 - a **Delta** carries the rows whose content changed since the client's last
-  frame, plus the cursor, the modes and the scrollback count;
+  frame, plus the cursor, the modes, the scrollback count and its base;
 - a Delta with **no rows** is sent when only the cursor, the modes or the
-  scrollback count changed (a cursor hide dirties no row);
+  scrollback count or base changed (a cursor hide dirties no row);
 - **nothing** is sent for a pane with no change, so an idle pane sends no frame
   at all;
 - a **Snapshot** is sent instead of a Delta when the client has had none yet,
@@ -366,23 +368,43 @@ update; the pane's next update waits until the program closes it or 150 ms have
 passed since it opened, whichever is first. At the cap plyd ends the update
 itself and publishes. A resize also ends it.
 
+## Absolute lines
+
+Scrollback is addressed by absolute line, so a line keeps its number while
+output scrolls and while the line cap drops the oldest lines. Every SNAPSHOT
+and DELTA carries `scrollback_base`, the absolute line of the oldest scrollback
+row plyd keeps: the scrollback is lines `scrollback_base .. scrollback_base +
+scrollback_rows`, and live screen row `y` is line `scrollback_base +
+scrollback_rows + y`. The base counts every line dropped from the top of the
+scrollback since plyd created the pane's terminal (pruned by the line cap,
+erased with `CSI 3 J`), so it never decreases within an attachment.
+
+plyd counts with a tracked libghostty-vt grid reference at the top of the live
+screen, re-read after every write and resize (`Engine::scrollback_base`). The
+count is exact while one pty read adds fewer lines than the scrollback holds;
+past that the reference itself is dropped and the base jumps past every line the
+terminal held before, so numbers are never reused for other content. On the
+alternate screen `scrollback_rows` is 0 and the base stays where it was.
+
 ## History paging
 
 Scrollback lives in plyd; the client fetches the rows it wants to show.
 
-- FETCH_HISTORY asks for `count` rows from `start`. plyd clips the range to the
-  scrollback that exists (`-scrollback_rows .. 0`), so a page may hold fewer
-  rows than asked, or none.
+- FETCH_HISTORY asks for `count` lines from `start`. plyd clips the range to the
+  scrollback it keeps (`scrollback_base .. scrollback_base + scrollback_rows`),
+  so a page may hold fewer rows than asked, or none. A page reflects plyd's
+  scrollback when it is built, which may be ahead of the client's last Delta;
+  the absolute lines stay right either way.
 - A page never exceeds one frame. 1 000 rows of a wide pane do not fit 1 MiB,
   so plyd stops at the last row that fits; the client asks again from the first
   row it is still missing.
 - `styles_added` must be applied even when the client discards the rows: a page
   cut to fit can name styles of rows it left out, and later frames use those
   ids without sending them again.
-- Row indexes move as output scrolls, so a client keeps fetched rows by absolute
-  line number: line = `scrollback_rows + index`, with line 0 the oldest
-  scrollback row. A Delta whose `scrollback_rows` shrank (a clear, a reflow)
-  invalidates every fetched row.
+- A client keeps fetched rows by absolute line. A Delta whose
+  `scrollback_base` moved on drops every fetched line below it; a Snapshot
+  (which also answers every resize, where the primary screen reflows) drops
+  them all.
 
 The app (`app/src/terminal/session.ts`) keeps at most one request in flight,
 asks for the first run of missing lines around what it shows (at most 1 000),

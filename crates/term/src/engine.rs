@@ -15,6 +15,10 @@
 //! Dirty tracking: libghostty-vt's render state consumes the terminal's dirty flags, so each engine owns exactly one
 //! and records, per viewport row, the generation at which it last changed; every [`crate::DeltaBuilder`] (one per
 //! attached client) sends the rows newer than its last frame, so several clients never steal each other's changes.
+//!
+//! Absolute lines: the library does not count the lines its line cap prunes, so after every write and resize the engine
+//! reads how far a tracked reference at the top of the live screen moved up and adds that to
+//! [`Engine::scrollback_base`], then moves the reference back to the top of the live screen.
 
 #![allow(unsafe_code)]
 
@@ -148,22 +152,22 @@ pub enum Compression {
     Unsupported,
 }
 
-/// One search match in C2 row coordinates (0.. the screen, negative the scrollback); start and end are inclusive.
+/// One search match in absolute lines (the scrollback from [`Engine::scrollback_base`], then the live screen); start and end are inclusive.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct SearchMatch {
-    /// C2 row of the first matched cell.
-    pub start_row: i64,
+    /// Absolute line of the first matched cell.
+    pub start_line: u64,
     /// 0-based column of the first matched cell.
     pub start_col: u16,
-    /// C2 row of the last matched cell (after `start_row` when the match wraps).
-    pub end_row: i64,
+    /// Absolute line of the last matched cell (after `start_line` when the match wraps).
+    pub end_line: u64,
     /// 0-based column of the last matched cell.
     pub end_col: u16,
 }
 
 /// Receives a grid, row by row and cell by cell, from the engine's readers.
 pub(crate) trait RowSink {
-    /// A row starts: its C2 index and soft-wrap flag.
+    /// A row starts: its index relative to the live screen (negative in the scrollback) and soft-wrap flag.
     fn begin_row(&mut self, index: i32, wrapped: bool);
     /// The next cell of the row, from column 0.
     fn cell(&mut self, codepoint: u32, style: &Style, flags: CellFlags, extra: &[u32]);
@@ -194,6 +198,45 @@ impl Drop for Terminal {
     }
 }
 
+/// A tracked reference at the top of the live screen, which follows its row as the scrollback grows and is pruned.
+struct Anchor {
+    raw: sys::GhosttyTrackedGridRef,
+}
+
+impl Anchor {
+    /// The tracked row's y in screen space (scrollback plus live screen, 0 the oldest row); `None` once it was discarded.
+    fn screen_y(&self, pane_id: u64) -> Option<u32> {
+        let mut point = sys::GhosttyPointCoordinate::default();
+        // SAFETY: the reference is live until drop; the out pointer is a point coordinate.
+        let code = unsafe {
+            sys::ghostty_tracked_grid_ref_point(
+                self.raw,
+                sys::GHOSTTY_POINT_TAG_SCREEN,
+                &raw mut point,
+            )
+        };
+        match code {
+            sys::GHOSTTY_SUCCESS => Some(point.y),
+            sys::GHOSTTY_NO_VALUE => None,
+            code => {
+                tracing::warn!(
+                    pane_id,
+                    code,
+                    "libghostty-vt could not place the scrollback anchor"
+                );
+                None
+            }
+        }
+    }
+}
+
+impl Drop for Anchor {
+    fn drop(&mut self) {
+        // SAFETY: the reference is owned here and freed once; the library allows this before or after its terminal.
+        unsafe { sys::ghostty_tracked_grid_ref_free(self.raw) };
+    }
+}
+
 /// One pane's libghostty-vt terminal with its render state and encoders; `Send`, not `Sync`, never blocks.
 pub struct Engine {
     pane_id: u64,
@@ -206,6 +249,9 @@ pub struct Engine {
     buttons: u16,
     generation: u64,
     row_generation: Vec<u64>,
+    scrollback_base: u64,
+    anchor_y: u32,
+    anchor: Option<Anchor>,
     key: KeyEncoder,
     mouse: MouseEncoder,
     render: RenderState,
@@ -310,6 +356,9 @@ impl Engine {
             buttons: 0,
             generation: 0,
             row_generation: Vec::new(),
+            scrollback_base: 0,
+            anchor_y: 0,
+            anchor: None,
             key: KeyEncoder::new()?,
             mouse: MouseEncoder::new()?,
             render: RenderState::new()?,
@@ -370,6 +419,7 @@ impl Engine {
             (&raw const terminfo).cast(),
         )?;
         engine.set_palette(palette)?;
+        engine.track_scrollback();
         Ok(engine)
     }
 
@@ -394,9 +444,11 @@ impl Engine {
     }
 
     /// Feeds pty output (any split, any size); returns what it produced for the pty and the pane besides screen changes. Never fails.
+    /// [`Engine::scrollback_base`] stays exact while one write adds fewer lines than the scrollback holds; past that it skips every line the terminal held before.
     pub fn write(&mut self, bytes: &[u8]) -> EngineOutput {
         // SAFETY: the terminal is live and no reference to the effects is held across the call.
         unsafe { sys::ghostty_terminal_vt_write(self.term.raw, bytes.as_ptr(), bytes.len()) };
+        self.track_scrollback();
         self.drain()
     }
 
@@ -432,6 +484,7 @@ impl Engine {
             self.sync_size_report();
             return Err(e);
         }
+        self.track_scrollback();
         Ok(self.drain())
     }
 
@@ -487,16 +540,7 @@ impl Engine {
     /// The C2 display modes: alternate screen, DECTCEM, any mouse tracking, bracketed paste.
     pub fn modes(&self) -> Modes {
         let mut modes = Modes::empty();
-        let mut screen = sys::GHOSTTY_TERMINAL_SCREEN_PRIMARY;
-        // SAFETY: the terminal is live; the out pointer is a GhosttyTerminalScreen.
-        let code = unsafe {
-            sys::ghostty_terminal_get(
-                self.term.raw,
-                sys::GHOSTTY_TERMINAL_DATA_ACTIVE_SCREEN,
-                (&raw mut screen).cast(),
-            )
-        };
-        if code == sys::GHOSTTY_SUCCESS && screen == sys::GHOSTTY_TERMINAL_SCREEN_ALTERNATE {
+        if self.alternate_screen() {
             modes = modes | Modes::ALT_SCREEN;
         }
         for (data, flag) in [
@@ -519,7 +563,20 @@ impl Engine {
         modes
     }
 
-    /// Scrollback rows above the screen (C2 indexes `-scrollback_rows..0`); 0 on the alternate screen.
+    fn alternate_screen(&self) -> bool {
+        let mut screen = sys::GHOSTTY_TERMINAL_SCREEN_PRIMARY;
+        // SAFETY: the terminal is live; the out pointer is a GhosttyTerminalScreen.
+        let code = unsafe {
+            sys::ghostty_terminal_get(
+                self.term.raw,
+                sys::GHOSTTY_TERMINAL_DATA_ACTIVE_SCREEN,
+                (&raw mut screen).cast(),
+            )
+        };
+        code == sys::GHOSTTY_SUCCESS && screen == sys::GHOSTTY_TERMINAL_SCREEN_ALTERNATE
+    }
+
+    /// Scrollback rows above the screen: absolute lines `scrollback_base..scrollback_base + scrollback_rows`; 0 on the alternate screen.
     pub fn scrollback_rows(&self) -> u32 {
         let mut rows = 0usize;
         // SAFETY: the terminal is live; the out pointer is a size_t.
@@ -539,6 +596,71 @@ impl Engine {
             return 0;
         }
         u32::try_from(rows).unwrap_or(u32::MAX)
+    }
+
+    /// Lines dropped from the top of the scrollback (pruned by the line cap or erased) since this engine was created: the absolute line of the oldest scrollback row (C2 `scrollback_base`); never decreases. See [`Engine::write`] for when it skips lines.
+    pub fn scrollback_base(&self) -> u64 {
+        self.scrollback_base
+    }
+
+    /// Adds the lines dropped since the last call to the base and moves the anchor back to the top of the live screen.
+    fn track_scrollback(&mut self) {
+        if let Some(anchor) = &self.anchor {
+            let dropped = match anchor.screen_y(self.pane_id) {
+                Some(y) => {
+                    let dropped = self.anchor_y.saturating_sub(y);
+                    self.anchor_y = y;
+                    dropped
+                }
+                None => {
+                    tracing::debug!(
+                        pane_id = self.pane_id,
+                        "the scrollback anchor was discarded; every line held before counts as dropped"
+                    );
+                    self.anchor = None;
+                    self.anchor_y.saturating_add(u32::from(self.rows))
+                }
+            };
+            self.scrollback_base = self.scrollback_base.saturating_add(u64::from(dropped));
+        }
+        // The anchor belongs to the screen it was set on; the alternate screen has no scrollback to count.
+        if self.alternate_screen() {
+            return;
+        }
+        let top = sys::GhosttyPoint {
+            tag: sys::GHOSTTY_POINT_TAG_ACTIVE,
+            value: sys::GhosttyPointValue {
+                coordinate: sys::GhosttyPointCoordinate { x: 0, y: 0 },
+            },
+        };
+        let code = match &self.anchor {
+            // SAFETY: the reference and the terminal are live; the point is inside the active area.
+            Some(anchor) => unsafe {
+                sys::ghostty_tracked_grid_ref_set(anchor.raw, self.term.raw, top)
+            },
+            None => {
+                let mut raw = ptr::null_mut();
+                // SAFETY: the terminal is live; `raw` receives a new reference owned by the `Anchor` below.
+                let code = unsafe {
+                    sys::ghostty_terminal_grid_ref_track(self.term.raw, top, &raw mut raw)
+                };
+                if code == sys::GHOSTTY_SUCCESS && !raw.is_null() {
+                    self.anchor = Some(Anchor { raw });
+                }
+                code
+            }
+        };
+        if code != sys::GHOSTTY_SUCCESS {
+            tracing::warn!(
+                pane_id = self.pane_id,
+                code,
+                "libghostty-vt refused the scrollback anchor; dropped lines may go uncounted"
+            );
+            return;
+        }
+        if let Some(y) = self.anchor.as_ref().and_then(|a| a.screen_y(self.pane_id)) {
+            self.anchor_y = y;
+        }
     }
 
     /// True while the program holds a DEC 2026 synchronized update open; plyd sends no Delta then (R-R18).
@@ -674,7 +796,7 @@ impl Engine {
             )
         })?;
         selections.truncate(buffer.len);
-        let scrollback = i64::from(self.scrollback_rows());
+        let base = self.scrollback_base;
         let mut matches = Vec::with_capacity(selections.len());
         for selection in &selections {
             let (Some(start), Some(end)) = (
@@ -684,9 +806,9 @@ impl Engine {
                 continue;
             };
             matches.push(SearchMatch {
-                start_row: i64::from(start.y) - scrollback,
+                start_line: base + u64::from(start.y),
                 start_col: start.x,
-                end_row: i64::from(end.y) - scrollback,
+                end_line: base + u64::from(end.y),
                 end_col: end.x,
             });
         }
@@ -734,8 +856,8 @@ impl Engine {
         DeltaBuilder::new().snapshot(self)
     }
 
-    /// Scrollback rows `start..start + count` (C2 indexes, clipped to what exists and to one frame) with their own style table, for one-off readers; errors: [`Error::Ghostty`].
-    pub fn scroll_history(&mut self, start: i64, count: u16) -> Result<History> {
+    /// Scrollback lines `start..start + count` (absolute, clipped to what exists and to one frame) with their own style table, for one-off readers; errors: [`Error::Ghostty`].
+    pub fn scroll_history(&mut self, start: u64, count: u16) -> Result<History> {
         DeltaBuilder::new().history(self, start, count)
     }
 
@@ -789,7 +911,7 @@ impl Engine {
         self.render.read_rows(self.pane_id, want, sink)
     }
 
-    /// Feeds scrollback rows `lo..hi` (C2 indexes, already clipped) into `sink`; stops early when `keep_going` says so.
+    /// Feeds scrollback rows `lo..hi` (indexes relative to the live screen, -1 the newest, already clipped) into `sink`; stops early when `keep_going` says so.
     pub(crate) fn read_history<S: RowSink>(
         &mut self,
         lo: i64,

@@ -250,8 +250,9 @@ fn idle_compression_runs_to_completion() {
         active,
         "compressing does not move the token"
     );
+    let top = e.scrollback_base() + u64::from(e.scrollback_rows());
     assert_eq!(
-        e.scroll_history(-2000, 1).unwrap().lines.len(),
+        e.scroll_history(top - 2000, 1).unwrap().lines.len(),
         1,
         "compressed history still reads"
     );
@@ -272,11 +273,15 @@ fn search_finds_matches_in_scrollback_newest_first() {
     let matches = e.search("needle").unwrap();
     assert_eq!(matches.len(), 5);
     let newest = matches[0];
-    let history = e.scroll_history(newest.start_row, 1).unwrap();
+    let history = e.scroll_history(newest.start_line, 1).unwrap();
     let text = ply_term::cells_text(&history.lines[0].cells);
     assert_eq!(text, "line 4007 NEEDLE here");
     assert_eq!((newest.start_col, newest.end_col), (10, 15));
-    assert!(matches.windows(2).all(|w| w[0].start_row > w[1].start_row));
+    assert!(
+        matches
+            .windows(2)
+            .all(|w| w[0].start_line > w[1].start_line)
+    );
     assert!(e.search("").unwrap().is_empty());
     assert!(e.search("absent").unwrap().is_empty());
 }
@@ -290,7 +295,7 @@ fn saved_state_restores_screen_modes_and_an_unfinished_sequence() {
     e.write(b"\x1b]2;saved title\x07\x1b]7;file://example-host/tmp\x07\x1b[?2004h\x1b[>1u\x1b]4;1;#123456\x07\x1b[5;5Hcursor");
     e.write(b"\x1b]9;half an O");
     let before = screen(&mut e);
-    let history = e.scroll_history(-3000, 5).unwrap();
+    let history = e.scroll_history(0, 5).unwrap();
     let state = e.save().unwrap();
     drop(e);
 
@@ -301,7 +306,7 @@ fn saved_state_restores_screen_modes_and_an_unfinished_sequence() {
         "the unfinished sequence survives"
     );
     assert_eq!(screen(&mut r), before);
-    assert_eq!(r.scroll_history(-3000, 5).unwrap().lines, history.lines);
+    assert_eq!(r.scroll_history(0, 5).unwrap().lines, history.lines);
     assert_eq!(r.title(), "saved title");
     assert_eq!(r.pwd(), "file://example-host/tmp");
     assert!(r.modes().contains(Modes::BRACKETED_PASTE));

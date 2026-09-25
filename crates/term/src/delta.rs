@@ -10,6 +10,8 @@
 //! A History page never exceeds [`MAX_FRAME_LEN`]: it stops at the last row that fits, and its `styles_added` may
 //! hold styles of rows it left out, which the client must still add to its table (later frames use those ids without
 //! resending them). Snapshots and Deltas are bounded by the grid, at most 23 bytes a cell plus grapheme codepoints.
+//! Every frame carries the engine's [`Engine::scrollback_base`], and History pages are addressed by absolute line, so
+//! a client's fetched rows stay valid while the line cap drops the oldest ones.
 
 use std::collections::HashMap;
 
@@ -66,6 +68,7 @@ struct Sent {
     cursor: Cursor,
     modes: Modes,
     scrollback_rows: u32,
+    scrollback_base: u64,
 }
 
 impl DeltaBuilder {
@@ -95,6 +98,7 @@ impl DeltaBuilder {
             cursor: engine.cursor()?,
             modes: engine.modes(),
             scrollback_rows: engine.scrollback_rows(),
+            scrollback_base: engine.scrollback_base(),
         };
         self.seq += 1;
         self.sent_generation = engine.generation();
@@ -106,12 +110,13 @@ impl DeltaBuilder {
             cursor: sent.cursor,
             modes: sent.modes,
             scrollback_rows: sent.scrollback_rows,
+            scrollback_base: sent.scrollback_base,
             styles,
             lines,
         })
     }
 
-    /// What changed since this client's last frame: rows newer than it, or a row-less Delta when only the cursor, modes or scrollback count changed (Ruling R39); `None` when nothing changed (R-R21); a Snapshot when one is required; errors: [`crate::Error::Ghostty`].
+    /// What changed since this client's last frame: rows newer than it, or a row-less Delta when only the cursor, modes or scrollback count or base changed (Ruling R39); `None` when nothing changed (R-R21); a Snapshot when one is required; errors: [`crate::Error::Ghostty`].
     pub fn delta(&mut self, engine: &mut Engine) -> Result<Option<Update>> {
         engine.refresh()?;
         let (cols, rows) = engine.render_size()?;
@@ -127,6 +132,7 @@ impl DeltaBuilder {
             cursor: engine.cursor()?,
             modes: engine.modes(),
             scrollback_rows: engine.scrollback_rows(),
+            scrollback_base: engine.scrollback_base(),
         };
         let since = self.sent_generation;
         let changed: Vec<bool> = engine
@@ -151,22 +157,26 @@ impl DeltaBuilder {
             cursor: now.cursor,
             modes: now.modes,
             scrollback_rows: now.scrollback_rows,
+            scrollback_base: now.scrollback_base,
             styles_added,
             lines,
         })))
     }
 
-    /// Scrollback rows answering FETCH_HISTORY `start..start + count`, clipped to what exists and to one frame (the client asks again for the rest); styles are interned into this client's table; errors: [`crate::Error::Ghostty`].
-    pub fn history(&mut self, engine: &mut Engine, start: i64, count: u16) -> Result<History> {
-        let scrollback = i64::from(engine.scrollback_rows());
-        let lo = start.max(-scrollback);
-        let hi = start.saturating_add(i64::from(count)).min(0);
+    /// Scrollback lines answering FETCH_HISTORY `start..start + count` (absolute), clipped to what exists and to one frame (the client asks again for the rest); styles are interned into this client's table; errors: [`crate::Error::Ghostty`].
+    pub fn history(&mut self, engine: &mut Engine, start: u64, count: u16) -> Result<History> {
+        let base = engine.scrollback_base();
+        let top = base + u64::from(engine.scrollback_rows());
+        let lo = start.max(base);
+        let hi = start.saturating_add(u64::from(count)).min(top);
         let (cols, _) = engine.size();
         // One more row can add at most a header, its cells and one new style per cell (graphemes are trimmed below).
         let row_margin = ROW_HEADER_LEN + usize::from(cols) * (CELL_LEN + STYLE_ENTRY_LEN);
         let mut sink = RowCollector::new(self, cols, engine.pane_id());
         if lo < hi {
-            engine.read_history(lo, hi, &mut sink, |s| {
+            // Both ends lie within the scrollback, so their distance to the screen fits a u32.
+            let relative = |line: u64| -i64::from(u32::try_from(top - line).unwrap_or(u32::MAX));
+            engine.read_history(relative(lo), relative(hi), &mut sink, |s| {
                 s.encoded_len + s.added.len() * STYLE_ENTRY_LEN + FRAME_OVERHEAD + row_margin
                     <= MAX_FRAME_LEN
             })?;
@@ -178,6 +188,9 @@ impl DeltaBuilder {
         while total > MAX_FRAME_LEN {
             let Some(row) = lines.pop() else { break };
             total -= encoded_row_len(&row);
+        }
+        for (i, row) in lines.iter_mut().enumerate() {
+            row.index = i32::try_from(i).unwrap_or(i32::MAX);
         }
         Ok(History {
             start: if lines.is_empty() { start } else { lo },
@@ -328,7 +341,7 @@ mod tests {
         let encoded = |styles_added: Vec<StyleEntry>| {
             let mut wire = Vec::new();
             Frame::History(History {
-                start: -1,
+                start: 1,
                 lines: vec![],
                 styles_added,
             })

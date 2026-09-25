@@ -92,7 +92,7 @@ const expected: Record<string, Frame> = {
   },
   'input-raw': { kind: 'inputRaw', bytes: Uint8Array.from([0x31, 0x00, 0x1b, 0xff]) },
   resize: { kind: 'resize', cols: 65535, rows: 1, cellWidthPx: 7, cellHeightPx: 16 },
-  'fetch-history': { kind: 'fetchHistory', start: -MAX_SAFE, count: 1000 },
+  'fetch-history': { kind: 'fetchHistory', start: MAX_SAFE, count: 1000 },
   ack: { kind: 'ack', seq: MAX_SAFE },
   key: {
     kind: 'key',
@@ -134,6 +134,7 @@ const expected: Record<string, Frame> = {
     cursor: { col: 7, row: 1, shape: 'bar', visible: true, blinking: true },
     modes: Modes.altScreen | Modes.cursorVisible | Modes.mouseReporting | Modes.bracketedPaste,
     scrollbackRows: 10_300,
+    scrollbackBase: 123_456_789,
     styles,
     lines: rows(0),
   },
@@ -143,6 +144,7 @@ const expected: Record<string, Frame> = {
     cursor: { col: 0, row: 0, shape: 'blockHollow', visible: false, blinking: false },
     modes: Modes.cursorVisible,
     scrollbackRows: 0xffffffff,
+    scrollbackBase: MAX_SAFE,
     stylesAdded: [
       {
         id: 3,
@@ -156,7 +158,7 @@ const expected: Record<string, Frame> = {
     ],
     lines: rows(1),
   },
-  history: { kind: 'history', start: -2, stylesAdded: styles, lines: rows(-2) },
+  history: { kind: 'history', start: 123_466_787, stylesAdded: styles, lines: rows(0) },
   title: { kind: 'title', title: 'claude — example ✳' },
   bell: { kind: 'bell' },
   exit: { kind: 'exit', code: -129 },
@@ -222,16 +224,12 @@ describe('C2 decoding is strict (INV-10)', () => {
 
   test('out-of-range values', () => {
     rejects(Kind.focus, [2], 'invalidValue');
-    rejects(
-      Kind.fetchHistory,
-      [0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0, 0],
-      'invalidValue',
-    );
-    rejects(
-      Kind.fetchHistory,
-      [0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xe9, 0x03],
-      'invalidValue',
-    );
+    rejects(Kind.fetchHistory, [0, 0, 0, 0, 0, 0, 0, 0, 0, 0], 'invalidValue');
+    rejects(Kind.fetchHistory, [0, 0, 0, 0, 0, 0, 0, 0, 0xe9, 0x03], 'invalidValue');
+    rejects(Kind.fetchHistory, [0, 0, 0, 0, 0, 0, 0x20, 0, 1, 0], 'invalidValue');
+    const oneRow = (index: number) => [5, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, index, 0, 0, 0, 0, 0, 0];
+    expect(decodeFrame(Kind.history, Uint8Array.from(oneRow(0))).kind).toBe('history');
+    rejects(Kind.history, oneRow(1), 'invalidValue');
     rejects(Kind.ack, [0, 0, 0, 0, 0, 0, 0x20, 0], 'invalidValue');
     rejects(Kind.key, [176, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0], 'invalidValue');
     rejects(Kind.key, [1, 0, 0, 4, 0, 0, 1, 0, 0, 0, 0, 0], 'invalidValue');
@@ -244,7 +242,10 @@ describe('C2 decoding is strict (INV-10)', () => {
   });
 
   test('bad cell, style, cursor and mode bits', () => {
-    const header = [1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0];
+    const header = [
+      ...[1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0],
+      ...[0, 0, 0, 0, 0, 0, 0, 0],
+    ];
     const noStyles = [0, 0];
     const oneRow = (cell: number[]) => [1, 0, 0, 0, 0, 0, 0, 1, 0, ...cell];
     const ok = [...header, ...noStyles, ...oneRow([0x41, 0, 0, 0, 0, 0, 0])];
@@ -282,6 +283,22 @@ describe('C2 decoding is strict (INV-10)', () => {
       { kind: 'resize', cols: 65536, rows: 1, cellWidthPx: 1, cellHeightPx: 1 },
       { kind: 'ack', seq: -1 },
       { kind: 'ack', seq: 2 ** 53 },
+      { kind: 'fetchHistory', start: -1, count: 1 },
+      {
+        kind: 'history',
+        start: 0,
+        stylesAdded: [],
+        lines: [
+          {
+            index: 1,
+            wrapped: false,
+            codepoints: new Uint32Array(0),
+            styles: new Uint16Array(0),
+            flags: new Uint8Array(0),
+            graphemes: null,
+          },
+        ],
+      },
       { kind: 'exit', code: 2 ** 31 },
       { kind: 'mouse', action: 'press', button: 1, mods: 0, col: 0, row: 0, x: Number.NaN, y: 0 },
     ];

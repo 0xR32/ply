@@ -6,8 +6,11 @@
 //! must match them byte for byte. Decoding is strict: unknown kinds, out-of-range values, unknown flag bits,
 //! truncated payloads and trailing bytes are errors (INV-10).
 //!
-//! Colours stay symbolic ([`Color`]); the app resolves them against its theme. Rows are indexed from the top of the
-//! live screen (`0..rows`); scrollback rows have negative indexes, `-1` being the newest line above the screen.
+//! Colours stay symbolic ([`Color`]); the app resolves them against its theme. Screen rows are indexed from the top of
+//! the live screen (`0..rows`). Scrollback is addressed by absolute line: SNAPSHOT and DELTA carry
+//! `scrollback_base`, the absolute line of the oldest scrollback row, which only grows as the line cap drops rows, so
+//! the scrollback is lines `scrollback_base..scrollback_base + scrollback_rows` and a line keeps its number for as
+//! long as plyd keeps it. FETCH_HISTORY and HISTORY speak absolute lines.
 //!
 //! ```
 //! use ply_proto::data::{Ack, Frame, FrameReader};
@@ -318,7 +321,7 @@ pub struct Cell {
 /// One row: `index:i32 · flags:u8 (bit 0 = wraps onto the next row) · n:u16 · n cells`.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
 pub struct Row {
-    /// 0.. from the top of the live screen; negative for scrollback (-1 is the newest scrollback line).
+    /// In SNAPSHOT and DELTA the screen row (0 is the top); in HISTORY the row's position in the page, so line `start + index`.
     pub index: i32,
     /// The row's text continues on the next row (soft wrap), so copying joins them without a newline.
     pub wrapped: bool,
@@ -385,11 +388,11 @@ pub struct Resize {
     pub cell_height_px: u16,
 }
 
-/// FETCH_HISTORY (0x13): `start:i64 · count:u16`; rows `start..start+count` (negative indexes), count at most 1000.
+/// FETCH_HISTORY (0x13): `start:u64 · count:u16`; absolute lines `start..start+count`, count at most 1000.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct FetchHistory {
-    /// Index of the first row wanted (a scrollback index, so negative).
-    pub start: i64,
+    /// Absolute line of the first row wanted (see the module docs).
+    pub start: u64,
     /// Number of rows, 1..=[`MAX_HISTORY_ROWS`].
     pub count: u16,
 }
@@ -519,8 +522,10 @@ pub struct Snapshot {
     pub cursor: Cursor,
     /// Display modes.
     pub modes: Modes,
-    /// Scrollback rows available above row 0 (indexes `-scrollback_rows..0`).
+    /// Scrollback rows available above row 0; 0 on the alternate screen.
     pub scrollback_rows: u32,
+    /// Absolute line of the oldest scrollback row, never decreasing within one attachment; row 0 is line `scrollback_base + scrollback_rows`.
+    pub scrollback_base: u64,
     /// The complete style table.
     pub styles: Vec<StyleEntry>,
     /// Every screen row, `0..rows`.
@@ -538,6 +543,8 @@ pub struct Delta {
     pub modes: Modes,
     /// Scrollback rows available after the change.
     pub scrollback_rows: u32,
+    /// Absolute line of the oldest scrollback row after the change (see [`Snapshot::scrollback_base`]).
+    pub scrollback_base: u64,
     /// Styles interned since the previous frame; ids never repeat within one attachment.
     pub styles_added: Vec<StyleEntry>,
     /// Changed rows, each replacing the row with the same index.
@@ -547,9 +554,9 @@ pub struct Delta {
 /// HISTORY (0x22): scrollback rows answering FETCH_HISTORY, clipped to what exists (possibly none).
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct History {
-    /// Index of the first row returned.
-    pub start: i64,
-    /// Rows `start..start+len`, oldest first; their styles arrive in this frame's `styles_added` or earlier.
+    /// Absolute line of the first row returned; the request's `start` when none is.
+    pub start: u64,
+    /// Lines `start..start+len`, oldest first, row `i` with index `i`; their styles arrive in this frame's `styles_added` or earlier.
     pub lines: Vec<Row>,
     /// Styles new to the client; apply them even when discarding the rows (a page cut to fit may name styles of rows it left out, and later frames reuse the ids without resending).
     pub styles_added: Vec<StyleEntry>,
@@ -637,9 +644,6 @@ impl Writer<'_> {
         self.0.extend_from_slice(&v.to_le_bytes());
     }
     fn i32(&mut self, v: i32) {
-        self.0.extend_from_slice(&v.to_le_bytes());
-    }
-    fn i64(&mut self, v: i64) {
         self.0.extend_from_slice(&v.to_le_bytes());
     }
     fn f32(&mut self, v: f32) {
@@ -743,9 +747,6 @@ impl<'a> Reader<'a> {
     }
     fn i32(&mut self) -> Result<i32> {
         Ok(i32::from_le_bytes(self.array()?))
-    }
-    fn i64(&mut self) -> Result<i64> {
-        Ok(i64::from_le_bytes(self.array()?))
     }
     fn f32(&mut self, field: &'static str) -> Result<f32> {
         let v = f32::from_le_bytes(self.array()?);
@@ -957,7 +958,7 @@ impl Frame {
                 w.u16(r.cell_height_px);
             }
             Self::FetchHistory(f) => {
-                w.i64(f.start);
+                w.u64(f.start);
                 w.u16(f.count);
             }
             Self::Ack(a) => w.u64(a.seq),
@@ -991,6 +992,7 @@ impl Frame {
                 w.cursor(&s.cursor);
                 w.u16(s.modes.bits());
                 w.u32(s.scrollback_rows);
+                w.u64(s.scrollback_base);
                 w.style_entries(k, &s.styles)?;
                 w.rows(k, &s.lines)?;
             }
@@ -999,11 +1001,24 @@ impl Frame {
                 w.cursor(&d.cursor);
                 w.u16(d.modes.bits());
                 w.u32(d.scrollback_rows);
+                w.u64(d.scrollback_base);
                 w.style_entries(k, &d.styles_added)?;
                 w.rows(k, &d.lines)?;
             }
             Self::History(h) => {
-                w.i64(h.start);
+                if let Some((_, row)) = h
+                    .lines
+                    .iter()
+                    .enumerate()
+                    .find(|(i, row)| usize::try_from(row.index) != Ok(*i))
+                {
+                    return Err(invalid(
+                        k,
+                        "history row index",
+                        u64::from(row.index.unsigned_abs()),
+                    ));
+                }
+                w.u64(h.start);
                 w.style_entries(k, &h.styles_added)?;
                 w.rows(k, &h.lines)?;
             }
@@ -1044,7 +1059,7 @@ impl Frame {
                 cell_height_px: r.u16()?,
             }),
             kind::FETCH_HISTORY => {
-                let start = r.i64()?;
+                let start = r.u64()?;
                 let count = r.u16()?;
                 if count == 0 || count > MAX_HISTORY_ROWS {
                     return Err(invalid(kind, "history count", u64::from(count)));
@@ -1124,6 +1139,7 @@ impl Frame {
                 cursor: r.cursor()?,
                 modes: r.modes()?,
                 scrollback_rows: r.u32()?,
+                scrollback_base: r.u64()?,
                 styles: r.style_entries()?,
                 lines: r.rows()?,
             }),
@@ -1132,14 +1148,31 @@ impl Frame {
                 cursor: r.cursor()?,
                 modes: r.modes()?,
                 scrollback_rows: r.u32()?,
+                scrollback_base: r.u64()?,
                 styles_added: r.style_entries()?,
                 lines: r.rows()?,
             }),
-            kind::HISTORY => Self::History(History {
-                start: r.i64()?,
-                styles_added: r.style_entries()?,
-                lines: r.rows()?,
-            }),
+            kind::HISTORY => {
+                let start = r.u64()?;
+                let styles_added = r.style_entries()?;
+                let lines = r.rows()?;
+                let misplaced = lines
+                    .iter()
+                    .enumerate()
+                    .find(|(i, row)| usize::try_from(row.index) != Ok(*i));
+                if let Some((_, row)) = misplaced {
+                    return Err(invalid(
+                        kind,
+                        "history row index",
+                        u64::from(row.index.unsigned_abs()),
+                    ));
+                }
+                Self::History(History {
+                    start,
+                    lines,
+                    styles_added,
+                })
+            }
             kind::TITLE => Self::Title(r.rest_text()?),
             kind::BELL => Self::Bell,
             kind::EXIT => Self::Exit(Exit { code: r.i32()? }),
