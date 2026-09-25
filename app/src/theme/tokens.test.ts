@@ -10,6 +10,20 @@ import {
 
 const RGB = /^#[0-9A-F]{6}$/;
 
+function luminance(hex: string): number {
+  const n = Number.parseInt(hex.slice(1), 16);
+  const lin = (c: number): number => {
+    const v = c / 255;
+    return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4;
+  };
+  return 0.2126 * lin((n >> 16) & 255) + 0.7152 * lin((n >> 8) & 255) + 0.0722 * lin(n & 255);
+}
+
+function contrast(a: string, b: string): number {
+  const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x);
+  return ((hi ?? 0) + 0.05) / ((lo ?? 0) + 0.05);
+}
+
 function toHsl(hex: string): [number, number, number] {
   const n = Number.parseInt(hex.slice(1), 16);
   const r = ((n >> 16) & 255) / 255;
@@ -41,8 +55,12 @@ describe('tokens', () => {
       tokens.violet,
       tokens.teal,
       tokens.text,
-      tokens.text3,
+      tokens.brightBlack,
     ]);
+  });
+
+  test('white text stays readable on bright black, the Claude Code prompt background', () => {
+    expect(contrast(tokens.text, ansi16[8] ?? '')).toBeGreaterThanOrEqual(4.5);
   });
 
   test('bright slots 9-15 keep the hue of 1-7 at +8 points lightness, clamped at white', () => {

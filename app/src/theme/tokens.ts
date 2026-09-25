@@ -10,6 +10,8 @@ const text = '#E6E8EF';
 const text2 = '#A4A9B8';
 const text3 = '#8D93A4';
 const hint = '#7C8294';
+// Claude Code's dark-ansi theme paints its prompt line in bright black, so slot 8 must stay dark under white text.
+const brightBlack = '#5C6273';
 const accent = '#8AB4FF';
 const amber = '#F2B35B';
 const mint = '#7FD4B0';
@@ -28,7 +30,7 @@ export const accentAlternatives = {
 /** Name of one selectable accent colour, as stored in Settings. */
 export type AccentName = keyof typeof accentAlternatives;
 
-/** SGR slots 0–15: 0–7 are chrome tokens, 8 is `text3`, 9–15 are 1–7 at +8 points HSL lightness.
+/** SGR slots 0–15: 0–7 are chrome tokens, 8 is `brightBlack`, 9–15 are 1–7 at +8 points HSL lightness.
  *  `tokens.test.ts` enforces the bright-slot rule, so edit a base colour and its bright twin together. */
 export const ansi16: Readonly<TerminalTheme['ansi']> = [
   ground,
@@ -39,7 +41,7 @@ export const ansi16: Readonly<TerminalTheme['ansi']> = [
   violet,
   teal,
   text,
-  text3,
+  brightBlack,
   '#F49B8F',
   '#9EDEC3',
   '#F5C581',
@@ -149,6 +151,7 @@ export const tokens = {
   text2,
   text3,
   hint,
+  brightBlack,
   accent,
   amber,
   mint,
