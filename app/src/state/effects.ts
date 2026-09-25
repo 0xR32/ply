@@ -1,4 +1,5 @@
 import { type ControlClient, RequestError } from '../ipc/control-client';
+import { completeDir, type DirSources, type DirVisit, recentDirs, scanRepos } from '../ipc/dirs';
 import { log } from '../ipc/log';
 import { readBuildId, readReducedMotion } from '../ipc/os';
 import type { Layout, PaneCreateParams, Workspace } from '../ipc/proto.gen';
@@ -9,6 +10,7 @@ import {
   FULL_TAB_NOTICE,
   isAlive,
   isTabFull,
+  pathQuery,
   selectActiveTab,
   selectFocusedPane,
 } from './selectors';
@@ -25,6 +27,10 @@ export interface EffectsOptions {
   buildId?: () => Promise<string | null>;
   /** Ends the app after "Quit ply and stop sessions"; defaults to `process.exit(0)`, as GPUIX does when the window closes. */
   quit?: () => void;
+  /** Where the new-pane form's folder suggestions come from; defaults to `ipc/dirs.ts`. */
+  dirs?: DirSources;
+  /** The native folder picker for "Browse…": the chosen folder, or `null` when cancelled; without it Browse does nothing. */
+  promptForDirectory?: () => Promise<string | null>;
 }
 
 function message(error: unknown): string {
@@ -72,6 +78,10 @@ export function startEffects(store: Store, options: EffectsOptions): () => void 
   let layoutTimer: ReturnType<typeof setTimeout> | null = null;
   let settingsTimer: ReturnType<typeof setTimeout> | null = null;
   let stopped = false;
+  const dirs = options.dirs ?? { recentDirs, scanRepos, completeDir };
+  let scanning = false;
+  let listing: string | null = null;
+  let listGeneration = 0;
 
   const dispatch = (action: Action) => {
     if (!stopped) store.dispatch(action);
@@ -167,6 +177,68 @@ export function startEffects(store: Store, options: EffectsOptions): () => void 
       });
   }
 
+  /** The form opened: recent folders from its panes and stored sessions, and a background rescan of the home directory unless one runs. */
+  function refreshDirs(state: AppState): void {
+    listing = null;
+    const panes = Object.values(state.panes);
+    const workspace = state.workspace;
+    const sessions: Promise<DirVisit[]> = workspace
+      ? client
+          .request('session.list', { workspace_id: workspace.id, include_closed: true })
+          .catch((error) => {
+            log('warn', 'session.list for the recent folders failed', { error: message(error) });
+            return [];
+          })
+      : Promise.resolve([]);
+    sessions
+      .then((list) => dirs.recentDirs(list, panes))
+      .then((paths) => dispatch({ type: 'dirs/recent', paths }))
+      .catch((error) =>
+        log('warn', 'reading the recent folders failed', { error: message(error) }),
+      );
+    if (scanning) return;
+    scanning = true;
+    dirs
+      .scanRepos(state.env.home)
+      .then((scan) => {
+        log('info', 'scanned the home directory for repositories', {
+          repos: scan.repos.length,
+          visited: scan.visited,
+          ms: scan.elapsedMs,
+          truncated: scan.truncated,
+        });
+        dispatch({ type: 'dirs/repos', paths: scan.repos });
+      })
+      .catch((error) => log('warn', 'the repository scan failed', { error: message(error) }))
+      .finally(() => {
+        scanning = false;
+      });
+  }
+
+  /** Lists the folder a path query names, unless it is the one listed last; only the newest listing is kept. */
+  function completeQuery(state: AppState): void {
+    const query = pathQuery(state.dirs.query, state.env.home, state.dirs.base);
+    if (!query || query.dir === listing) return;
+    listing = query.dir;
+    const generation = ++listGeneration;
+    dirs
+      .completeDir(query.dir)
+      .then((listed) => {
+        if (generation === listGeneration) dispatch({ type: 'dirs/completion', ...listed });
+      })
+      .catch((error) => log('warn', 'listing a folder failed', { error: message(error) }));
+  }
+
+  function browse(): void {
+    const prompt = options.promptForDirectory;
+    if (!prompt) return;
+    prompt()
+      .then((path) => {
+        if (path) dispatch({ type: 'dirs/accept', path });
+      })
+      .catch((error) => failed('Opening the folder picker', error));
+  }
+
   function closeFocused(prev: AppState): void {
     const pane = selectFocusedPane(prev);
     if (!pane || isAlive(pane)) return;
@@ -198,6 +270,9 @@ export function startEffects(store: Store, options: EffectsOptions): () => void 
         } else {
           createPane(createParams(next, action.request), true);
         }
+        break;
+      case 'dirs/browse':
+        browse();
         break;
       case 'pane/closeConfirmed':
         client
@@ -242,6 +317,11 @@ export function startEffects(store: Store, options: EffectsOptions): () => void 
         break;
       default:
         break;
+    }
+    if (next.overlay?.kind === 'new-pane') {
+      const opened = prev.overlay?.kind !== 'new-pane';
+      if (opened) refreshDirs(next);
+      if (opened || next.dirs.query !== prev.dirs.query) completeQuery(next);
     }
     if (action.type === 'session/loaded') return;
     if (next.settings !== prev.settings) {

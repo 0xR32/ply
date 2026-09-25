@@ -2,6 +2,7 @@ import { homedir } from 'node:os';
 import { render } from '@gpuix/react';
 import { version } from '../package.json';
 import { App } from './app/App';
+import { BindFolderPicker, createFolderPicker } from './app/folder-picker';
 import { FrameStats } from './app/frame-stats';
 import { StartZoomed } from './app/start-zoomed';
 import { createControlClient } from './ipc/control-client';
@@ -32,7 +33,11 @@ const client = createControlClient({
   appVersion: version,
   startDaemon: createDaemonStarter(),
 });
-globalThis.plyStopEffects = startEffects(store, { client });
+const folderPicker = createFolderPicker();
+globalThis.plyStopEffects = startEffects(store, {
+  client,
+  promptForDirectory: () => folderPicker.prompt(),
+});
 
 // PLY_WINDOW_FOCUS=0 opens the window without stealing focus, for agents and scripted runs.
 const takeFocus = process.env.PLY_WINDOW_FOCUS !== '0';
@@ -42,6 +47,7 @@ render(
   <>
     <App store={store} />
     <StartZoomed />
+    <BindFolderPicker picker={folderPicker} />
     {frameStats ? <FrameStats /> : null}
   </>,
   {

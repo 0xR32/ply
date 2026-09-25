@@ -228,6 +228,18 @@ holds it.
 - The app runs `defaults read com.apple.universalaccess reduceMotion` and
   `git rev-parse --short=12 HEAD` in its checkout (its build id) once at
   startup, and `pbcopy` or `pbpaste` when you copy or paste in a pane.
+- For the new-pane form's folder suggestions (Ruling R57), each time the form
+  opens the app checks which working directories of the workspace's panes and
+  stored sessions (`session.list`) still exist, and lists the home directory in
+  the background to find git repositories: breadth-first to a depth of 4, never
+  into hidden folders, `~/Library`, `node_modules`, `target`, a symlinked folder
+  or a repository's own tree, and stopping after 5 000 directories or 2 s. While
+  a path is typed it lists the sub-folders of the folder it names. All of it is
+  read with asynchronous directory listings, kept in memory only, never written
+  anywhere and never sent anywhere; the app log gets the scan's counts and
+  duration. Listing `~/Documents`, `~/Desktop` or `~/Downloads` can make macOS
+  ask once whether the terminal ply runs from may read them; a refused folder
+  is skipped.
 - Geist and Geist Mono are used only when installed (in `~/Library/Fonts` or
   `/Library/Fonts`), because GPUIX cannot load a font file; otherwise the chrome
   uses the system font and the terminal Menlo. The TTFs, under the SIL Open Font

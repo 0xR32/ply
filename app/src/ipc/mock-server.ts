@@ -73,6 +73,8 @@ function nowSeconds(): number {
 export class MockServer {
   readonly requests: MockRequest[] = [];
   readonly panes = new Map<number, Pane>();
+  /** Stored records of closed panes, which `session.list {include_closed:true}` returns after the open ones. */
+  readonly closedSessions: Session[] = [];
   palette: TerminalTheme | null = null;
   layout: Layout | null = null;
   settings: Settings = { ...DEFAULT_SETTINGS };
@@ -373,8 +375,8 @@ export class MockServer {
         this.setStatus(pane.id, resumable ? 'starting' : 'idle');
         return this.requirePane(pane.id);
       }
-      case 'session.list':
-        return [...this.panes.values()].map(
+      case 'session.list': {
+        const open = [...this.panes.values()].map(
           (x): Session => ({
             pane_id: x.id,
             workspace_id: x.workspace_id,
@@ -385,6 +387,9 @@ export class MockServer {
             created_at: x.created_at,
           }),
         );
+        const params = p as Methods['session.list']['params'];
+        return params.include_closed ? [...open, ...this.closedSessions] : open;
+      }
       case 'theme.set':
         this.palette = (p as Methods['theme.set']['params']).palette;
         return {};

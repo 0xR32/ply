@@ -114,7 +114,9 @@ app/src
 ├── state/           store.ts (useSyncExternalStore) · actions.ts · reducer.ts (pure) · selectors.ts ·
 │                    effects.ts (the only ipc caller)
 ├── ipc/             control-client.ts (C1, reconnect 100 ms → 2 s) · daemon-launcher.ts (dev plyd or the
-│                    LaunchAgent) · paths.ts · proto.gen.ts (generated) · mock-server.ts (tests only)
+│                    LaunchAgent) · dirs.ts (the new-pane form's folder sources: recents, the bounded
+│                    repository scan, path completion; async fs only) · os.ts · paths.ts ·
+│                    proto.gen.ts (generated) · mock-server.ts (tests only)
 ├── terminal/        frames.ts (C2 codec) · data-client.ts · replica.ts · runs.ts (row → <text> runs) ·
 │                    input.ts · selection.ts · session.ts · host.ts · metrics.ts
 ├── keymap/          keymap.ts (every binding, once) · dispatcher.ts · reserved.ts

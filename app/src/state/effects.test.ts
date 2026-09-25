@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from 'bun:test';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createControlClient } from '../ipc/control-client';
@@ -8,7 +8,7 @@ import { accentAlternatives } from '../theme/tokens';
 import type { Action } from './actions';
 import { startEffects } from './effects';
 import { type AppState, initialState } from './reducer';
-import { selectForeignDaemon } from './selectors';
+import { selectDirSuggestions, selectForeignDaemon } from './selectors';
 import { createStore } from './store';
 
 const HOME = '/Users/example';
@@ -242,5 +242,95 @@ describe('effects', () => {
     await until(() => state().connection.kind !== 'connected', 'the drop');
     await until(() => seen.filter((a) => a.type === 'session/loaded').length === 2, 'a reload');
     expect(state().tabs[1]?.pane_ids).toContain(9);
+  });
+});
+
+describe('the directory search’s sources', () => {
+  /** Effects over a temporary home holding `code/ply` (a repository), `code/api` and `notes`, with one pane in `code/ply`. */
+  async function searching(pick: () => Promise<string | null> = async () => null) {
+    const home = mkdtempSync(join(tmpdir(), 'ply-home-'));
+    cleanups.push(() => rmSync(home, { recursive: true, force: true }));
+    for (const d of ['code/ply/.git', 'code/api', 'notes'])
+      mkdirSync(join(home, d), { recursive: true });
+    const socketPath = join(home, 'run', 'plyd.sock');
+    const server = MockServer.start({ socketPath, home, scenario: 'empty', startDelayMs: null });
+    cleanups.push(() => server.stop());
+    server.addPane({ cli: 'claude', cwd: join(home, 'code/ply') });
+    server.closedSessions.push(
+      { ...closed(9, join(home, 'notes')), closed_at: 1_790_000_100 },
+      { ...closed(8, join(home, 'gone')), closed_at: 1_790_000_200 },
+    );
+    const store = createStore(initialState({ home, shellName: 'zsh', geistAvailable: false }));
+    const client = createControlClient({ socketPath, appVersion: '0.1.0', initialBackoffMs: 10 });
+    cleanups.push(
+      startEffects(store, {
+        client,
+        reducedMotion: async () => true,
+        buildId: async () => null,
+        promptForDirectory: pick,
+      }),
+    );
+    const until = async (check: () => boolean, what: string) => {
+      const end = Date.now() + 3_000;
+      while (!check()) {
+        if (Date.now() > end) throw new Error(`timed out waiting for ${what}`);
+        await Bun.sleep(5);
+      }
+    };
+    await until(() => store.getState().panes[1] !== undefined, 'the session');
+    return { home, server, store, until, dirs: () => store.getState().dirs };
+  }
+
+  function closed(id: number, cwd: string) {
+    return {
+      pane_id: id,
+      workspace_id: 1,
+      cli: 'shell' as const,
+      cwd,
+      title: 'zsh',
+      status: 'exited' as const,
+      created_at: 1_790_000_000,
+    };
+  }
+
+  test('opening the form reads the recent folders from session.list and scans home for repositories', async () => {
+    const { home, server, store, until, dirs } = await searching();
+    store.dispatch({ type: 'command', id: 'tab.new' });
+    await until(() => dirs().recent.length > 0 && dirs().repos.length > 0, 'the sources');
+    expect(server.requestsOf('session.list')).toEqual([{ workspace_id: 1, include_closed: true }]);
+    expect(dirs().recent).toEqual([join(home, 'code/ply'), join(home, 'notes')]);
+    expect(dirs().repos).toEqual([join(home, 'code/ply')]);
+    store.dispatch({ type: 'dirs/query', query: '' });
+    expect(selectDirSuggestions(store.getState()).map((r) => r.shown)).toEqual([
+      '~/code/ply',
+      '~/notes',
+    ]);
+  });
+
+  test('a typed path lists the folder it names, and only the newest listing is kept', async () => {
+    const { home, store, until, dirs } = await searching();
+    store.dispatch({ type: 'command', id: 'pane.new' });
+    store.dispatch({ type: 'dirs/query', query: '~/' });
+    store.dispatch({ type: 'dirs/query', query: '~/code/' });
+    await until(() => dirs().completion?.dir === join(home, 'code'), 'the listing');
+    expect(dirs().completion?.children).toEqual([join(home, 'code/api'), join(home, 'code/ply')]);
+    await Bun.sleep(20);
+    expect(dirs().completion?.dir).toBe(join(home, 'code'));
+    store.dispatch({ type: 'dirs/query', query: '~/code/a' });
+    expect(selectDirSuggestions(store.getState()).map((r) => r.shown)).toEqual(['~/code/api']);
+  });
+
+  test('Browse fills the field with the picked folder; a cancelled picker leaves it', async () => {
+    const answers: (string | null)[] = [null];
+    const { home, store, until, dirs } = await searching(async () => answers.shift() ?? null);
+    store.dispatch({ type: 'command', id: 'pane.new' });
+    expect(dirs().query).toBe('~/code/ply');
+    store.dispatch({ type: 'dirs/browse' });
+    await Bun.sleep(20);
+    expect(dirs().query).toBe('~/code/ply');
+    answers.push(join(home, 'notes'));
+    store.dispatch({ type: 'dirs/browse' });
+    await until(() => dirs().query === '~/notes', 'the picked folder');
+    expect(dirs().open).toBe(false);
   });
 });

@@ -12,6 +12,7 @@ import type {
   Workspace,
 } from './actions';
 import {
+  abbreviateHome,
   FULL_TAB_NOTICE,
   isAlive,
   isTabFull,
@@ -19,6 +20,7 @@ import {
   type PaneDirection,
   paneNeighbour,
   selectActiveTab,
+  selectFocusedPane,
   tabName,
 } from './selectors';
 
@@ -44,6 +46,22 @@ export interface CreateStatus {
   error: string | null;
 }
 
+/** The new-pane form's directory search (Ruling R57): the field, its list and the folders it suggests. */
+export interface DirSearch {
+  /** The Directory field's text as typed; opening the form sets it to the start folder, ~-abbreviated. */
+  query: string;
+  /** The folder the form opened in (absolute): a query starting with `.` is resolved against it. */
+  base: string;
+  /** Whether the suggestion list is open: typing opens it; accepting, esc and Tab close it. */
+  open: boolean;
+  /** Recent folders, most recent first (absolute, each existed when read). */
+  recent: readonly string[];
+  /** Git repositories under the home directory from the last scan (absolute); kept for the app's lifetime. */
+  repos: readonly string[];
+  /** The deepest existing folder of the last path query and its sub-folders (absolute). */
+  completion: { dir: string; children: readonly string[] } | null;
+}
+
 /** Facts about the machine the app reads once at start. */
 export interface Environment {
   home: string;
@@ -62,6 +80,7 @@ export interface AppState {
   activeTabId: number | null;
   overlay: Overlay | null;
   create: CreateStatus;
+  dirs: DirSearch;
   settings: Settings;
   notice: Notice | null;
   reducedMotion: boolean;
@@ -89,6 +108,7 @@ export function initialState(env: Environment): AppState {
     activeTabId: null,
     overlay: null,
     create: { pending: false, error: null },
+    dirs: { query: '', base: env.home, open: false, recent: [], repos: [], completion: null },
     settings: defaultSettings,
     notice: null,
     reducedMotion: false,
@@ -312,6 +332,27 @@ function withFontSize(state: AppState, size: number): AppState {
   return { ...state, settings: { ...state.settings, font_size: clamped } };
 }
 
+/** Opens the new-pane form with its Directory field on the focused pane's folder, else the workspace's, else home. */
+function openNewPane(state: AppState, target: 'pane' | 'tab'): AppState {
+  const start = selectFocusedPane(state)?.cwd ?? state.workspace?.path ?? state.env.home;
+  return {
+    ...state,
+    overlay: { kind: 'new-pane', target },
+    create: { pending: false, error: null },
+    dirs: {
+      ...state.dirs,
+      query: abbreviateHome(start, state.env.home),
+      base: start,
+      open: false,
+      completion: null,
+    },
+  };
+}
+
+function reduceDirs(state: AppState, dirs: Partial<DirSearch>): AppState {
+  return { ...state, dirs: { ...state.dirs, ...dirs } };
+}
+
 function activeTab(state: AppState): Tab | undefined {
   return state.tabs.find((t) => t.id === state.activeTabId);
 }
@@ -323,17 +364,9 @@ function runCommand(state: AppState, id: CommandId): AppState {
       return { ...state, overlay: { kind: 'palette' } };
     case 'pane.new':
       if (isTabFull(tab)) return showNotice(state, FULL_TAB_NOTICE);
-      return {
-        ...state,
-        overlay: { kind: 'new-pane', target: tab ? 'pane' : 'tab' },
-        create: { pending: false, error: null },
-      };
+      return openNewPane(state, tab ? 'pane' : 'tab');
     case 'tab.new':
-      return {
-        ...state,
-        overlay: { kind: 'new-pane', target: 'tab' },
-        create: { pending: false, error: null },
-      };
+      return openNewPane(state, 'tab');
     case 'settings.open':
       return { ...state, overlay: { kind: 'settings' } };
     case 'pane.nextWaiting': {
@@ -446,12 +479,30 @@ function reduceAction(state: AppState, action: Action): AppState {
       return { ...state, create: { pending: false, error: action.message } };
     case 'pane/closeConfirmed':
       return state.overlay?.kind === 'close-confirm' ? { ...state, overlay: null } : state;
+    case 'dirs/query':
+      return state.dirs.query === action.query && state.dirs.open
+        ? state
+        : reduceDirs(state, { query: action.query, open: true });
+    case 'dirs/accept':
+      return reduceDirs(state, { query: abbreviateHome(action.path, state.env.home), open: false });
+    case 'dirs/close':
+      return state.dirs.open ? reduceDirs(state, { open: false }) : state;
+    case 'dirs/browse':
+      return state;
+    case 'dirs/recent':
+      return reduceDirs(state, { recent: action.paths });
+    case 'dirs/repos':
+      return reduceDirs(state, { repos: action.paths });
+    case 'dirs/completion':
+      return reduceDirs(state, { completion: { dir: action.dir, children: action.children } });
     case 'daemon/restart':
       return state;
     case 'daemon/quit':
       return state.overlay?.kind === 'quit-confirm' ? { ...state, overlay: null } : state;
     case 'overlay/open':
-      return { ...state, overlay: action.overlay };
+      return action.overlay.kind === 'new-pane'
+        ? openNewPane(state, action.overlay.target)
+        : { ...state, overlay: action.overlay };
     case 'overlay/close':
       return state.overlay === null ? state : { ...state, overlay: null };
     case 'settings/change':

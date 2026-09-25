@@ -164,6 +164,8 @@ export const tokens = {
   onAccentKey: 'rgba(10, 11, 16, 0.14)',
   knob: text,
   overlay: 'rgba(20, 23, 33, 0.95)',
+  /** Fill of a list floating over a form; opaque, because GPUIX paints deferred layers over whatever is behind. */
+  menu: '#181B27',
   backdrop: 'rgba(6, 7, 11, 0.55)',
   overlayShadow: 'rgba(0, 0, 0, 0.8)',
   tabShadow: 'rgba(0, 0, 0, 0.6)',

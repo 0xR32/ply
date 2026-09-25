@@ -108,6 +108,20 @@ export type Action =
   | { type: 'pane/created'; pane: Pane }
   | { type: 'pane/createFailed'; message: string }
   | { type: 'pane/closeConfirmed'; paneId: number }
+  /** The new-pane form's Directory field changed to `query` (Ruling R57); opens its suggestion list. */
+  | { type: 'dirs/query'; query: string }
+  /** Puts the absolute folder `path` into the Directory field, ~-abbreviated, and closes the list: a suggestion taken, or the folder picker's choice. */
+  | { type: 'dirs/accept'; path: string }
+  /** Closes the suggestion list and leaves the field as it is (esc, Tab). */
+  | { type: 'dirs/close' }
+  /** "Browse…": effects open the native folder picker and send its choice as `dirs/accept`. */
+  | { type: 'dirs/browse' }
+  /** The recent folders, most recent first (effects, each time the form opens). */
+  | { type: 'dirs/recent'; paths: string[] }
+  /** The git repositories the home scan found (effects, each time the form opens). */
+  | { type: 'dirs/repos'; paths: string[] }
+  /** `dir`, the deepest existing folder of a path query, and its sub-folders (effects, as a path is typed). */
+  | { type: 'dirs/completion'; dir: string; children: string[] }
   /** "Restart plyd": `daemon.shutdown {kill_panes:false}`; the launcher starts the build in `target/` on the reconnect. */
   | { type: 'daemon/restart' }
   /** "Quit ply and stop sessions", confirmed: `daemon.shutdown {kill_panes:true}`, then the app quits. */

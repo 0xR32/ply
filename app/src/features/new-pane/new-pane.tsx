@@ -1,7 +1,9 @@
 import type { EventPayload, StyleDesc } from '@gpuix/react';
 import { useState } from 'react';
 import type { Cli } from '../../state/actions';
-import { abbreviateHome, expandHome, selectFocusedPane } from '../../state/selectors';
+import type { DirSuggestion } from '../../state/dir-match';
+import type { AppState } from '../../state/reducer';
+import { expandHome, selectDirSuggestions } from '../../state/selectors';
 import { useAppSelector, useDispatch } from '../../state/store';
 import { useChrome } from '../../theme/chrome';
 import { tokens } from '../../theme/tokens';
@@ -12,6 +14,7 @@ import { Card, CardBar } from '../../ui/overlay-card';
 import { type SegmentItem, Segments } from '../../ui/segments';
 import { Switch } from '../../ui/switch';
 import { Text } from '../../ui/text';
+import { DirSuggestions } from './dir-suggestions';
 
 const CLIS: readonly SegmentItem<Cli>[] = [
   { value: 'claude', label: 'Claude Code', hint: '1' },
@@ -19,22 +22,23 @@ const CLIS: readonly SegmentItem<Cli>[] = [
   { value: 'shell', label: 'Shell', hint: '3' },
 ];
 
-type Field = 'cli' | 'dir' | 'worktree' | 'worktree-name' | 'prompt' | 'cancel' | 'open';
+type Field = 'cli' | 'dir' | 'browse' | 'worktree' | 'worktree-name' | 'prompt' | 'cancel' | 'open';
 
 const noTabs = (value: string | undefined) => (value ?? '').replaceAll('\t', '');
+const selectDirs = (s: AppState) => s.dirs;
 
-/** The ⌘N / ⌘T form (spec 7.4): CLI, directory, Claude worktree, first prompt; ⌘⏎ opens, esc cancels. */
+/** The ⌘N / ⌘T form (spec 7.4): CLI, directory with its folder search (R57), Claude worktree, first prompt; ⌘⏎ opens, esc cancels. */
 export function NewPane({ target }: { target: 'pane' | 'tab' }) {
   const dispatch = useDispatch();
   const { z, accent, fonts, type } = useChrome();
   const home = useAppSelector((s) => s.env.home);
-  const startDir = useAppSelector(
-    (s) => selectFocusedPane(s)?.cwd ?? s.workspace?.path ?? s.env.home,
-  );
   const pending = useAppSelector((s) => s.create.pending);
   const failure = useAppSelector((s) => s.create.error);
+  const dirs = useAppSelector(selectDirs);
+  const suggestions = useAppSelector(selectDirSuggestions);
+  const dir = dirs.query;
+  const [highlight, setHighlight] = useState(0);
   const [cli, setCli] = useState<Cli>('claude');
-  const [dir, setDir] = useState(() => abbreviateHome(startDir, home));
   const [worktree, setWorktree] = useState(false);
   const [worktreeName, setWorktreeName] = useState('');
   const [prompt, setPrompt] = useState('');
@@ -42,6 +46,7 @@ export function NewPane({ target }: { target: 'pane' | 'tab' }) {
   const order: Field[] = [
     'cli',
     'dir',
+    'browse',
     ...(cli === 'claude' ? (['worktree'] as const) : []),
     ...(cli === 'claude' && worktree ? (['worktree-name'] as const) : []),
     ...(cli !== 'shell' ? (['prompt'] as const) : []),
@@ -50,6 +55,8 @@ export function NewPane({ target }: { target: 'pane' | 'tab' }) {
   ];
   const fields = useFocusFields<Field>(order, 'cli');
   const focus = fields.focused;
+  const listShown = dirs.open && suggestions.length > 0 && (focus === 'dir' || focus === null);
+  const hi = Math.max(0, Math.min(highlight, suggestions.length - 1));
 
   const close = () => dispatch({ type: 'overlay/close' });
   const tracked = (field: Field) => ({ innerRef: fields.ref(field), ...fields.track(field) });
@@ -78,6 +85,13 @@ export function NewPane({ target }: { target: 'pane' | 'tab' }) {
       },
     });
   };
+  const accept = (row: DirSuggestion | undefined) => {
+    if (row) dispatch({ type: 'dirs/accept', path: row.path });
+  };
+  const browse = () => {
+    dispatch({ type: 'dirs/close' });
+    dispatch({ type: 'dirs/browse' });
+  };
   const cycleCli = (delta: number) => {
     const at = CLIS.findIndex((c) => c.value === cli);
     const next = CLIS[(at + delta + CLIS.length) % CLIS.length];
@@ -91,12 +105,19 @@ export function NewPane({ target }: { target: 'pane' | 'tab' }) {
     }
     if (m?.cmd || m?.ctrl || m?.alt) return;
     const at = fields.current();
+    const n = suggestions.length;
     switch (event.key) {
       case 'escape':
-        close();
+        if (listShown) dispatch({ type: 'dirs/close' });
+        else close();
         return;
       case 'tab':
+        if (dirs.open) dispatch({ type: 'dirs/close' });
         fields.step(m?.shift ?? false);
+        return;
+      case 'up':
+      case 'down':
+        if (listShown) setHighlight((hi + (event.key === 'down' ? 1 : -1) + n) % n);
         return;
       case 'left':
       case 'right':
@@ -104,7 +125,8 @@ export function NewPane({ target }: { target: 'pane' | 'tab' }) {
         return;
       case 'space':
       case 'enter':
-        if (at === 'worktree') setWorktree((w) => !w);
+        if (at === 'browse') browse();
+        else if (at === 'worktree') setWorktree((w) => !w);
         else if (at === 'cancel') close();
         else if (at === 'open') submit();
         return;
@@ -198,15 +220,45 @@ export function NewPane({ target }: { target: 'pane' | 'tab' }) {
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: z(8) }}>
             {label('Directory')}
-            <input
-              testId="new-pane-dir"
-              value={dir}
-              theme={{ caret: accent.base }}
-              onChange={(e) => setDir(noTabs(e.value))}
-              style={field(focus === 'dir', true)}
-              ref={fields.ref('dir')}
-              {...fields.track('dir')}
-            />
+            <div style={{ display: 'flex', alignItems: 'center', gap: z(8) }}>
+              <input
+                testId="new-pane-dir"
+                value={dir}
+                placeholder="Search folders and repositories, or type a path"
+                theme={{ caret: accent.base }}
+                onChange={(e) => {
+                  const query = noTabs(e.value);
+                  if (query === dir) return;
+                  dispatch({ type: 'dirs/query', query });
+                  setHighlight(0);
+                }}
+                onSubmit={() => {
+                  if (listShown) accept(suggestions[hi]);
+                }}
+                style={{ ...field(focus === 'dir', true), flexGrow: 1, minWidth: 0 }}
+                ref={fields.ref('dir')}
+                {...fields.track('dir')}
+              />
+              <Button
+                testId="new-pane-browse"
+                onClick={browse}
+                height={36}
+                focusable
+                focused={focus === 'browse'}
+                {...tracked('browse')}
+              >
+                <Text color={tokens.text}>Browse…</Text>
+              </Button>
+              {listShown ? (
+                <DirSuggestions
+                  rows={suggestions}
+                  highlight={hi}
+                  width={tokens.layout.newPaneWidth - 40}
+                  onHover={setHighlight}
+                  onPick={accept}
+                />
+              ) : null}
+            </div>
           </div>
           {cli === 'claude' ? (
             <div

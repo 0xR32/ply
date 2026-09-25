@@ -153,12 +153,31 @@ While an overlay is open it takes the keys; global chords do nothing.
 | Overlay | Keys |
 |---|---|
 | Palette (⌘K) | Type to filter commands, tabs and panes · ↑↓ move, wrapping · ⏎ run · esc close · a digit 1–9 on an empty query shows that tab |
-| New pane, New tab (⌘N, ⌘T) | ←→ choose the CLI, or 1 Claude Code, 2 Codex, 3 Shell while the CLI field has focus · Tab / ⇧Tab move between fields · Space or ⏎ toggles the worktree switch or presses a button · ⌘⏎ open · esc cancel |
+| New pane, New tab (⌘N, ⌘T) | ←→ choose the CLI, or 1 Claude Code, 2 Codex, 3 Shell while the CLI field has focus · typing in Directory opens its suggestion list: ↑↓ move, wrapping · ⏎ or a click takes the highlighted folder into the field and closes the list · Tab / ⇧Tab move between fields (Directory, then Browse…), closing the list · Space or ⏎ toggles the worktree switch or presses a button (Browse… opens the folder picker) · ⌘⏎ open, with the Directory field as it reads · esc closes the list when it is open, else cancels |
 | Settings (⌘,) | Tab / ⇧Tab move between fields · ←→ change the accent or ⌥ as Meta · Space or ⏎ toggles a switch · esc close |
 | Close confirmation (⌘⇧W on a live pane) | ⏎ close and stop · esc cancel |
 | Quit confirmation ("Quit ply and stop sessions") | ⏎ quit and stop · esc cancel |
 | Unsafe paste (in a pane) | ⏎ paste anyway · esc cancel · any other key cancels the paste and is typed as usual |
 | Find bar (⌘F in a pane) | Type to search · ↑ or ⏎ older match · ↓ newer match · esc close; nothing typed here reaches the pty |
+
+**The Directory field searches** (Ruling R57). Its list shows at most eight
+folders, each as a `~`-abbreviated path with the folder's own name emphasised and
+a tag: `recent` for a folder a pane of this workspace used (its open panes and
+its stored sessions, most recent first, only folders that still exist), `repo`
+for a git repository the background scan of the home directory found
+(`docs/configuration.md` has its bounds), none for a completion. An empty field
+lists the recent folders. Anything else matches as a case-insensitive fuzzy
+subsequence of the `~`-abbreviated path: a match in the folder's name ranks
+above a match elsewhere in the path; within each, an exact match ranks above a
+prefix, a prefix above a contiguous run and that above scattered letters; a
+recent folder counts one step more; and ties go to recents, then repositories,
+then by recency and the shorter path. Text starting with `/`, `~` or `.` also
+completes: the sub-folders of the deepest existing folder it names, matched by
+the segment typed after it (hidden ones once that segment starts with `.`; `.`
+and `..` start from the folder the form opened in). Taking a suggestion writes
+the folder's absolute path, with `~` for the home directory; ⌘⏎ always opens
+what the field says. Browse… opens the macOS folder picker and writes the
+chosen folder the same way.
 
 ## Adding a binding
 

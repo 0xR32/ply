@@ -1,7 +1,8 @@
-import { basename } from 'node:path';
+import { basename, resolve } from 'node:path';
 import { MAX_PANES_PER_TAB } from '../ipc/proto.gen';
 import type { Cli, Pane, Tab } from './actions';
-import type { AppState, PaneState } from './reducer';
+import { type DirCandidate, type DirSuggestion, rankDirs } from './dir-match';
+import type { AppState, DirSearch, PaneState } from './reducer';
 
 /** How a pane's status is presented (spec 6.3): "done" is idle with every plan item complete. */
 export type StatusTone =
@@ -232,4 +233,76 @@ export function tabName(cwd: string, home: string): string {
 /** The title a pane header shows: the terminal's own title when set, else plyd's title, else the CLI name. */
 export function paneTitle(pane: PaneState): string {
   return pane.terminalTitle || pane.title || pane.cli;
+}
+
+/** A query that names a path (it starts with `/`, `~` or `.`) split into the folder it names (absolute; `.` is resolved against `base`) and the segment typed after it; `null` for any other query. */
+export function pathQuery(
+  query: string,
+  home: string,
+  base: string,
+): { dir: string; segment: string } | null {
+  const q = query.trim();
+  if (q === '~') return { dir: home, segment: '' };
+  if (!(q.startsWith('/') || q.startsWith('~/') || q.startsWith('.'))) return null;
+  const cut = q.lastIndexOf('/');
+  const head = cut < 0 ? '.' : q.slice(0, cut) || '/';
+  return { dir: resolve(base, expandHome(head, home)), segment: q.slice(cut + 1) };
+}
+
+/** The completions of a path query: sub-folders of the listed folder matched by the first segment typed after it, hidden ones only once that segment starts with `.`. */
+function completionCandidates(dirs: DirSearch, home: string): DirCandidate[] {
+  const listed = dirs.completion;
+  const pq = pathQuery(dirs.query, home, dirs.base);
+  if (!listed || !pq) return [];
+  let segment: string;
+  if (pq.dir === listed.dir) segment = pq.segment;
+  else {
+    const prefix = listed.dir === '/' ? '/' : `${listed.dir}/`;
+    if (!pq.dir.startsWith(prefix)) return [];
+    segment = pq.dir.slice(prefix.length).split('/')[0] ?? '';
+  }
+  const hidden = segment.startsWith('.');
+  return listed.children
+    .filter((path) => hidden || !basename(path).startsWith('.'))
+    .map(
+      (path): DirCandidate => ({
+        path,
+        shown: abbreviateHome(path, home),
+        source: 'completion',
+        recency: 0,
+        segment,
+      }),
+    );
+}
+
+let lastSuggestions: { dirs: DirSearch; home: string; rows: readonly DirSuggestion[] } | null =
+  null;
+
+/** The new-pane form's folder suggestions for its current query (Ruling R57): recents, then repositories, then completions, ranked by `rankDirs`; recomputed only when the search changes. */
+export function selectDirSuggestions(state: AppState): readonly DirSuggestion[] {
+  const { dirs } = state;
+  const home = state.env.home;
+  if (lastSuggestions?.dirs === dirs && lastSuggestions.home === home) return lastSuggestions.rows;
+  const candidates: DirCandidate[] = [
+    ...dirs.recent.map(
+      (path, i): DirCandidate => ({
+        path,
+        shown: abbreviateHome(path, home),
+        source: 'recent',
+        recency: dirs.recent.length - i,
+      }),
+    ),
+    ...dirs.repos.map(
+      (path): DirCandidate => ({
+        path,
+        shown: abbreviateHome(path, home),
+        source: 'repo',
+        recency: 0,
+      }),
+    ),
+    ...completionCandidates(dirs, home),
+  ];
+  const rows = rankDirs(dirs.query, candidates);
+  lastSuggestions = { dirs, home, rows };
+  return rows;
 }
