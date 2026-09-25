@@ -49,7 +49,9 @@ while IFS= read -r line <&3; do
   [ "$rest" = "$line" ] && rest=
   case "$cmd" in
     session) session ;;
+    newthread) thread=$rest; session ;;
     record) record "$rest" ;;
+    turn) record "{\"type\":\"event_msg\",\"payload\":{\"type\":\"${rest%% *}\",\"turn_id\":\"${rest#* }\"}}" ;;
     notify) notify "${rest:-$thread}" ;;
     osc9) printf '\033]9;%s\007' "$rest" ;;
     out) printf '%s\r\n' "$rest" ;;

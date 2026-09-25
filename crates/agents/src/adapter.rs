@@ -128,6 +128,8 @@ pub enum AgentEvent<'a> {
     },
     /// The pane's pty produced its first byte of output.
     FirstOutput,
+    /// plyd's tailer now follows another rollout file (a new thread after `/new`, R49); its `session_meta` rebinds the session.
+    RolloutSwitched,
 }
 
 /// What an event means for plyd; signals come in the order plyd should apply them.
@@ -169,8 +171,12 @@ pub enum StatusSignal {
     },
     /// `waiting_permission` → `running` when [`ToolCall::same_call`] matches the pending call: PostToolUse(Failure), PermissionDenied.
     CallSettled(ToolCall),
-    /// `running` → `idle`: Claude Stop or StopFailure, Codex notify or OSC 9 turn complete.
+    /// `running` → `idle`: Claude Stop or StopFailure, Codex notify, OSC 9 turn complete or rollout `task_complete`/`turn_aborted`.
     TurnComplete,
+    /// `starting`, `idle` → `running` (and confirms `running`): Codex rollout `task_started` (Ruling R48).
+    TurnStarted,
+    /// `running` → `idle`: plyd raises it when a Codex Enter started no turn within 3 s (Ruling R48).
+    NoTurnStarted,
     /// `waiting_permission`, `waiting_input` → `running`: any key typed (R17; a manual deny fires no hook).
     KeyTyped,
     /// `running` → `idle` for a pane whose adapter has an [`Adapter::quiet_timeout`]; plyd raises it itself (R17).
@@ -218,7 +224,7 @@ impl ToolCall {
 pub struct SessionStats {
     /// Hook events or payload kinds with no meaning for ply (e.g. an event name ply did not register).
     pub unknown_hook_events: u64,
-    /// Rollout records of a type Codex 0.156.1 does not write.
+    /// Rollout records of a type Codex 0.156.1 does not write, and `event_msg` subtypes outside the known list.
     pub unknown_rollout_records: u64,
     /// Rollout lines that were not a JSON record, or a record ply could not read.
     pub malformed_rollout_lines: u64,

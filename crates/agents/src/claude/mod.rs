@@ -251,9 +251,10 @@ impl AgentSession for ClaudeSession {
         match event {
             AgentEvent::Hook(envelope) => self.on_hook(envelope),
             AgentEvent::KeyTyped { .. } => Ok(vec![status(StatusSignal::KeyTyped)]),
-            AgentEvent::Osc9(_) | AgentEvent::RolloutLine(_) | AgentEvent::FirstOutput => {
-                Ok(vec![])
-            }
+            AgentEvent::Osc9(_)
+            | AgentEvent::RolloutLine(_)
+            | AgentEvent::FirstOutput
+            | AgentEvent::RolloutSwitched => Ok(vec![]),
         }
     }
 

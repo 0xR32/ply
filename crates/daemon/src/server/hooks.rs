@@ -28,6 +28,7 @@ pub async fn serve(listener: UnixListener, shared: Arc<Shared>) {
     loop {
         match listener.accept().await {
             Ok((stream, _)) => {
+                // Tasks are unordered, which is fine: a CLI starts its next hook only after ply-hook wrote this line and exited, milliseconds apart.
                 tokio::spawn(connection(stream, Arc::clone(&shared)));
             }
             Err(e) => {

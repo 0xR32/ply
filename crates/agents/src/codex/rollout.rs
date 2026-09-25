@@ -1,4 +1,5 @@
-//! C4: Codex rollout files — record parsing, `update_plan` extraction (spec 6.4, R26), line framing and discovery (R28).
+//! C4: Codex rollout files — record parsing, `update_plan` extraction (spec 6.4, R26), turn events (R48), the
+//! tailer's pre-filter, line framing and discovery (R28).
 
 use std::path::PathBuf;
 use std::time::SystemTime;
@@ -35,6 +36,36 @@ pub const KNOWN_RECORD_TYPES: [&str; 12] = [
 
 /// Name of the plan tool, as a `function_call` and inside code-mode `exec` input.
 pub const UPDATE_PLAN: &str = "update_plan";
+
+/// `event_msg` subtypes seen in Codex 0.156.1 rollouts; the turn ones drive the status (R48), any other is counted.
+pub const KNOWN_EVENT_TYPES: [&str; 6] = [
+    "task_started",
+    "task_complete",
+    "turn_aborted",
+    "item_completed",
+    "token_count",
+    "thread_settings_applied",
+];
+
+/// A turn boundary from an `event_msg` record (Ruling R48); `turn_id` is Codex's, when the record carries one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TurnEvent {
+    /// `task_started`: the user's message started a turn.
+    Started {
+        /// The turn.
+        turn_id: Option<String>,
+    },
+    /// `task_complete`: the turn finished.
+    Complete {
+        /// The turn.
+        turn_id: Option<String>,
+    },
+    /// `turn_aborted`: the user interrupted the turn (Esc).
+    Aborted {
+        /// The turn.
+        turn_id: Option<String>,
+    },
+}
 
 /// The first record of every rollout: which thread the file belongs to and where it runs.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -90,6 +121,10 @@ pub enum RolloutRecord {
     TurnContext(TurnContextRecord),
     /// A `response_item` that calls `update_plan`, in either shape.
     PlanUpdate(Plan),
+    /// An `event_msg` that starts or ends a turn.
+    Turn(TurnEvent),
+    /// An `event_msg` subtype outside [`KNOWN_EVENT_TYPES`]; skipped and counted.
+    UnknownEvent(String),
     /// A known record type (or a response item) ply has no use for.
     Ignored,
     /// A record type Codex 0.156.1 does not write; skipped and counted (C4).
@@ -135,8 +170,48 @@ pub fn parse_record(line: &[u8]) -> Result<RolloutRecord> {
             Some(plan) => Ok(RolloutRecord::PlanUpdate(plan)),
             None => Ok(RolloutRecord::Ignored),
         },
+        "event_msg" => {
+            let p = payload()?;
+            let subtype =
+                str_field(&p, "type").ok_or_else(|| invalid("rollout event_msg", "no type"))?;
+            let turn_id = str_field(&p, "turn_id").map(str::to_owned);
+            Ok(match subtype {
+                "task_started" => RolloutRecord::Turn(TurnEvent::Started { turn_id }),
+                "task_complete" => RolloutRecord::Turn(TurnEvent::Complete { turn_id }),
+                "turn_aborted" => RolloutRecord::Turn(TurnEvent::Aborted { turn_id }),
+                known if KNOWN_EVENT_TYPES.contains(&known) => RolloutRecord::Ignored,
+                unknown => RolloutRecord::UnknownEvent(unknown.to_owned()),
+            })
+        }
         known if KNOWN_RECORD_TYPES.contains(&known) => Ok(RolloutRecord::Ignored),
         unknown => Ok(RolloutRecord::Unknown(unknown.to_owned())),
+    }
+}
+
+#[derive(Deserialize)]
+struct Subtype<'a> {
+    #[serde(rename = "type", borrow)]
+    kind: Option<&'a str>,
+}
+
+/// Whether [`parse_record`] can make anything of `line`: the tailer drops the rest before it reaches the pane (the
+/// known records ply ignores, `event_msg` subtypes it ignores, response items with no `update_plan`); unknown and
+/// malformed lines pass, so the session still counts them.
+pub fn plyd_reads(line: &[u8]) -> bool {
+    let Ok(record) = serde_json::from_slice::<Line<'_>>(line) else {
+        return true;
+    };
+    match record.kind {
+        "session_meta" | "turn_context" => true,
+        "response_item" => record.payload.get().contains(UPDATE_PLAN),
+        "event_msg" => match serde_json::from_str::<Subtype<'_>>(record.payload.get()) {
+            Ok(Subtype { kind: Some(kind) }) => {
+                matches!(kind, "task_started" | "task_complete" | "turn_aborted")
+                    || !KNOWN_EVENT_TYPES.contains(&kind)
+            }
+            _ => true,
+        },
+        known => !KNOWN_RECORD_TYPES.contains(&known),
     }
 }
 

@@ -11,7 +11,9 @@
 //! | `start` | fires SessionStart (and UserPromptSubmit for a prompt) when started with the prompt `wait-for-start` | — |
 //! | `hook <Event> <json>` | pipes `<json>` into the command its `--settings` file registers for `<Event>`, as Claude Code does | — |
 //! | `session` | — | creates `$CODEX_HOME/sessions/YYYY/MM/DD/rollout-<ts>-<thread>.jsonl` with its `session_meta` |
-//! | `record <json>` | — | appends one record line to that rollout |
+//! | `newthread <thread>` | — | switches to another thread, as `/new` does, and creates its rollout like `session` |
+//! | `record <json>` | — | appends one record line to the current rollout |
+//! | `turn <subtype> <turn id>` | — | appends an `event_msg` record (`task_started`, `task_complete`, `turn_aborted`) |
 //! | `notify [thread]` | — | runs the `-c notify=[…]` program with an `agent-turn-complete` payload for `thread` (default its own) |
 //! | `osc9 <body>` | — | prints `ESC ] 9 ; <body> BEL` |
 //! | `out <text>` | prints a line | prints a line |

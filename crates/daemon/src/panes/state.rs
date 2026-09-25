@@ -8,13 +8,15 @@
 //! |---|---|---|
 //! | every live state | Ready (Claude SessionStart but a compaction's · Codex first output byte) | `idle` |
 //! | `idle`, `waiting_input` | PromptSubmitted (Claude UserPromptSubmit · Codex Enter typed) | `running` |
+//! | `starting`, `idle`, `running` | TurnStarted (Codex rollout `task_started`, R48) | `running` |
+//! | `running` (Codex) | NoTurnStarted (plyd: an Enter started no turn within 3 s, R48) | `idle` |
 //! | every live state but `waiting_permission` | ToolUse (Claude PreToolUse · PostToolUse) | `running` |
-//! | `running` | PermissionRequested (Claude PermissionRequest or `permission_prompt` Notification · Codex OSC 9 approval) | `waiting_permission` |
-//! | `running` (Claude also `idle`) | InputRequested (Codex OSC 9 question or plan · Claude Notification but `permission_prompt` and `idle_prompt`, R46) | `waiting_input` |
+//! | `running` (Codex also `idle`, R48) | PermissionRequested (Claude PermissionRequest or `permission_prompt` Notification · Codex OSC 9 approval) | `waiting_permission` |
+//! | `running`, `idle` | InputRequested (Codex OSC 9 question or plan · Claude Notification but `permission_prompt` and `idle_prompt`, R46) | `waiting_input` |
 //! | `waiting_permission`, `waiting_input` | KeyTyped (any key typed in the pane, R17) | `running` |
 //! | `running` (Claude) | QuietTimeout (silent pty, no hook for 5 s, R17) | `idle` |
 //! | `waiting_permission` | CallSettled for the pending call (PostToolUse, PostToolUseFailure, PermissionDenied) | `running` |
-//! | `running` | TurnComplete (Claude Stop · StopFailure · Codex notify · OSC 9 turn complete, R27) | `idle` |
+//! | `running` | TurnComplete (Claude Stop · StopFailure · Codex notify · OSC 9 turn complete, R27 · rollout `task_complete` or `turn_aborted`) | `idle` |
 //! | any | the process exits (pty end-of-file) | `exited(code)` |
 //!
 //! SessionEnd changes nothing ([`Step::SessionEnded`], Ruling R47): Claude fires it for `/clear` and an in-session
@@ -102,16 +104,20 @@ impl StatusMachine {
             StatusSignal::ToolUse(_) if matches!(s, Starting | Idle | Running | WaitingInput) => {
                 self.to(Running, None)
             }
-            StatusSignal::PermissionRequested { call, detail } if s == Running => {
+            StatusSignal::PermissionRequested { call, detail }
+                if s == Running || (s == Idle && self.cli == AgentCli::Codex) =>
+            {
                 let step = self.to(WaitingPermission, detail.clone());
                 self.pending.clone_from(call);
                 step
             }
-            StatusSignal::InputRequested { detail }
-                if s == Running || (s == Idle && self.cli == AgentCli::Claude) =>
-            {
+            StatusSignal::InputRequested { detail } if matches!(s, Running | Idle) => {
                 self.to(WaitingInput, detail.clone())
             }
+            StatusSignal::TurnStarted if matches!(s, Starting | Idle | Running) => {
+                self.to(Running, None)
+            }
+            StatusSignal::NoTurnStarted if s == Running => self.to(Idle, None),
             StatusSignal::KeyTyped if matches!(s, WaitingPermission | WaitingInput) => {
                 self.to(Running, None)
             }
@@ -312,9 +318,18 @@ mod tests {
 
     #[test]
     fn a_permission_request_while_running_waits_for_permission() {
-        for cli in BOTH {
-            row(cli, &permission(), &[Running], WaitingPermission);
-        }
+        row(
+            AgentCli::Claude,
+            &permission(),
+            &[Running],
+            WaitingPermission,
+        );
+        row(
+            AgentCli::Codex,
+            &permission(),
+            &[Running, Idle],
+            WaitingPermission,
+        );
         let mut m = at(AgentCli::Codex, Running);
         let step = m.apply(&StatusSignal::PermissionRequested {
             call: None,
@@ -331,8 +346,21 @@ mod tests {
     }
 
     #[test]
-    fn a_codex_question_waits_for_input_only_while_running() {
-        row(AgentCli::Codex, &input(), &[Running], WaitingInput);
+    fn a_codex_question_waits_for_input_while_running_or_idle() {
+        row(AgentCli::Codex, &input(), &[Running, Idle], WaitingInput);
+    }
+
+    #[test]
+    fn a_rollout_turn_start_runs_the_pane_and_a_turnless_enter_goes_back_to_idle() {
+        for cli in BOTH {
+            row(
+                cli,
+                &StatusSignal::TurnStarted,
+                &[Starting, Idle, Running],
+                Running,
+            );
+            row(cli, &StatusSignal::NoTurnStarted, &[Running], Idle);
+        }
     }
 
     #[test]

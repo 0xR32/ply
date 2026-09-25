@@ -1,39 +1,47 @@
-//! C4: following a Codex pane's rollout file (spec 3.3 C4, 6.2 discovery, Ruling R28).
+//! C4: following a Codex pane's rollout file (spec 3.3 C4, 6.2 discovery, Rulings R28, R48, R49).
 //!
 //! Codex writes one rollout per thread, `$CODEX_HOME/sessions/YYYY/MM/DD/rollout-<ts>-<thread_uuid>.jsonl`, one
 //! `{timestamp, ordinal?, type, payload}` record per line. A [`Tailer`] runs on its own std thread for as long as the
 //! pane's Codex process lives. Until it is bound to a file it looks for one: a file named after a thread it was asked
 //! for (the resumed thread, or the `thread-id` of a notify, R28), else the newest rollout created after the spawn whose
 //! `session_meta.cwd` is the pane's directory and that no other pane follows. Bound, it reads the file from the start
-//! by offset and hands every complete line to the pane task as [`PaneCmd::Rollout`]; the pane's `CodexSession` binds
-//! itself to the first `session_meta` it is fed, so it only ever sees one thread's records. A resumed pane binds only
-//! to its own thread's file, found anywhere under `sessions/`.
+//! by offset. It switches to another file when a notify names another thread whose rollout exists, or when, within
+//! [`REDISCOVER_WINDOW`] of an Enter the pane asked about ([`Tailer::rediscover`]), a new unclaimed rollout of the
+//! pane's directory appears: that is `/new` or `/clear` starting a thread (R49). A file that shrinks or is replaced is
+//! read again from the start.
+//!
+//! Lines go to the pane's agent on a channel of [`TAIL_QUEUE`] messages that the pane task reads last, after its pty
+//! output, commands and timers (I4): [`TailMsg::Switched`] when another file starts, then [`TailMsg::Lines`] batches
+//! of at most [`LINES_PER_BATCH`] lines and [`MAX_BATCH_BYTES`], holding only the lines the session reads
+//! ([`ply_agents::codex::rollout::plyd_reads`], checked on this thread so the pane task never parses the rest).
 //!
 //! It wakes on filesystem events for `sessions/` (FSEvents through `notify`, once the directory exists; plyd never
-//! creates it) and polls besides ([`POLL`] until it is bound or watching, [`IDLE_POLL`] after), so a missed event
-//! only delays a record. It reads files and never writes anything under `$CODEX_HOME` (INV-8). Lines over
-//! [`ply_agents::codex::rollout::MAX_LINE_BYTES`] are skipped and logged; unknown record types are the session's to count.
+//! creates it; a failed watch is retried every [`WATCH_RETRY`]) and polls besides ([`POLL`] until it is bound or
+//! watching, [`IDLE_POLL`] after), so a missed event only delays a record. Requests from the pane task sit in a shared
+//! list, never in the wake queue, so a burst of events cannot drop them. It reads files and never writes anything under
+//! `$CODEX_HOME` (INV-8). Lines over [`ply_agents::codex::rollout::MAX_LINE_BYTES`] are skipped and logged; unknown
+//! record types are the session's to count.
 
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufRead, BufReader, ErrorKind, Read};
+use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, SyncSender, TrySendError, sync_channel};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant, SystemTime};
 
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 use ply_agents::codex::rollout::{
     LineBuffer, MAX_LINE_BYTES, RolloutCandidate, RolloutRecord, parse_record, pick_rollout_by_cwd,
-    rollout_thread_id,
+    plyd_reads, rollout_thread_id,
 };
 use ply_proto::pane::PaneId;
-use tokio::sync::mpsc::WeakSender;
+use tokio::sync::mpsc;
 
 use crate::daemon::Shared;
 use crate::error::{Error, Result};
-use crate::panes::pane::PaneCmd;
 
 /// Poll interval while the tailer has neither a file nor a watcher.
 pub const POLL: Duration = Duration::from_millis(250);
@@ -44,16 +52,28 @@ pub const IDLE_POLL: Duration = Duration::from_secs(1);
 /// Bytes read from the rollout per read call.
 pub const READ_CHUNK: usize = 64 * 1024;
 
-/// Lines handed to the pane task per [`PaneCmd::Rollout`].
+/// Most lines in one [`TailMsg::Lines`].
 pub const LINES_PER_BATCH: usize = 256;
 
-/// Messages queued towards a tailer thread; wakes beyond it are dropped, since one pending wake suffices.
-const QUEUE: usize = 16;
+/// Most line bytes in one [`TailMsg::Lines`].
+pub const MAX_BATCH_BYTES: usize = 1 << 20;
+
+/// Messages queued towards the pane's agent; the tailer thread waits when they are all unread.
+pub const TAIL_QUEUE: usize = 4;
+
+/// How long after an Enter a new rollout of the pane's directory counts as the pane's new thread (R49).
+pub const REDISCOVER_WINDOW: Duration = Duration::from_secs(5);
+
+/// Interval between attempts to watch `sessions/` after one failed.
+pub const WATCH_RETRY: Duration = Duration::from_secs(30);
+
+/// Threads a notify asked for that the tailer remembers; the oldest goes first.
+const MAX_WANTED: usize = 8;
 
 /// Day directories searched for new rollouts, newest first; a spawn just before midnight needs two.
 const RECENT_DAYS: usize = 2;
 
-/// How much earlier than the spawn a rollout may claim to be created, for filesystems with coarse birth times.
+/// How much earlier than the spawn (or an Enter) a rollout may claim to be created, for coarse birth times.
 const SPAWN_SLACK: Duration = Duration::from_secs(1);
 
 /// Shortest interval between two full walks of `sessions/` for a resumed thread's older file.
@@ -62,7 +82,7 @@ const WALK_INTERVAL: Duration = Duration::from_secs(5);
 /// What a Codex pane's tailer needs to find its rollout.
 #[derive(Debug, Clone)]
 pub struct TailOptions {
-    /// The pane.
+    /// The pane, for log fields.
     pub pane_id: PaneId,
     /// The `CODEX_HOME` the pane's process uses (its `CODEX_HOME`, else `$HOME/.codex`).
     pub codex_home: PathBuf,
@@ -70,33 +90,44 @@ pub struct TailOptions {
     pub cwd: String,
     /// When the process was spawned; rollouts created before it belong to other sessions.
     pub spawned_at: SystemTime,
-    /// The thread the pane resumed, if any: only that thread's rollout is followed.
+    /// The thread the pane resumed, if any: until it switches threads, only that thread's rollout is followed.
     pub thread: Option<String>,
 }
 
-#[derive(Debug)]
-enum Msg {
-    Find(String),
-    Wake,
-    Stop,
+/// What the tailer hands the pane's agent, in file order.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TailMsg {
+    /// The tailer started following a file; its `session_meta` may rebind the session to another thread (R49).
+    Switched,
+    /// Complete lines the session reads, without newlines, in file order.
+    Lines(Vec<Vec<u8>>),
+}
+
+#[derive(Debug, Default)]
+struct Requests {
+    wanted: Vec<String>,
+    since: Option<(SystemTime, Instant)>,
 }
 
 /// The pane task's handle on its tailer thread; dropping it stops the thread within one poll interval.
 #[derive(Debug)]
 pub struct Tailer {
-    tx: SyncSender<Msg>,
+    pane_id: PaneId,
+    requests: Arc<Mutex<Requests>>,
+    wake: SyncSender<()>,
     stop: Arc<AtomicBool>,
 }
 
 impl Tailer {
-    /// Starts the tailer thread; lines go to `pane` until that channel closes. Fails with [`Error::Io`] if no thread starts.
+    /// Starts the tailer thread and returns it with the channel its lines arrive on; errors: [`Error::Io`] if no thread starts.
     pub fn spawn(
         shared: Arc<Shared>,
         options: TailOptions,
-        pane: WeakSender<PaneCmd>,
-    ) -> Result<Self> {
-        let (tx, rx) = sync_channel(QUEUE);
+    ) -> Result<(Self, mpsc::Receiver<TailMsg>)> {
+        let (wake, woken) = sync_channel(1);
+        let (out, lines) = mpsc::channel(TAIL_QUEUE);
         let stop = Arc::new(AtomicBool::new(false));
+        let requests = Arc::new(Mutex::new(Requests::default()));
         let state = TailState {
             sessions: options.codex_home.join("sessions"),
             cwd: canonical(&options.cwd),
@@ -106,34 +137,58 @@ impl Tailer {
                 .unwrap_or(options.spawned_at),
             resumed: options.thread,
             wanted: Vec::new(),
+            since: None,
+            requests: Arc::clone(&requests),
             first_lines: HashMap::new(),
             last_walk: None,
             bound: None,
             pane_id: options.pane_id,
             shared,
-            pane,
+            out,
         };
-        let wake = tx.clone();
+        let wake_for_watcher = wake.clone();
         let flag = Arc::clone(&stop);
         std::thread::Builder::new()
             .name(format!("rollout-{}", options.pane_id))
-            .spawn(move || state.run(&rx, &wake, &flag))
+            .spawn(move || state.run(&woken, &wake_for_watcher, &flag))
             .map_err(|source| Error::Io {
                 what: "cannot start the rollout tailer for",
                 path: options.codex_home,
                 source,
             })?;
-        Ok(Self { tx, stop })
+        let tailer = Self {
+            pane_id: options.pane_id,
+            requests,
+            wake,
+            stop,
+        };
+        Ok((tailer, lines))
     }
 
-    /// Asks the tailer to follow `rollout-*-<thread_id>.jsonl` once it exists (a notify's thread, R28).
+    /// Asks the tailer to follow `rollout-*-<thread_id>.jsonl` once it exists (a notify's thread, R28, R49).
     pub fn find(&self, thread_id: String) {
-        match self.tx.try_send(Msg::Find(thread_id)) {
-            Ok(()) => {}
-            Err(TrySendError::Full(Msg::Find(thread))) => {
-                tracing::warn!(thread, "the rollout tailer is busy; thread request dropped");
+        self.request(|r| {
+            if !r.wanted.contains(&thread_id) {
+                if r.wanted.len() == MAX_WANTED {
+                    r.wanted.remove(0);
+                }
+                r.wanted.push(thread_id);
             }
-            Err(e) => tracing::debug!(error = %e, "the rollout tailer has stopped"),
+        });
+    }
+
+    /// Asks the tailer to switch to a new rollout of the pane's directory created from `since` on, for a while (R49).
+    pub fn rediscover(&self, since: SystemTime) {
+        self.request(|r| r.since = Some((since, Instant::now())));
+    }
+
+    fn request(&self, change: impl FnOnce(&mut Requests)) {
+        change(&mut self.requests.lock().unwrap_or_else(PoisonError::into_inner));
+        match self.wake.try_send(()) {
+            Ok(()) | Err(TrySendError::Full(())) => {}
+            Err(TrySendError::Disconnected(())) => {
+                tracing::debug!(pane_id = self.pane_id, "the rollout tailer has stopped");
+            }
         }
     }
 }
@@ -141,8 +196,11 @@ impl Tailer {
 impl Drop for Tailer {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::Relaxed);
-        if let Err(TrySendError::Disconnected(_)) = self.tx.try_send(Msg::Stop) {
-            tracing::trace!("the rollout tailer had already stopped");
+        if let Err(TrySendError::Disconnected(())) = self.wake.try_send(()) {
+            tracing::trace!(
+                pane_id = self.pane_id,
+                "the rollout tailer had already stopped"
+            );
         }
     }
 }
@@ -150,6 +208,7 @@ impl Drop for Tailer {
 struct Bound {
     path: PathBuf,
     file: File,
+    offset: u64,
     lines: LineBuffer,
 }
 
@@ -159,26 +218,46 @@ struct TailState {
     spawned_at: SystemTime,
     resumed: Option<String>,
     wanted: Vec<String>,
+    since: Option<(SystemTime, Instant)>,
+    requests: Arc<Mutex<Requests>>,
     first_lines: HashMap<PathBuf, Option<String>>,
     last_walk: Option<Instant>,
     bound: Option<Bound>,
     pane_id: PaneId,
     shared: Arc<Shared>,
-    pane: WeakSender<PaneCmd>,
+    out: mpsc::Sender<TailMsg>,
 }
 
 impl TailState {
-    fn run(mut self, rx: &Receiver<Msg>, wake: &SyncSender<Msg>, stop: &AtomicBool) {
+    fn run(mut self, woken: &Receiver<()>, wake: &SyncSender<()>, stop: &AtomicBool) {
         let pane_id = self.pane_id;
         tracing::debug!(pane_id, sessions = %self.sessions.display(), "rollout tailer started");
         let mut watcher: Option<RecommendedWatcher> = None;
+        let mut watch_failed: Option<Instant> = None;
         while !stop.load(Ordering::Relaxed) {
-            if watcher.is_none() && self.sessions.is_dir() {
-                watcher = watch(pane_id, &self.sessions, wake.clone());
+            if watcher.is_none()
+                && watch_failed.is_none_or(|t| t.elapsed() >= WATCH_RETRY)
+                && self.sessions.is_dir()
+            {
+                watcher = watch(
+                    pane_id,
+                    &self.sessions,
+                    wake.clone(),
+                    watch_failed.is_none(),
+                );
+                watch_failed = watcher.is_none().then(Instant::now);
             }
-            if self.bound.is_none() {
-                self.bind();
+            self.take_requests();
+            let next = match self.bound {
+                None => self.discover(),
+                Some(_) => self.newer_file(),
+            };
+            if let Some(path) = next
+                && !self.follow(path)
+            {
+                break;
             }
+            self.reopen_if_replaced();
             if !self.pump() {
                 break;
             }
@@ -187,14 +266,9 @@ impl TailState {
             } else {
                 POLL
             };
-            match rx.recv_timeout(wait) {
-                Ok(Msg::Find(thread)) => {
-                    if !self.wanted.contains(&thread) {
-                        self.wanted.push(thread);
-                    }
-                }
-                Ok(Msg::Wake) | Err(RecvTimeoutError::Timeout) => {}
-                Ok(Msg::Stop) | Err(RecvTimeoutError::Disconnected) => break,
+            match woken.recv_timeout(wait) {
+                Ok(()) | Err(RecvTimeoutError::Timeout) => {}
+                Err(RecvTimeoutError::Disconnected) => break,
             }
         }
         if let Some(bound) = self.bound.take() {
@@ -203,37 +277,63 @@ impl TailState {
         tracing::debug!(pane_id, "rollout tailer stopped");
     }
 
-    fn bind(&mut self) {
-        let Some(path) = self.discover() else {
-            return;
-        };
-        if !self.shared.claim_rollout(&path) {
-            return;
+    fn take_requests(&mut self) {
+        let mut requests = self.requests.lock().unwrap_or_else(PoisonError::into_inner);
+        for thread in requests.wanted.drain(..) {
+            if !self.wanted.contains(&thread) {
+                if self.wanted.len() == MAX_WANTED {
+                    self.wanted.remove(0);
+                }
+                self.wanted.push(thread);
+            }
         }
-        match File::open(&path) {
-            Ok(file) => {
-                tracing::info!(pane_id = self.pane_id, rollout = %path.display(), "following the Codex rollout");
-                self.bound = Some(Bound {
-                    path,
-                    file,
-                    lines: LineBuffer::default(),
-                });
-            }
-            Err(e) => {
-                tracing::warn!(pane_id = self.pane_id, rollout = %path.display(), error = %e, "cannot open the rollout");
-                self.shared.release_rollout(&path);
-            }
+        if let Some(since) = requests.since.take() {
+            self.since = Some(since);
         }
     }
 
-    fn discover(&mut self) -> Option<PathBuf> {
-        let recent = rollouts_in(&recent_day_dirs(&self.sessions, RECENT_DAYS));
-        let named = |threads: &[String], files: &[(PathBuf, String)]| {
-            files
-                .iter()
-                .find(|(_, thread)| threads.contains(thread))
-                .map(|(path, _)| path.clone())
+    /// Starts following `path` (claimed for this pane) from its first byte; false once the pane's agent is gone.
+    fn follow(&mut self, path: PathBuf) -> bool {
+        if !self.shared.claim_rollout(&path) {
+            return true;
+        }
+        let file = match File::open(&path) {
+            Ok(file) => file,
+            Err(e) => {
+                tracing::warn!(pane_id = self.pane_id, rollout = %path.display(), error = %e, "cannot open the rollout");
+                self.shared.release_rollout(&path);
+                return true;
+            }
         };
+        if let Some(old) = self.bound.take() {
+            tracing::info!(pane_id = self.pane_id, from = %old.path.display(), to = %path.display(), "Codex started another thread; following its rollout");
+            self.shared.release_rollout(&old.path);
+            self.resumed = None;
+        } else {
+            tracing::info!(pane_id = self.pane_id, rollout = %path.display(), "following the Codex rollout");
+        }
+        if let Some(thread) = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .and_then(rollout_thread_id)
+        {
+            self.wanted.retain(|t| t != thread);
+        }
+        self.since = None;
+        self.bound = Some(Bound {
+            path,
+            file,
+            offset: 0,
+            lines: LineBuffer::default(),
+        });
+        self.send(TailMsg::Switched)
+    }
+
+    fn discover(&mut self) -> Option<PathBuf> {
+        let recent = rollouts_in(
+            self.pane_id,
+            &recent_day_dirs(self.pane_id, &self.sessions, RECENT_DAYS),
+        );
         if let Some(thread) = self.resumed.clone() {
             let threads = [thread];
             if let Some(path) = named(&threads, &recent) {
@@ -241,32 +341,67 @@ impl TailState {
             }
             if self.last_walk.is_none_or(|t| t.elapsed() >= WALK_INTERVAL) {
                 self.last_walk = Some(Instant::now());
-                return named(&threads, &rollouts_in(&all_day_dirs(&self.sessions)));
+                let all = all_day_dirs(self.pane_id, &self.sessions);
+                return named(&threads, &rollouts_in(self.pane_id, &all));
             }
             return None;
         }
         if let Some(path) = named(&self.wanted, &recent) {
             return Some(path);
         }
+        self.newest_by_cwd(&recent, self.spawned_at)
+    }
+
+    /// While bound: a notified thread's file, or a new file of the pane's directory shortly after an Enter (R49).
+    fn newer_file(&mut self) -> Option<PathBuf> {
+        let bound = self.bound.as_ref().map(|b| b.path.clone())?;
+        let expired = self
+            .since
+            .is_some_and(|(_, asked)| asked.elapsed() >= REDISCOVER_WINDOW);
+        if expired {
+            self.since = None;
+        }
+        if self.wanted.is_empty() && self.since.is_none() {
+            return None;
+        }
+        let recent: Vec<(PathBuf, String)> = rollouts_in(
+            self.pane_id,
+            &recent_day_dirs(self.pane_id, &self.sessions, RECENT_DAYS),
+        )
+        .into_iter()
+        .filter(|(path, _)| *path != bound)
+        .collect();
+        if let Some(path) = named(&self.wanted, &recent) {
+            return Some(path);
+        }
+        let (since, _) = self.since?;
+        let since = since.checked_sub(SPAWN_SLACK).unwrap_or(since);
+        self.newest_by_cwd(&recent, since)
+    }
+
+    fn newest_by_cwd(&mut self, files: &[(PathBuf, String)], after: SystemTime) -> Option<PathBuf> {
         let mut candidates = Vec::new();
-        for (path, _) in recent {
-            let created = match std::fs::metadata(&path).and_then(|m| m.created().or(m.modified()))
-            {
+        for (path, _) in files {
+            let created = match std::fs::metadata(path).and_then(|m| m.created().or(m.modified())) {
                 Ok(created) => created,
                 Err(e) => {
                     tracing::debug!(pane_id = self.pane_id, rollout = %path.display(), error = %e, "cannot stat a rollout");
                     continue;
                 }
             };
-            if created < self.spawned_at || self.shared.rollout_claimed(&path) {
+            if created < after || self.shared.rollout_claimed(path) {
                 continue;
             }
-            let Some(cwd) = self.first_line_cwd(&path) else {
+            let Some(cwd) = self.first_line_cwd(path) else {
                 continue;
             };
-            candidates.push(RolloutCandidate { path, created, cwd });
+            candidates.push(RolloutCandidate {
+                path: path.clone(),
+                created,
+                cwd,
+            });
         }
-        pick_rollout_by_cwd(&candidates, self.spawned_at, &self.cwd).map(|c| c.path.clone())
+        pick_rollout_by_cwd(&candidates, after, &self.cwd).map(|c| c.path.clone())
     }
 
     /// The canonical `session_meta.cwd` of the file's first line; files without a complete first line are retried later.
@@ -305,70 +440,133 @@ impl TailState {
         cwd
     }
 
-    /// Hands every complete new line of the bound file to the pane task; false once the pane task is gone.
+    /// Reads the bound file from its start again when it shrank below what was read or another file replaced it.
+    fn reopen_if_replaced(&mut self) {
+        let Some(bound) = self.bound.as_mut() else {
+            return;
+        };
+        let now = match std::fs::metadata(&bound.path) {
+            Ok(meta) => meta,
+            Err(e) => {
+                tracing::debug!(pane_id = self.pane_id, rollout = %bound.path.display(), error = %e, "cannot stat the followed rollout");
+                return;
+            }
+        };
+        let replaced = bound
+            .file
+            .metadata()
+            .is_ok_and(|open| open.ino() != now.ino());
+        if !replaced && now.len() >= bound.offset {
+            return;
+        }
+        match File::open(&bound.path) {
+            Ok(file) => {
+                tracing::info!(pane_id = self.pane_id, rollout = %bound.path.display(), replaced, "the rollout was truncated or replaced; reading it again");
+                bound.file = file;
+                bound.offset = 0;
+                bound.lines = LineBuffer::default();
+            }
+            Err(e) => {
+                tracing::warn!(pane_id = self.pane_id, rollout = %bound.path.display(), error = %e, "cannot reopen the rollout");
+            }
+        }
+    }
+
+    /// Hands every complete new line the session reads to the pane's agent, in batches; false once the agent is gone.
     fn pump(&mut self) -> bool {
         let Some(bound) = self.bound.as_mut() else {
             return true;
         };
+        let pane_id = self.pane_id;
         let mut buf = vec![0u8; READ_CHUNK];
         let mut batch = Vec::new();
+        let mut bytes = 0;
         loop {
             match bound.file.read(&mut buf) {
                 Ok(0) => break,
                 Ok(n) => {
+                    bound.offset += n as u64;
                     for framed in bound.lines.push(&buf[..n]) {
                         match framed.into_line() {
-                            Ok(line) => batch.push(line),
+                            Ok(line) if plyd_reads(&line) => {
+                                bytes += line.len();
+                                batch.push(line);
+                            }
+                            Ok(_) => {}
                             Err(e) => {
-                                tracing::warn!(pane_id = self.pane_id, error = %e, "rollout line skipped");
+                                tracing::warn!(pane_id, error = %e, "rollout line skipped");
                             }
                         }
-                    }
-                    if batch.len() >= LINES_PER_BATCH
-                        && !send(&self.pane, std::mem::take(&mut batch))
-                    {
-                        return false;
+                        if batch.len() >= LINES_PER_BATCH || bytes >= MAX_BATCH_BYTES {
+                            bytes = 0;
+                            if self
+                                .out
+                                .blocking_send(TailMsg::Lines(std::mem::take(&mut batch)))
+                                .is_err()
+                            {
+                                return false;
+                            }
+                        }
                     }
                 }
                 Err(e) if e.kind() == ErrorKind::Interrupted => {}
                 Err(e) => {
-                    tracing::warn!(pane_id = self.pane_id, rollout = %bound.path.display(), error = %e, "cannot read the rollout");
+                    tracing::warn!(pane_id, rollout = %bound.path.display(), error = %e, "cannot read the rollout");
                     break;
                 }
             }
         }
-        batch.is_empty() || send(&self.pane, batch)
+        batch.is_empty() || self.send(TailMsg::Lines(batch))
+    }
+
+    fn send(&self, msg: TailMsg) -> bool {
+        self.out.blocking_send(msg).is_ok()
     }
 }
 
-fn send(pane: &WeakSender<PaneCmd>, lines: Vec<Vec<u8>>) -> bool {
-    pane.upgrade()
-        .is_some_and(|tx| tx.blocking_send(PaneCmd::Rollout(lines)).is_ok())
+/// The first file in `files` whose thread is one of `threads`.
+fn named(threads: &[String], files: &[(PathBuf, String)]) -> Option<PathBuf> {
+    files
+        .iter()
+        .find(|(_, thread)| threads.contains(thread))
+        .map(|(path, _)| path.clone())
 }
 
-fn watch(pane_id: PaneId, sessions: &Path, wake: SyncSender<Msg>) -> Option<RecommendedWatcher> {
+fn watch(
+    pane_id: PaneId,
+    sessions: &Path,
+    wake: SyncSender<()>,
+    first: bool,
+) -> Option<RecommendedWatcher> {
     let handler = move |event: notify::Result<notify::Event>| {
         if let Err(e) = event {
             tracing::debug!(pane_id, error = %e, "rollout watcher error");
         }
-        match wake.try_send(Msg::Wake) {
-            Ok(()) | Err(TrySendError::Full(_)) => {}
-            Err(TrySendError::Disconnected(_)) => {
+        match wake.try_send(()) {
+            Ok(()) | Err(TrySendError::Full(())) => {}
+            Err(TrySendError::Disconnected(())) => {
                 tracing::trace!(pane_id, "the rollout tailer has stopped");
             }
+        }
+    };
+    let failed = |error: &dyn std::fmt::Display| {
+        if first {
+            tracing::warn!(pane_id, sessions = %sessions.display(), error = %error, "cannot watch Codex's sessions; polling and retrying every 30 s");
+        } else {
+            tracing::debug!(pane_id, sessions = %sessions.display(), error = %error, "still cannot watch Codex's sessions");
         }
     };
     let mut watcher = match notify::recommended_watcher(handler) {
         Ok(watcher) => watcher,
         Err(e) => {
-            tracing::warn!(pane_id, error = %e, "cannot watch Codex's sessions; polling instead");
+            failed(&e);
             return None;
         }
     };
     match watcher.watch(sessions, RecursiveMode::Recursive) {
         Ok(()) => Some(watcher),
         Err(e) => {
-            tracing::warn!(pane_id, sessions = %sessions.display(), error = %e, "cannot watch Codex's sessions; polling instead");
+            failed(&e);
             None
         }
     }
@@ -382,8 +580,19 @@ fn canonical(path: &str) -> String {
         .unwrap_or_else(|| path.to_owned())
 }
 
-fn numbered_dirs_desc(dir: &Path) -> Vec<PathBuf> {
-    let Ok(entries) = std::fs::read_dir(dir) else {
+fn read_dir_logged(pane_id: PaneId, dir: &Path) -> Option<std::fs::ReadDir> {
+    match std::fs::read_dir(dir) {
+        Ok(entries) => Some(entries),
+        Err(e) if e.kind() == ErrorKind::NotFound => None,
+        Err(e) => {
+            tracing::debug!(pane_id, dir = %dir.display(), error = %e, "cannot list a Codex sessions directory");
+            None
+        }
+    }
+}
+
+fn numbered_dirs_desc(pane_id: PaneId, dir: &Path) -> Vec<PathBuf> {
+    let Some(entries) = read_dir_logged(pane_id, dir) else {
         return Vec::new();
     };
     let mut dirs: Vec<PathBuf> = entries
@@ -401,11 +610,11 @@ fn numbered_dirs_desc(dir: &Path) -> Vec<PathBuf> {
 }
 
 /// The newest `limit` `YYYY/MM/DD` directories under `sessions`, newest first.
-fn recent_day_dirs(sessions: &Path, limit: usize) -> Vec<PathBuf> {
+fn recent_day_dirs(pane_id: PaneId, sessions: &Path, limit: usize) -> Vec<PathBuf> {
     let mut out = Vec::new();
-    for year in numbered_dirs_desc(sessions) {
-        for month in numbered_dirs_desc(&year) {
-            for day in numbered_dirs_desc(&month) {
+    for year in numbered_dirs_desc(pane_id, sessions) {
+        for month in numbered_dirs_desc(pane_id, &year) {
+            for day in numbered_dirs_desc(pane_id, &month) {
                 out.push(day);
                 if out.len() == limit {
                     return out;
@@ -416,15 +625,15 @@ fn recent_day_dirs(sessions: &Path, limit: usize) -> Vec<PathBuf> {
     out
 }
 
-fn all_day_dirs(sessions: &Path) -> Vec<PathBuf> {
-    recent_day_dirs(sessions, usize::MAX)
+fn all_day_dirs(pane_id: PaneId, sessions: &Path) -> Vec<PathBuf> {
+    recent_day_dirs(pane_id, sessions, usize::MAX)
 }
 
 /// The rollout files in `dirs` with their thread ids, in directory order.
-fn rollouts_in(dirs: &[PathBuf]) -> Vec<(PathBuf, String)> {
+fn rollouts_in(pane_id: PaneId, dirs: &[PathBuf]) -> Vec<(PathBuf, String)> {
     let mut out = Vec::new();
     for dir in dirs {
-        let Ok(entries) = std::fs::read_dir(dir) else {
+        let Some(entries) = read_dir_logged(pane_id, dir) else {
             continue;
         };
         for entry in entries.filter_map(|e| e.ok()) {
@@ -449,9 +658,9 @@ mod tests {
             std::fs::create_dir_all(root.join(d)).unwrap();
         }
         std::fs::create_dir_all(root.join("archive")).unwrap();
-        let recent = recent_day_dirs(&root, 2);
+        let recent = recent_day_dirs(1, &root, 2);
         assert_eq!(recent, [root.join("2026/02/03"), root.join("2026/01/02")]);
-        assert_eq!(all_day_dirs(&root).len(), 4);
+        assert_eq!(all_day_dirs(1, &root).len(), 4);
         let id = "00000000-0000-7000-8000-000000000001";
         std::fs::write(
             root.join(format!("2025/12/31/rollout-2025-12-31T23-59-59-{id}.jsonl")),
@@ -459,7 +668,7 @@ mod tests {
         )
         .unwrap();
         std::fs::write(root.join("2025/12/31/notes.txt"), "").unwrap();
-        let files = rollouts_in(&all_day_dirs(&root));
+        let files = rollouts_in(1, &all_day_dirs(1, &root));
         assert_eq!(files.len(), 1);
         assert_eq!(files[0].1, id);
         std::fs::remove_dir_all(&root).unwrap();

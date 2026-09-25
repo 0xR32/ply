@@ -241,6 +241,15 @@ has kebab-case keys:
 Unknown keys are ignored so a newer Codex still parses. Notify fires after each
 completed turn and not when a turn is aborted.
 
+**A new thread rebinds the pane** (Ruling R49). `/new` and `/clear` start a new
+thread with its own rollout. The pane switches to it when a notify names a thread
+whose rollout exists (the title turn's never does), or when, within 5 s of an
+Enter, a new unclaimed rollout of the pane's directory appears; the session then
+binds to the new thread, `session_ref` follows it (so `pane.resume` resumes the
+current conversation), and the old plan's progress is dropped
+(`a_new_thread_rebinds_the_session_when_plyd_switches_files_or_a_notify_named_it`,
+`codex_a_new_thread_rebinds_the_pane_and_resume_follows_it`).
+
 **The first notify can lie.** Codex runs a title-generation micro-turn in its
 own thread, and its notify can arrive first, while the real turn still runs.
 So a pane binds to a thread only once a rollout file with that thread id
@@ -296,7 +305,8 @@ record per line (`crates/agents/src/codex/rollout.rs`):
 | `session_meta` | The first record: the thread (`payload.id`, else `session_id`) and `cwd`. The first one fed to a pane binds it. |
 | `turn_context` | `model` and `cwd` of the turn. |
 | `response_item` | An `update_plan` call, in either shape (see **Progress**). |
-| `inter_agent_communication`, `inter_agent_communication_metadata`, `compacted`, `token_usage_record`, `world_state`, `retained_context`, `security_risk_score`, `event_msg`, `realtime_item` | Nothing; known and ignored. |
+| `event_msg` | `task_started`, `task_complete` and `turn_aborted` start and end turns (R48); `item_completed`, `token_count` and `thread_settings_applied` are known and ignored; any other subtype is skipped and counted (`unknown_rollout_records`). |
+| `inter_agent_communication`, `inter_agent_communication_metadata`, `compacted`, `token_usage_record`, `world_state`, `retained_context`, `security_risk_score`, `realtime_item` | Nothing; known and ignored. |
 | anything else | Skipped and counted (`unknown_rollout_records`). |
 
 A line that is not a `{type, payload}` record is an error and is counted
@@ -311,9 +321,21 @@ name carries that notify's thread id (`rollout_thread_id`). A resumed pane
 follows only its own thread's file, wherever it is under `sessions/`, and two
 panes never follow the same file. `tail.rs` runs one std thread per Codex
 process: it wakes on FSEvents for `sessions/` once the directory exists (plyd
-never creates it) and polls besides, every 250 ms until it follows a file and
-every second after; it reads the file from the start by offset and hands the
-pane task every complete line. It only ever reads under `$CODEX_HOME`.
+never creates it; a failed watch is retried every 30 s) and polls besides, every
+250 ms until it follows a file and every second after; it reads the file from
+the start by offset, again from the start when the file shrinks or is replaced,
+and switches files for a new thread (above). Requests from the pane (a notify's
+thread, the Enter window) sit in a shared list, so filesystem events cannot
+crowd them out. It only ever reads under `$CODEX_HOME`.
+
+**Delivery never delays the terminal** (I4). The tailer drops, on its own
+thread, every line the session cannot use (`plyd_reads`: only `session_meta`,
+`turn_context`, the turn `event_msg`s, `response_item`s mentioning
+`update_plan`, and unknown or malformed lines, which are counted), and sends the
+rest in batches of at most 256 lines and 1 MiB over a channel of 4 batches. The
+pane task reads that channel last, only when no command, exit, input write, pty
+output or timer is ready, so a long replay cannot hold back pty output or the
+answers to Codex's startup probes.
 
 ## Progress
 
@@ -397,12 +419,14 @@ use the same vocabulary. The table lives in
 | — | spawn | `pane.create`, `pane.resume` | `starting` (a shell pane: `idle`) |
 | any live status | `Ready` | Claude SessionStart (not the one after a compaction) · Codex's first pty output byte | `idle` |
 | `idle`, `waiting_input` | `PromptSubmitted` | Claude UserPromptSubmit · Enter typed in a Codex pane | `running` |
+| `starting`, `idle`, `running` | `TurnStarted` | Codex rollout `event_msg` `task_started` (R48) | `running` |
+| `running` (Codex) | `NoTurnStarted` | plyd: an Enter that made the pane `running` saw no `task_started` within 3 s (R48) | `idle` |
 | any live status but `waiting_permission` | `ToolUse` | Claude PreToolUse or PostToolUse | `running` |
-| `running` | `PermissionRequested` | Claude PermissionRequest or a `permission_prompt` Notification · Codex OSC 9 approval | `waiting_permission` |
-| `running` (Claude also `idle`) | `InputRequested` | Codex OSC 9 question or plan prompt · a Claude Notification that is neither `permission_prompt` nor `idle_prompt` (R46) | `waiting_input` |
+| `running` (Codex also `idle`, R48) | `PermissionRequested` | Claude PermissionRequest or a `permission_prompt` Notification · Codex OSC 9 approval | `waiting_permission` |
+| `running`, `idle` | `InputRequested` | Codex OSC 9 question or plan prompt · a Claude Notification that is neither `permission_prompt` nor `idle_prompt` (R46) | `waiting_input` |
 | `waiting_permission` | `CallSettled`, same call | Claude PostToolUse, PostToolUseFailure or PermissionDenied | `running` |
 | `waiting_permission`, `waiting_input` | `KeyTyped` | any key typed in the pane | `running` |
-| `running` | `TurnComplete` | Claude Stop or StopFailure · Codex notify for the bound thread · Codex OSC 9 of any other body | `idle` |
+| `running` | `TurnComplete` | Claude Stop or StopFailure · Codex notify for the bound thread · Codex OSC 9 of any other body · Codex rollout `task_complete` or `turn_aborted` for the current turn | `idle` |
 | `running` (Claude) | `QuietTimeout` | the pty silent and no hook for 5 s | `idle` |
 | any | the process exits | pty EOF | `exited(code)` |
 | any live status, after a plyd restart | the process is gone | plyd's start | `lost` |
@@ -431,6 +455,15 @@ Transitions not in the table are ignored and counted.
 - **The quiet timer** runs from the latest of the last pty output, the last hook
   and the moment the pane entered `running`. A timeout the machine does not act
   on is restarted rather than left due, so a pane task never wakes in a loop.
+- **Codex turns come from the rollout** (Ruling R48). `task_started` makes the
+  pane `running`, `task_complete` and `turn_aborted` (Esc) make it `idle`; a
+  `task_complete` of an older turn than the last one started is ignored. Enter
+  typed in an `idle` Codex pane is a fast path to `running` that the rollout
+  must confirm: without a `task_started` within 3 s (`TURN_START_WAIT`, an
+  Enter on an empty composer) the pane is `idle` again. OSC 9 approvals and
+  questions are accepted from `idle` too, since they only happen inside a
+  turn, which covers a pane started with a first prompt, where no Enter was
+  typed.
 - The pane's task publishes the machine's state when it adopts the process; the
   keep-awake assertion follows `running` panes.
 
@@ -512,8 +545,9 @@ terminal and the CLI repaints it.
   `tests/fixtures/claude/` to its signals, the worktree label, call matching,
   counting unknown events.
 - `crates/agents/tests/claude_progress.rs`, `codex_rollout.rs` (records, both
-  `update_plan` shapes, discovery, the R28 binding flow), `codex_osc9.rs` (the
-  prefix table and the observed bodies).
+  `update_plan` shapes, turn events, the tailer's pre-filter, discovery, the
+  R28 binding flow and the R49 rebinding), `codex_osc9.rs` (the prefix table
+  and the observed bodies).
 - `crates/hook/tests/hook.rs`: the C3 line, the payload byte for byte, INV-12
   (plyd down, stdin held open, a listener that never reads) and INV-14 (stdout
   and stderr empty on fourteen bad paths).
@@ -521,8 +555,9 @@ terminal and the CLI repaints it.
   and the fake CLIs of `crates/daemon/tests/fake/` (they run the hook commands
   of their `--settings` file or `-c notify=…`, print OSC 9 and write a rollout
   in the sandbox's `CODEX_HOME`), F1 (a hook turns the pane waiting within
-  250 ms), INV-12 with plyd down, the version check at spawn and the R28
-  rollout binding.
+  250 ms), INV-12 with plyd down, the version check at spawn, the R28
+  rollout binding, Codex turns from the rollout (an Enter with no turn, a first
+  prompt, an Esc abort), a new thread's rebinding and a truncated rollout.
 - `crates/daemon/tests/config_untouched.rs`: INV-8, a Claude Code and a Codex
   session leave the user's three config files byte for byte as they were.
 - `crates/daemon/tests/resume.rs`: journey J6 (kill plyd, restart it, the

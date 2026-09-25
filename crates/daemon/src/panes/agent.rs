@@ -1,10 +1,13 @@
 //! One agent process's integration inside its pane task: the `ply-agents` session, the spec 6.3 machine, the
-//! `pane.progress` rate limit, the R17 quiet timer and, for Codex, the rollout tailer.
+//! `pane.progress` rate limit, the R17 quiet timer and, for Codex, the rollout tailer and the R48 turn wait.
 //!
-//! The pane task feeds it everything it observes for the process: C3 envelopes, rollout lines, OSC 9 bodies, the
-//! first pty byte, pty activity and keys typed. [`Agent`] hands each to the session, turns the resulting signals into
-//! `pane.status` (through [`StatusMachine`]), `pane.progress` (at most 4 a second), `pane.meta` and the stored session
-//! record, and asks the tailer for a notify's thread. It runs entirely on the pane task, one event at a time.
+//! The pane task feeds it everything it observes for the process: C3 envelopes, OSC 9 bodies, the first pty byte, pty
+//! activity and keys typed, and the tailer's messages, which it reads last. [`Agent`] hands each to the session, turns
+//! the resulting signals into `pane.status` (through [`StatusMachine`]), `pane.progress` (at most 4 a second),
+//! `pane.meta` and the stored session record, and asks the tailer for a notify's thread. An Enter that makes a Codex
+//! pane `running` is only a guess until the rollout's `task_started` confirms it: without one within
+//! [`TURN_START_WAIT`] the pane is `idle` again, and meanwhile the tailer looks for a thread `/new` may have started
+//! (R49). It runs entirely on the pane task, one event at a time.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -13,13 +16,15 @@ use std::time::{Duration, Instant, SystemTime};
 use ply_agents::{AdapterSignal, AgentEvent, AgentSession, LaunchSpec, StatusSignal, adapter};
 use ply_proto::hook::HookEnvelope;
 use ply_proto::pane::{AgentCli, PaneId, PaneStatus};
-use tokio::sync::mpsc::WeakSender;
+use tokio::sync::mpsc;
 
 use crate::branch;
 use crate::daemon::Shared;
-use crate::panes::pane::PaneCmd;
 use crate::panes::state::{ProgressGate, StatusMachine, Step};
-use crate::tail::{TailOptions, Tailer};
+use crate::tail::{TailMsg, TailOptions, Tailer};
+
+/// How long a Codex pane an Enter made `running` waits for its rollout's `task_started` before it is `idle` again (R48).
+pub const TURN_START_WAIT: Duration = Duration::from_secs(3);
 
 /// The integration of one agent process; see the module docs.
 pub struct Agent {
@@ -31,7 +36,9 @@ pub struct Agent {
     active_at: Instant,
     seen_output: bool,
     progress: ProgressGate,
+    turn_wait: Option<Instant>,
     tailer: Option<Tailer>,
+    tail: Option<mpsc::Receiver<TailMsg>>,
 }
 
 impl std::fmt::Debug for Agent {
@@ -47,17 +54,12 @@ impl std::fmt::Debug for Agent {
 
 impl Agent {
     /// The integration for a process of `cli` about to start from `spec`; Codex also starts following its rollout.
-    pub fn new(
-        shared: &Arc<Shared>,
-        pane_id: PaneId,
-        cli: AgentCli,
-        spec: &LaunchSpec,
-        pane: WeakSender<PaneCmd>,
-    ) -> Self {
+    pub fn new(shared: &Arc<Shared>, pane_id: PaneId, cli: AgentCli, spec: &LaunchSpec) -> Self {
         let adapter = adapter(cli);
-        let tailer = (cli == AgentCli::Codex)
-            .then(|| codex_tailer(shared, pane_id, spec, pane))
-            .flatten();
+        let (tailer, tail) = (cli == AgentCli::Codex)
+            .then(|| codex_tailer(shared, pane_id, spec))
+            .flatten()
+            .unzip();
         Self {
             pane_id,
             cli,
@@ -67,7 +69,38 @@ impl Agent {
             active_at: Instant::now(),
             seen_output: false,
             progress: ProgressGate::default(),
+            turn_wait: None,
             tailer,
+            tail,
+        }
+    }
+
+    /// Whether the pane task should read [`Agent::next_tail`]: a Codex process whose tailer still runs.
+    pub fn tailing(&self) -> bool {
+        self.tail.is_some()
+    }
+
+    /// The tailer's next message; `None` once it stopped (then [`Agent::tailing`] is false). Waits forever without a tailer.
+    pub async fn next_tail(&mut self) -> Option<TailMsg> {
+        let msg = match self.tail.as_mut() {
+            Some(rx) => rx.recv().await,
+            None => std::future::pending().await,
+        };
+        if msg.is_none() {
+            self.tail = None;
+        }
+        msg
+    }
+
+    /// One message of the pane's rollout tailer: a switch to another file (R49) or lines the session reads.
+    pub fn on_tail(&mut self, shared: &Arc<Shared>, msg: TailMsg, now: Instant) {
+        match msg {
+            TailMsg::Switched => self.on_event(shared, AgentEvent::RolloutSwitched, now),
+            TailMsg::Lines(lines) => {
+                for line in &lines {
+                    self.on_event(shared, AgentEvent::RolloutLine(line), now);
+                }
+            }
         }
     }
 
@@ -83,13 +116,6 @@ impl Agent {
     pub fn on_hook(&mut self, shared: &Arc<Shared>, envelope: &HookEnvelope, now: Instant) {
         self.active_at = now;
         self.on_event(shared, AgentEvent::Hook(envelope), now);
-    }
-
-    /// Complete lines of the pane's rollout (Codex).
-    pub fn on_rollout(&mut self, shared: &Arc<Shared>, lines: &[Vec<u8>], now: Instant) {
-        for line in lines {
-            self.on_event(shared, AgentEvent::RolloutLine(line), now);
-        }
     }
 
     /// The body of one OSC 9 notification from the pane's pty (C8).
@@ -111,10 +137,13 @@ impl Agent {
         self.on_event(shared, AgentEvent::KeyTyped { enter }, now);
     }
 
-    /// The next moment [`Agent::on_tick`] has work: the quiet timeout of a running Claude pane or a held progress value.
+    /// The next moment [`Agent::on_tick`] has work: the quiet timeout of a running Claude pane, a Codex turn wait or a held progress value.
     pub fn deadline(&self) -> Option<Instant> {
         let quiet = self.quiet_deadline();
-        [quiet, self.progress.due()].into_iter().flatten().min()
+        [quiet, self.turn_wait, self.progress.due()]
+            .into_iter()
+            .flatten()
+            .min()
     }
 
     /// Raises the quiet timeout (R17) and sends a held progress value once their time has come; a past deadline never stays due.
@@ -131,6 +160,11 @@ impl Agent {
                 self.active_at = now;
             }
         }
+        if self.turn_wait.is_some_and(|at| at <= now) {
+            self.turn_wait = None;
+            tracing::debug!(pane_id = self.pane_id, "no task_started followed the Enter");
+            self.step(shared, &StatusSignal::NoTurnStarted, now);
+        }
         if let Some(progress) = self.progress.take_due(now) {
             shared.registry().set_progress(self.pane_id, progress);
         }
@@ -139,7 +173,9 @@ impl Agent {
     /// The process ended: the machine stops, the tailer stops, and what the session skipped is logged.
     pub fn exit(&mut self) {
         self.machine.exit();
+        self.turn_wait = None;
         self.tailer = None;
+        self.tail = None;
         let stats = self.session.stats();
         tracing::info!(
             pane_id = self.pane_id,
@@ -203,6 +239,17 @@ impl Agent {
                 if status == PaneStatus::Running && before != PaneStatus::Running {
                     self.active_at = now;
                 }
+                if status != PaneStatus::Running || matches!(signal, StatusSignal::TurnStarted) {
+                    self.turn_wait = None;
+                } else if self.cli == AgentCli::Codex
+                    && before == PaneStatus::Idle
+                    && matches!(signal, StatusSignal::PromptSubmitted)
+                {
+                    self.turn_wait = Some(now + TURN_START_WAIT);
+                    if let Some(tailer) = &self.tailer {
+                        tailer.rediscover(SystemTime::now());
+                    }
+                }
                 shared.set_status(self.pane_id, status, detail);
             }
             Step::SessionEnded => {
@@ -228,8 +275,7 @@ fn codex_tailer(
     shared: &Arc<Shared>,
     pane_id: PaneId,
     spec: &LaunchSpec,
-    pane: WeakSender<PaneCmd>,
-) -> Option<Tailer> {
+) -> Option<(Tailer, mpsc::Receiver<TailMsg>)> {
     let env = shared.login.env_for(&spec.env);
     let codex_home = env.get("CODEX_HOME").map(PathBuf::from).or_else(|| {
         env.get("HOME")
@@ -249,7 +295,7 @@ fn codex_tailer(
         spawned_at: SystemTime::now(),
         thread: spec.resume.clone(),
     };
-    match Tailer::spawn(Arc::clone(shared), options, pane) {
+    match Tailer::spawn(Arc::clone(shared), options) {
         Ok(tailer) => Some(tailer),
         Err(e) => {
             tracing::warn!(pane_id, error = %e, "cannot follow the pane's rollout");

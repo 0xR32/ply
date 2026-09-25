@@ -591,17 +591,72 @@ fn inv_12_a_hook_with_plyd_down_exits_0_at_once_and_prints_nothing() {
 }
 
 #[test]
-fn codex_first_output_makes_it_idle_enter_runs_it_and_it_never_times_out() {
+fn codex_enter_runs_it_until_no_task_started_follows_and_a_started_turn_never_times_out() {
     let mut e = env("cx-start");
     let (id, fake) = e.codex();
     e.type_raw(id, b"hello");
     no_status(&mut e.c, id, Duration::from_millis(300));
     e.type_raw(id, b"\r");
     e.next(id, Running);
+    let took = e.next(id, Idle);
+    assert!(
+        took >= Duration::from_millis(2500) && took < Duration::from_millis(5000),
+        "R48: an Enter on an empty composer starts no turn: idle again after {took:?}"
+    );
+    fake.send("session");
+    wait_session_ref(&mut e, id, &codex_thread(id));
+    e.type_raw(id, b"\r");
+    e.next(id, Running);
+    fake.send("turn task_started t1");
     no_status(&mut e.c, id, Duration::from_millis(6000));
     fake.send("exit 4");
     let (s, _) = next_status(&mut e.c, id, WAIT);
     assert_eq!((s.status, s.exit_code), (Exited, Some(4)));
+}
+
+#[test]
+fn codex_a_first_prompt_runs_from_its_rollout_and_an_esc_aborted_turn_is_idle() {
+    let mut e = env("cx-first");
+    let id = e.pane("codex", json!({"prompt": "write a.txt"}));
+    let fake = Fake::ready(&e.sb, id);
+    e.until(id, Idle);
+    fake.send("session");
+    fake.send("turn task_started t1");
+    e.next(id, Running);
+    fake.send("osc9 Approval requested: touch a.txt");
+    e.next(id, WaitingPermission);
+    e.type_raw(id, b"y");
+    e.next(id, Running);
+    fake.send("turn task_complete t1");
+    e.next(id, Idle);
+    e.type_raw(id, b"\r");
+    e.next(id, Running);
+    fake.send("turn task_started t2");
+    no_status(&mut e.c, id, Duration::from_millis(3500));
+    e.type_raw(id, b"\x1b");
+    fake.send("turn turn_aborted t2");
+    e.next(id, Idle);
+}
+
+#[test]
+fn codex_a_new_thread_rebinds_the_pane_and_resume_follows_it() {
+    let mut e = env("cx-new");
+    let (id, fake) = e.codex();
+    fake.send("session");
+    wait_session_ref(&mut e, id, &codex_thread(id));
+    e.type_raw(id, b"\r");
+    e.next(id, Running);
+    let second = "00000000-0000-7000-8000-0000000000b2";
+    fake.send(&format!("newthread {second}"));
+    fake.send("turn task_started t1");
+    wait_session_ref(&mut e, id, second);
+    no_status(&mut e.c, id, Duration::from_millis(3500));
+    fake.send(&format!("notify {second}"));
+    e.next(id, Idle);
+    let third = "00000000-0000-7000-8000-0000000000b3";
+    fake.send(&format!("newthread {third}"));
+    fake.send(&format!("notify {third}"));
+    wait_session_ref(&mut e, id, third);
 }
 
 #[test]
@@ -635,7 +690,11 @@ fn codex_osc9_approvals_questions_plans_and_turn_ends_move_the_pane() {
     fake.send("osc9 Created a.txt containing hi.");
     e.next(id, Idle);
     fake.send("osc9 Approval requested: late");
-    no_status(&mut e.c, id, Duration::from_millis(300));
+    let (s, _) = next_status(&mut e.c, id, WAIT);
+    assert_eq!(
+        s.status, WaitingPermission,
+        "R48: approvals only happen inside a turn, so one from idle waits"
+    );
 }
 
 fn wait_session_ref(e: &mut Env, id: u64, want: &str) {
@@ -671,6 +730,52 @@ fn codex_notify_before_its_rollout_exists_completes_the_turn_once_it_appears() {
     fake.send("session");
     e.next(id, Idle);
     wait_session_ref(&mut e, id, &codex_thread(id));
+}
+
+fn find_file(dir: &std::path::Path, suffix: &str) -> Option<std::path::PathBuf> {
+    for entry in std::fs::read_dir(dir).ok()? {
+        let path = entry.ok()?.path();
+        if path.is_dir() {
+            if let Some(found) = find_file(&path, suffix) {
+                return Some(found);
+            }
+        } else if path.to_string_lossy().ends_with(suffix) {
+            return Some(path);
+        }
+    }
+    None
+}
+
+#[test]
+fn codex_a_truncated_rollout_is_read_again_from_its_start() {
+    let mut e = env("cx-trunc");
+    let (id, fake) = e.codex();
+    fake.send("session");
+    wait_session_ref(&mut e, id, &codex_thread(id));
+    let cwd = std::fs::canonicalize(&e.sb.home).unwrap();
+    let context = |model: &str| {
+        json!({"type": "turn_context", "payload": {"model": model, "cwd": cwd}}).to_string()
+    };
+    fake.send(&format!("record {}", context("gpt-example-before")));
+    let model_is = |e: &mut Env, want: &str| {
+        e.c.wait_event(WAIT, |ev| {
+            matches!(ev, Event::PaneMeta(m) if m.pane_id == id && m.model.as_deref() == Some(want))
+        })
+        .is_some()
+    };
+    assert!(model_is(&mut e, "gpt-example-before"));
+    let rollout = find_file(
+        &e.sb.home.join(".codex/sessions"),
+        &format!("{}.jsonl", codex_thread(id)),
+    )
+    .expect("the fake's rollout");
+    let text = std::fs::read_to_string(&rollout).unwrap();
+    let meta = text.lines().next().unwrap();
+    std::fs::write(&rollout, format!("{meta}\n{}\n", context("gpt-x"))).unwrap();
+    assert!(
+        model_is(&mut e, "gpt-x"),
+        "a rollout rewritten shorter is read from its start"
+    );
 }
 
 #[test]

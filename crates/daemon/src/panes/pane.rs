@@ -12,10 +12,11 @@
 //! C1.
 //!
 //! An agent pane's task also owns its [`Agent`]: it is prepared from the launch spec before the process spawns (so a
-//! hook the new process fires at once already finds it), and the task feeds it the C3 envelopes and rollout lines
-//! other tasks hand in, the OSC 9 bodies and first output byte the engine reports, and every key typed (a KEY frame
-//! that encoded to bytes, INPUT_RAW, a `pane.answer` digit). The task publishes the agent's state when it adopts the
-//! process and acknowledges the adoption to whoever spawned it.
+//! hook the new process fires at once already finds it), and the task feeds it the C3 envelopes other tasks hand in,
+//! the OSC 9 bodies and first output byte the engine reports, every key typed (a KEY frame that encoded to bytes,
+//! INPUT_RAW, a `pane.answer` digit) and the rollout tailer's batches, which it reads only when no command, exit,
+//! input write, pty output or timer is ready, so JSON never delays the terminal. The task publishes the agent's state
+//! when it adopts the process and acknowledges the adoption to whoever spawned it.
 
 use std::collections::VecDeque;
 use std::sync::Arc;
@@ -38,6 +39,7 @@ use crate::osc::{decode_osc7, is_enter, osc9_bodies};
 use crate::panes::agent::Agent;
 use crate::pty::{Geometry, PaneProcess, PtyChannels, PtyWrite};
 use crate::publisher::{AckOutcome, Cadence, ClientWindow, IdleTimer, SyncHold};
+use crate::tail::TailMsg;
 
 /// Commands a pane task accepts; the channel is bounded ([`COMMAND_CAPACITY`]).
 #[derive(Debug)]
@@ -81,8 +83,6 @@ pub enum PaneCmd {
     Start(Box<Started>),
     /// A C3 envelope for this pane (hook or notify, spec 4.3).
     Hook(Box<HookEnvelope>),
-    /// Complete lines of this pane's Codex rollout, in file order (C4).
-    Rollout(Vec<Vec<u8>>),
     /// End the task: the pane was closed or plyd is stopping.
     Stop,
 }
@@ -164,7 +164,6 @@ pub fn fallback_palette() -> Palette {
 pub fn spawn_task(shared: Arc<Shared>, seed: PaneSeed) -> mpsc::Sender<PaneCmd> {
     let (tx, rx) = mpsc::channel(COMMAND_CAPACITY);
     let mut task = PaneTask {
-        me: tx.downgrade(),
         agent: None,
         id: seed.id,
         cli: seed.cli,
@@ -251,7 +250,6 @@ impl WriteQueue {
 }
 
 struct PaneTask {
-    me: mpsc::WeakSender<PaneCmd>,
     agent: Option<Agent>,
     id: PaneId,
     cli: Cli,
@@ -303,6 +301,13 @@ async fn reserve(tx: Option<mpsc::Sender<PtyWrite>>) -> Option<mpsc::OwnedPermit
     }
 }
 
+async fn next_tail(agent: &mut Option<Agent>) -> Option<TailMsg> {
+    match agent {
+        Some(agent) => agent.next_tail().await,
+        None => std::future::pending().await,
+    }
+}
+
 async fn sleep_until(at: Option<Instant>) {
     match at {
         Some(at) => tokio::time::sleep_until(at.into()).await,
@@ -316,6 +321,7 @@ impl PaneTask {
         while !self.stop {
             let deadline = self.next_deadline();
             let writable = !self.writes.is_empty() && self.input.is_some();
+            let tailing = self.agent.as_ref().is_some_and(Agent::tailing);
             tokio::select! {
                 biased;
                 cmd = cmds.recv(), if !self.closing => match cmd {
@@ -343,6 +349,11 @@ impl PaneTask {
                     None => self.on_output_closed(),
                 },
                 () = sleep_until(deadline), if deadline.is_some() => {}
+                msg = next_tail(&mut self.agent), if tailing => {
+                    if let (Some(msg), Some(agent)) = (msg, self.agent.as_mut()) {
+                        agent.on_tail(&self.shared, msg, Instant::now());
+                    }
+                }
             }
             self.on_tick(Instant::now());
         }
@@ -376,13 +387,7 @@ impl PaneTask {
                 return;
             }
         };
-        self.agent = Some(Agent::new(
-            &self.shared,
-            self.id,
-            cli,
-            spec,
-            self.me.clone(),
-        ));
+        self.agent = Some(Agent::new(&self.shared, self.id, cli, spec));
     }
 
     fn adopt(&mut self, started: Started) {
@@ -468,11 +473,6 @@ impl PaneTask {
                     tracing::debug!(pane_id = self.id, event = ?envelope.event, "hook for a pane without a running agent dropped");
                 }
             },
-            PaneCmd::Rollout(lines) => {
-                if let Some(agent) = self.agent.as_mut() {
-                    agent.on_rollout(&self.shared, &lines, now);
-                }
-            }
             PaneCmd::Stop => self.stop = true,
         }
     }

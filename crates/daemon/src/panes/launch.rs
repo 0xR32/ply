@@ -68,8 +68,8 @@ pub async fn create(shared: &Arc<Shared>, p: PaneCreateParams) -> MethodResult<P
             "a shell pane takes no prompt",
         ));
     }
-    let palette = wait_palette(shared).await?;
-    let program = resolve_program(shared, p.cli)?;
+    let palette = wait_palette(shared, None).await?;
+    let program = resolve_program(shared, None, p.cli)?;
     let settings = shared.registry().settings();
     let title = default_title(p.cli, &shared.login.shell);
     let status = initial_status(p.cli);
@@ -227,7 +227,7 @@ async fn relaunch(
             ));
         }
     };
-    wait_palette(shared).await?;
+    wait_palette(shared, Some(pane_id)).await?;
     let settings = shared.registry().settings();
     let session = pane
         .session_ref
@@ -235,7 +235,7 @@ async fn relaunch(
         .filter(|_| stored.cli != Cli::Shell);
     let spec = match session {
         Some(session) => {
-            let program = resolve_program(shared, stored.cli)?;
+            let program = resolve_program(shared, Some(pane_id), stored.cli)?;
             let options = LaunchOptions {
                 program: &program,
                 cwd: Path::new(&stored.cwd),
@@ -352,7 +352,8 @@ struct LaunchOptions<'a> {
     prompt: Option<&'a str>,
 }
 
-async fn wait_palette(shared: &Shared) -> MethodResult<Palette> {
+/// The palette `theme.set` gave, waiting [`PALETTE_WAIT`] for one; `pane_id` is the pane being resumed, if any, for the log.
+async fn wait_palette(shared: &Shared, pane_id: Option<PaneId>) -> MethodResult<Palette> {
     let mut rx = shared.palette.subscribe();
     let waited = tokio::time::timeout(PALETTE_WAIT, rx.wait_for(Option::is_some)).await;
     match waited {
@@ -360,7 +361,10 @@ async fn wait_palette(shared: &Shared) -> MethodResult<Palette> {
             .clone()
             .ok_or_else(|| refuse(ErrorCode::Internal, "the palette vanished")),
         Ok(Err(_)) | Err(_) => {
-            tracing::warn!("a spawn waited {PALETTE_WAIT:?} for theme.set in vain");
+            tracing::warn!(
+                ?pane_id,
+                "a spawn waited {PALETTE_WAIT:?} for theme.set in vain"
+            );
             Err(refuse(
                 ErrorCode::InvalidState,
                 "plyd has no terminal palette yet; send theme.set first",
@@ -377,12 +381,18 @@ fn agent_cli(cli: Cli) -> Option<AgentCli> {
     }
 }
 
-fn resolve_program(shared: &Shared, cli: Cli) -> MethodResult<PathBuf> {
+/// The program for `cli` from the login PATH, version-checked; `pane_id` is the pane being resumed, if any, for the log.
+fn resolve_program(shared: &Shared, pane_id: Option<PaneId>, cli: Cli) -> MethodResult<PathBuf> {
     let Some(agent) = agent_cli(cli) else {
         return Ok(shared.login.shell.clone());
     };
     let name = ply_agents::cli_name(agent);
     let Some(program) = shared.login.which(name) else {
+        tracing::warn!(
+            ?pane_id,
+            cli = name,
+            "the CLI is not on the login shell's PATH"
+        );
         return Err(refuse(
             ErrorCode::CliNotFound,
             format!("{name} is not on the login shell's PATH"),
@@ -392,13 +402,13 @@ fn resolve_program(shared: &Shared, cli: Cli) -> MethodResult<PathBuf> {
     match adapter.installed_version(&program) {
         Ok(version) => {
             if let Err(e) = adapter.check_version(&version) {
-                tracing::warn!(cli = name, %version, error = %e, "refusing a CLI below the supported minimum");
+                tracing::warn!(?pane_id, cli = name, %version, error = %e, "refusing a CLI below the supported minimum");
                 return Err(refuse(ErrorCode::CliTooOld, e.to_string()));
             }
-            tracing::debug!(cli = name, %version, "CLI version accepted");
+            tracing::debug!(?pane_id, cli = name, %version, "CLI version accepted");
         }
         Err(e) => {
-            tracing::warn!(cli = name, program = %program.display(), error = %e, "CLI version unknown; launching anyway");
+            tracing::warn!(?pane_id, cli = name, program = %program.display(), error = %e, "CLI version unknown; launching anyway");
         }
     }
     Ok(program)

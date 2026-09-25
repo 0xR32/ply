@@ -8,8 +8,8 @@ use std::time::{Duration, SystemTime};
 
 use ply_agents::codex::notify::NotifyPayload;
 use ply_agents::codex::rollout::{
-    FramedLine, LineBuffer, MAX_LINE_BYTES, RolloutCandidate, RolloutRecord, parse_record,
-    parse_update_plan, pick_rollout_by_cwd, rollout_thread_id,
+    FramedLine, LineBuffer, MAX_LINE_BYTES, RolloutCandidate, RolloutRecord, TurnEvent,
+    parse_record, parse_update_plan, pick_rollout_by_cwd, plyd_reads, rollout_thread_id,
 };
 use ply_agents::plan::ItemStatus;
 use ply_agents::{
@@ -92,12 +92,151 @@ fn every_captured_record_parses_and_none_is_unknown() {
             .count();
         assert_eq!(metas, 1, "{name}");
         assert!(
-            !records
-                .iter()
-                .any(|r| matches!(r, RolloutRecord::Unknown(_))),
+            !records.iter().any(|r| matches!(
+                r,
+                RolloutRecord::Unknown(_) | RolloutRecord::UnknownEvent(_)
+            )),
             "{name}"
         );
+        let turns: Vec<&TurnEvent> = records
+            .iter()
+            .filter_map(|r| match r {
+                RolloutRecord::Turn(t) => Some(t),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            matches!(turns.first(), Some(TurnEvent::Started { turn_id: Some(_) }))
+                && matches!(turns.last(), Some(TurnEvent::Complete { turn_id: Some(_) })),
+            "{name}: {turns:?}"
+        );
     }
+}
+
+#[test]
+fn the_pre_filter_keeps_every_line_the_session_reads_and_drops_the_rest() {
+    for name in [
+        "rollout-basic-session-meta-turn-context.jsonl",
+        "rollout-update-plan-code-mode.jsonl",
+        "rollout-approval-and-resume-source.jsonl",
+    ] {
+        let all = lines(name);
+        let kept: Vec<&Vec<u8>> = all.iter().filter(|l| plyd_reads(l)).collect();
+        assert!(
+            kept.len() < all.len() / 2,
+            "{name}: {} of {}",
+            kept.len(),
+            all.len()
+        );
+        for line in &all {
+            let useful = !matches!(parse_record(line).unwrap(), RolloutRecord::Ignored);
+            assert!(
+                !useful || plyd_reads(line),
+                "{name}: dropped {}",
+                String::from_utf8_lossy(line)
+            );
+        }
+    }
+    assert!(
+        plyd_reads(b"{truncated"),
+        "malformed lines reach the session, which counts them"
+    );
+    assert!(plyd_reads(br#"{"type":"future_thing","payload":{}}"#));
+    assert!(plyd_reads(
+        br#"{"type":"event_msg","payload":{"type":"future_event"}}"#
+    ));
+    assert!(!plyd_reads(
+        br#"{"type":"event_msg","payload":{"type":"token_count","info":{}}}"#
+    ));
+}
+
+#[test]
+fn rollout_turn_events_start_and_end_turns_and_an_older_turns_end_is_ignored() {
+    let event = |kind: &str, turn: &str| {
+        json!({"timestamp": "2026-09-25T07:00:00Z", "type": "event_msg", "payload": {"type": kind, "turn_id": turn}})
+            .to_string()
+            .into_bytes()
+    };
+    let mut s = session(None);
+    const STARTED: AdapterSignal = AdapterSignal::Status(StatusSignal::TurnStarted);
+    assert_eq!(
+        s.handle(AgentEvent::RolloutLine(&event("task_started", "t1")))
+            .unwrap(),
+        [STARTED]
+    );
+    assert_eq!(
+        s.handle(AgentEvent::RolloutLine(&event("task_started", "t2")))
+            .unwrap(),
+        [STARTED]
+    );
+    assert!(
+        s.handle(AgentEvent::RolloutLine(&event("task_complete", "t1")))
+            .unwrap()
+            .is_empty(),
+        "t1 ended after t2 began"
+    );
+    assert_eq!(
+        s.handle(AgentEvent::RolloutLine(&event("turn_aborted", "t2")))
+            .unwrap(),
+        [TURN_COMPLETE]
+    );
+    assert!(
+        s.handle(AgentEvent::RolloutLine(&event("future_event", "t3")))
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        s.stats().unknown_rollout_records,
+        1,
+        "unknown event subtypes are counted"
+    );
+}
+
+#[test]
+fn a_new_thread_rebinds_the_session_when_plyd_switches_files_or_a_notify_named_it() {
+    let meta = |thread: &str| {
+        json!({"type": "session_meta", "payload": {"id": thread, "cwd": "/example/workspace"}})
+            .to_string()
+            .into_bytes()
+    };
+    let first = "00000000-0000-7000-8000-00000000000a";
+    let second = "00000000-0000-7000-8000-00000000000b";
+    let third = "00000000-0000-7000-8000-00000000000c";
+    let mut s = session(None);
+    s.handle(AgentEvent::RolloutLine(&meta(first))).unwrap();
+    assert_eq!(s.meta().session_ref.as_deref(), Some(first));
+    assert!(
+        s.handle(AgentEvent::RolloutLine(&meta(second)))
+            .unwrap()
+            .is_empty(),
+        "an unasked-for thread's record changes nothing"
+    );
+    s.handle(AgentEvent::RolloutSwitched).unwrap();
+    let signals = s.handle(AgentEvent::RolloutLine(&meta(second))).unwrap();
+    assert!(
+        matches!(signals.as_slice(), [AdapterSignal::Meta(_)]),
+        "{signals:?}"
+    );
+    assert_eq!(
+        s.meta().session_ref.as_deref(),
+        Some(second),
+        "resume follows the new thread"
+    );
+
+    let mut named = notify("notify-turn.json");
+    named.payload["thread-id"] = json!(third);
+    assert_eq!(
+        s.handle(AgentEvent::Hook(&named)).unwrap(),
+        [AdapterSignal::FindRollout {
+            thread_id: third.into()
+        }]
+    );
+    let signals = s.handle(AgentEvent::RolloutLine(&meta(third))).unwrap();
+    assert!(
+        matches!(signals.as_slice(), [AdapterSignal::Meta(_), TURN_COMPLETE]),
+        "the notified thread binds and its turn completes: {signals:?}"
+    );
+    assert_eq!(s.meta().session_ref.as_deref(), Some(third));
 }
 
 #[test]
@@ -358,9 +497,10 @@ fn title_turn_notify_is_ignored_and_the_real_thread_binds() {
         }]
     );
     let signals = feed_rollout(&mut *s, "rollout-approval-and-resume-source.jsonl");
-    assert!(
-        !signals.contains(&TURN_COMPLETE),
-        "the title turn has no rollout: {signals:?}"
+    assert_eq!(
+        signals.iter().filter(|s| **s == TURN_COMPLETE).count(),
+        2,
+        "only the rollout's two task_complete records end turns; the title turn has no rollout: {signals:?}"
     );
     assert_eq!(s.meta().session_ref.as_deref(), Some(REAL_THREAD));
     assert_eq!(s.meta().model.as_deref(), Some("gpt-6-sol"));
@@ -371,10 +511,13 @@ fn title_turn_notify_is_ignored_and_the_real_thread_binds() {
             .unwrap(),
         [TURN_COMPLETE]
     );
-    assert!(
+    assert_eq!(
         s.handle(AgentEvent::Hook(&notify("notify-title-turn.json")))
-            .unwrap()
-            .is_empty()
+            .unwrap(),
+        [AdapterSignal::FindRollout {
+            thread_id: TITLE_THREAD.into()
+        }],
+        "another thread's notify is only a request to look for its rollout (R49)"
     );
 }
 

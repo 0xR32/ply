@@ -22,7 +22,7 @@ use crate::version::CliVersion;
 
 use self::notify::NotifyPayload;
 use self::osc9::{Osc9Kind, classify_osc9};
-use self::rollout::{RolloutRecord, is_uuid, parse_record};
+use self::rollout::{RolloutRecord, TurnEvent, is_uuid, parse_record};
 
 /// Oldest supported Codex (spec 6.2, ADR-0004 item 8).
 pub const MIN_VERSION: CliVersion = CliVersion::new(0, 156, 1);
@@ -154,11 +154,17 @@ pub fn toml_string(s: &str) -> String {
 }
 
 /// Per-pane interpreter of Codex notify payloads, OSC 9 bodies and the pane's rollout lines.
+///
+/// The session follows one thread at a time: the first `session_meta` it is fed binds it, and a later one for another
+/// thread rebinds it when plyd switched rollout files (`AgentEvent::RolloutSwitched`, after `/new` or `/clear`) or a
+/// notify named that thread (Ruling R49); the session id then follows the new thread.
 #[derive(Debug, Clone, Default)]
 pub struct CodexSession {
     meta: SessionMeta,
     bound: Option<String>,
     pending_turns: Vec<String>,
+    switched: bool,
+    turn: Option<String>,
     progress: Option<Progress>,
     stats: SessionStats,
 }
@@ -207,16 +213,14 @@ impl CodexSession {
             self.stats.unknown_hook_events += 1;
             return Ok(vec![]);
         }
-        Ok(match &self.bound {
-            Some(thread) if *thread == notify.thread_id => vec![status(StatusSignal::TurnComplete)],
-            Some(_) => vec![],
-            None => {
-                self.remember_turn(&notify.thread_id);
-                vec![AdapterSignal::FindRollout {
-                    thread_id: notify.thread_id,
-                }]
-            }
-        })
+        if self.bound.as_deref() == Some(notify.thread_id.as_str()) {
+            return Ok(vec![status(StatusSignal::TurnComplete)]);
+        }
+        // Another thread counts once its rollout binds: the pane's own before binding, a `/new` one after (R49), never the title turn's (R28).
+        self.remember_turn(&notify.thread_id);
+        Ok(vec![AdapterSignal::FindRollout {
+            thread_id: notify.thread_id,
+        }])
     }
 
     fn on_rollout_line(&mut self, line: &[u8]) -> Result<Vec<AdapterSignal>> {
@@ -224,6 +228,16 @@ impl CodexSession {
         let mut signals = Vec::new();
         match record {
             RolloutRecord::SessionMeta(meta) => {
+                let switched = std::mem::take(&mut self.switched);
+                let rebind = self.bound.as_ref().is_some_and(|b| *b != meta.thread_id)
+                    && (switched || self.pending_turns.contains(&meta.thread_id));
+                if rebind {
+                    self.bound = Some(meta.thread_id.clone());
+                    self.turn = None;
+                    if self.progress.take().is_some() {
+                        signals.push(AdapterSignal::Progress(None));
+                    }
+                }
                 let thread = self.bound.get_or_insert_with(|| meta.thread_id.clone());
                 if *thread != meta.thread_id {
                     return Ok(signals);
@@ -257,8 +271,23 @@ impl CodexSession {
                     signals.push(AdapterSignal::Progress(self.progress.clone()));
                 }
             }
+            RolloutRecord::Turn(TurnEvent::Started { turn_id }) => {
+                self.turn = turn_id;
+                signals.push(status(StatusSignal::TurnStarted));
+            }
+            RolloutRecord::Turn(
+                TurnEvent::Complete { turn_id } | TurnEvent::Aborted { turn_id },
+            ) => {
+                let current = self.turn.is_none() || turn_id.is_none() || self.turn == turn_id;
+                if current {
+                    self.turn = None;
+                    signals.push(status(StatusSignal::TurnComplete));
+                }
+            }
             RolloutRecord::Ignored => {}
-            RolloutRecord::Unknown(_) => self.stats.unknown_rollout_records += 1,
+            RolloutRecord::Unknown(_) | RolloutRecord::UnknownEvent(_) => {
+                self.stats.unknown_rollout_records += 1;
+            }
         }
         Ok(signals)
     }
@@ -287,6 +316,10 @@ impl AgentSession for CodexSession {
                 Ok(signals)
             }
             AgentEvent::FirstOutput => Ok(vec![status(StatusSignal::Ready)]),
+            AgentEvent::RolloutSwitched => {
+                self.switched = true;
+                Ok(vec![])
+            }
         }
     }
 
