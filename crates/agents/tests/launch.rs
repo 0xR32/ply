@@ -189,10 +189,6 @@ fn codex_argv_carries_the_per_invocation_overrides() {
             r#"tui.notification_condition="always""#,
             "-c",
             "tools.update_plan.enabled=true",
-            "-c",
-            "check_for_update_on_startup=false",
-            "-c",
-            "features.plugins=false",
         ]
     );
     assert!(launch.files.is_empty());
@@ -212,7 +208,7 @@ fn codex_plan_tool_setting_drops_the_override() {
         .spec
         .argv;
     assert!(!argv.iter().any(|a| a.contains("update_plan")));
-    assert_eq!(argv.iter().filter(|a| *a == "-c").count(), 5);
+    assert_eq!(argv.iter().filter(|a| *a == "-c").count(), 3);
 }
 
 #[test]

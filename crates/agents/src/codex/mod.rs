@@ -36,12 +36,6 @@ pub const NOTIFICATION_CONDITION: &str = r#"tui.notification_condition="always""
 /// Registers the `update_plan` tool, off by default in 0.156.1, so progress has a source (R26, setting `codex_plan_tool`).
 pub const PLAN_TOOL: &str = "tools.update_plan.enabled=true";
 
-/// Stops the TUI's startup update check (a network call, `$CODEX_HOME/version.json` and an update prompt; tui/src/updates.rs).
-pub const NO_UPDATE_CHECK: &str = "check_for_update_on_startup=false";
-
-/// Stops the plugin-marketplace auto-upgrade thread that rewrites `~/.codex/config.toml` (ADR-0004, R14); `plugins` is a plain bool flag.
-pub const NO_PLUGINS: &str = "features.plugins=false";
-
 /// The Codex adapter; see [`crate::adapter`] for the contract.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct CodexAdapter;
@@ -64,7 +58,6 @@ impl Adapter for CodexAdapter {
         if request.settings.codex_plan_tool {
             overrides.push(PLAN_TOOL.to_owned());
         }
-        overrides.extend([NO_UPDATE_CHECK, NO_PLUGINS].map(str::to_owned));
         for value in overrides {
             argv.extend(["-c".to_owned(), value]);
         }

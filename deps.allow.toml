@@ -1,5 +1,14 @@
 # INV-16 admission list. Numbers come from `bun scripts/check-deps.ts --refresh`; see docs/development.md.
 
+[cargo.anyhow]
+repo = "dtolnay/anyhow"
+stars = 6657
+last_commit = "2026-08-22"
+contributors_5plus = 1
+checked = "2026-09-25"
+exception = "R35"
+note = "single-maintainer but foundational, actively maintained and ubiquitous; named by the spec (9.1) for binaries' main.rs only"
+
 [cargo.serde]
 repo = "serde-rs/serde"
 stars = 10831
@@ -13,6 +22,15 @@ stars = 5638
 last_commit = "2026-08-08"
 contributors_5plus = 16
 checked = "2026-09-25"
+
+[cargo.thiserror]
+repo = "dtolnay/thiserror"
+stars = 5552
+last_commit = "2026-09-23"
+contributors_5plus = 1
+checked = "2026-09-25"
+exception = "R35"
+note = "single-maintainer but foundational, actively maintained and ubiquitous; named by the spec (9.1) for library errors"
 
 [cargo.ts-rs]
 repo = "Aleph-Alpha/ts-rs"
@@ -82,21 +100,3 @@ contributors_5plus = 138
 checked = "2026-09-25"
 exception = "D5"
 note = "terminal engine by the owner's decision (ADR-0008); maintainers declare the C API work in progress; vendored at 44f2a44 (INV-17)"
-
-[cargo.thiserror]
-repo = "dtolnay/thiserror"
-stars = 5552
-last_commit = "2026-09-23"
-contributors_5plus = 1
-checked = "2026-09-25"
-exception = "R35"
-note = "single-maintainer but foundational, actively maintained and ubiquitous; named by the spec (9.1) for library errors"
-
-[cargo.anyhow]
-repo = "dtolnay/anyhow"
-stars = 6657
-last_commit = "2026-08-22"
-contributors_5plus = 1
-checked = "2026-09-25"
-exception = "R35"
-note = "single-maintainer but foundational, actively maintained and ubiquitous; named by the spec (9.1) for binaries' main.rs only"
