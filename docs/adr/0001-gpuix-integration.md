@@ -51,7 +51,7 @@ GPUIX keeps its element system crate-private: `mod custom_elements;` (packages/n
 itself (renderer.rs:3671). An outside crate therefore cannot implement `CustomElement`,
 whose `render` takes `&mut gpui::Context<GpuixView>` (custom_elements/mod.rs:205-213).
 
-The patch (149 lines, 4 files under `packages/native/src`) does exactly this:
+The patch (150 lines, 4 files under `packages/native/src`) does exactly this:
 
 | Change | Why an outside element needs it |
 |---|---|
@@ -63,7 +63,7 @@ The patch (149 lines, 4 files under `packages/native/src`) does exactly this:
 | `pub use text::log_painted_text` | make the terminal's rows visible to `getPaintedText()` in tests (the canvas paint bypasses GPUIX's text funnel) |
 | `register_global_factory(fn() -> Box<dyn CustomElementFactory>)`, a `static Mutex<Vec<_>>` | register before any renderer exists, i.e. from `#[napi_derive::module_init]` |
 | `with_defaults()` registers the global factories after the built-ins | every renderer (live and test) gets `<terminal>`; a global type replaces a built-in of the same name |
-| `CustomElementFactory::init(&self, cx: &mut gpui::App) {}` (default no-op), called by `init_global_factories(cx)` next to `input::init` at all four app-creation sites (renderer.rs:1159, 1292, 2702; packages/native/src/test_renderer.rs:237) | the element's one-time app init — fonts (Decision 11) and any key bindings. It runs before the window opens and, on macOS, before `app_menu::init` reads the keymap |
+| `CustomElementFactory::init(&self, cx: &mut gpui::App) {}` (default no-op), called by `init_global_factories(cx)` at all four app-creation sites: on macOS right **after** `app_menu::init` (renderer.rs:1163), elsewhere next to `input::init` (renderer.rs:1292, 2702; packages/native/src/test_renderer.rs:237) | the element's one-time app init — fonts (Decision 11) and key bindings. It runs before the window opens at every site (on macOS `cx.open_window` follows at renderer.rs:1164-1170). On macOS it runs after GPUIX's menu bindings so that an element's key-context binding wins GPUI's tie-break (R23, Decision 10) |
 
 A function pointer, not a boxed factory, is stored because the static must be `Sync` and
 `CustomElementFactory` is not required to be `Send`.
@@ -360,42 +360,47 @@ otherwise GPUI dispatch runs first and the IME (`insertText:`) only gets keys th
   element returns without handling or stopping them, so they reach `render({onKeyDown})`.
   Since the element never stops ⌘ chords except ⌘C/⌘V/⌘A, the list only matters for chords
   the element would otherwise own.
-- **⌘W — Ruling R23 (decided, untested).** ⌘W closes the focused pane: the terminal element
-  registers, from `CustomElementFactory::init`, a GPUI key binding `cmd-w` → a ply action in
-  the terminal's own key context (`.key_context(…)` on the element's div), handles that action
-  with `.on_action(…)`, stops propagation and emits `onTerminalEvent`
-  `{"kind":"command","id":"pane.close"}`. With no pane focused the context is absent, so ⌘W
-  keeps GPUIX's close-window. No third patch. **Untested: WP5 must prove that the key-context
-  binding beats both the global `cmd-w` binding and the ⌘W menu key equivalent that
-  `set_menus` installs.** What reading the source establishes, and what it does not:
-  - The menu key equivalent comes from the keymap: `create_menu_item` takes the first binding
-    for the item's action (zed/crates/gpui_macos/src/platform.rs:466-480) and sets it on the
-    `NSMenuItem` (platform.rs:528-540), so Window › Close Window carries ⌘W.
-  - GPUI's view answers `performKeyEquivalent:` (zed/crates/gpui_macos/src/window.rs:139-142,
-    2331-2333) by running GPUI's own key dispatch and returning YES when it was handled
-    (window.rs:2407-2430, 2507-2510). If AppKit offers the key equivalent to the key window's
-    views before the main menu, a handled ⌘W never reaches the menu. That ordering is AppKit's
-    and is not in this source; GPUIX's AGENTS.md:436-450 states the opposite for its Edit-menu
-    case. If the menu gets it first, `handle_menu_item` dispatches `CloseWindow` as an action
-    (platform.rs:1703-1720), which the terminal cannot intercept: the type is private to
-    GPUIX (packages/native/src/app_menu.rs:19-37).
-  - **A key context alone does not win.** GPUI ranks a binding with no context as deep as the
-    deepest context (zed/crates/gpui/src/keymap.rs:150-160, 246-252), and a binding whose
-    context is the focused element's own context has that same depth
-    (zed/crates/gpui/src/keymap/context.rs:260-268). The tie goes to the binding added later
-    (keymap.rs:188-190). GPUIX binds `cmd-w` in `app_menu::init` (app_menu.rs:44-50), which
-    runs **after** `init_global_factories` in patch 0001's order (renderer.rs:1159-1163; the
-    patch inserts the call after line 1160). So a ply binding added directly in `init` loses
-    to `CloseWindow`. It has to be added later: either by `cx.defer(|cx| cx.bind_keys(…))` from `init` (runs at the end of
-    the current effect cycle, zed/crates/gpui/src/app.rs:1998-2004; expected to be the
-    `open_window` update that follows `app_menu::init` — not verified), or by moving the
-    `init_global_factories` call after `app_menu::init` in patch 0001 (a one-line change of
-    the existing patch, not a third one). Once ply's binding ranks first, GPUI dispatches its
-    action first and stops when the element handles it (zed/crates/gpui/src/window.rs:5608-5620).
-  - Where to test: GPUIX's test renderer installs no app menu and no `cmd-w` binding (⌘W
-    bubbles there, Decision 10 table), so it cannot prove R23. The live `GpuixRenderer`'s
-    `simulateKeystrokes` goes through GPUI dispatch and bindings (measured: `cmd-w` closed the
-    live window) but not through AppKit's menu, so the menu path needs a real key press.
+- **⌘W — Ruling R23 (decided; GPUI dispatch measured, AppKit menu path untested).** ⌘W closes
+  the focused pane. The terminal element registers, from `CustomElementFactory::init`, a GPUI
+  key binding `cmd-w` → a ply action in the terminal's own key context (`.key_context(…)` on
+  the element's div), handles the action with `.on_action(…)` and emits `onTerminalEvent`
+  `{"kind":"command","id":"pane.close"}`. No third patch: patch 0001 calls
+  `init_global_factories` after `app_menu::init` on macOS (Decision 1), so ply's binding is
+  registered after GPUIX's global `cmd-w`. Why the order decides it:
+  - GPUI ranks a binding with no context as deep as the deepest context
+    (zed/crates/gpui/src/keymap.rs:150-160, 246-252), and a binding whose context is the
+    focused element's own context has that same depth (zed/crates/gpui/src/keymap/context.rs:260-268).
+    The tie goes to the binding added later (keymap.rs:188-190). GPUIX adds `cmd-w` →
+    `CloseWindow` in `app_menu::init` (app_menu.rs:44-50). Once ply's binding ranks first, GPUI
+    dispatches its action first and stops when the element handles it
+    (zed/crates/gpui/src/window.rs:5608-5620).
+  - **Measured** (live `GpuixRenderer`, test-support dev build with the reordered patch, spike
+    element with the binding; `simulateKeystrokes` goes through GPUI's bindings but not
+    AppKit's menu):
+
+    | Focus | ⌘W result |
+    |---|---|
+    | the terminal | `{"kind":"command","id":"pane.close"}` reached `onTerminalEvent`; nothing reached `render({onKeyDown})`; the window stayed open |
+    | another focusable element (a `div` with `tabIndex`) | the window closed and the process exited (GPUIX's close-window) |
+    | nothing (after `blur()`) | the window stayed open and `render({onKeyDown})` received `cmd-w`: with no focus GPUI dispatches from the dispatch tree's root node (window.rs:5785-5793), while GPUIX installs its `CloseWindow` handler on the root `div` it renders (renderer.rs:52-58, 4746-4747); that the `div` is a node below the root node, so the action finds no handler, is inferred from reading |
+
+    The factory `init` still runs before the window opens (it logged `windows open = false`)
+    and the fonts still resolve (`Geist Mono`).
+  - **Fallback:** if WP5's live test with AppKit's menu shows the reorder is not enough, the
+    binding is registered through `cx.defer(|cx| cx.bind_keys(…))` from `init`
+    (zed/crates/gpui/src/app.rs:1998-2004).
+  - **Untested: the AppKit menu path.** `set_menus` puts ⌘W on Window › Close Window from the
+    keymap (`create_menu_item`, zed/crates/gpui_macos/src/platform.rs:466-480, 528-540). GPUI's
+    view answers `performKeyEquivalent:` by running GPUI's key dispatch and returning YES when
+    it was handled (zed/crates/gpui_macos/src/window.rs:139-142, 2331-2333, 2407-2430,
+    2507-2510). If AppKit offers a key equivalent to the key window's views before the main
+    menu, a ⌘W the pane handled never reaches the menu. That ordering belongs to AppKit and is
+    not in this source; GPUIX's AGENTS.md:436-450 states the opposite for its Edit-menu case.
+    If the menu gets it first, `handle_menu_item` dispatches `CloseWindow` as an action
+    (platform.rs:1703-1720), which the terminal cannot intercept: the type is private to GPUIX
+    (packages/native/src/app_menu.rs:19-37). WP5 proves ⌘W with a real key press in the app
+    with AppKit's menu installed. GPUIX's test renderer cannot prove it either way, because it
+    installs no app menu and no `cmd-w` binding.
 - **Mouse:** `on_mouse_down/up/move` and `on_scroll_wheel` on the element's div, with
   `cx.stop_propagation()` for wheel events it consumes (as input.rs:1336-1342). **Measured:**
   an automation click delivered `{"kind":"mouse","x":230,"y":96}` and focused the pane.
@@ -516,6 +521,7 @@ All paths below are under `.superpowers/plan/spikes/s1b/`. Scripts run from `jsr
 | Cold release build 5 min 53 s, sizes | `build-cold.log`; earlier split in `build-release.log` / `build-release2.log`; `build-prod.log`, `build-prod2.log`, `build-ts2.log`, `build-dev.log` |
 | napi exports, one `dlopen`, no-override failure | `jsroot/app/src/exports.ts`, `jsroot/app/src/no-override.ts` (outputs recorded in Decisions 5–6) |
 | Live repaint, pump, keys, ⌘W | `jsroot/app/src/live.tsx`; `live-run1.log` (test-support), `live-prod.log` (window behind other apps), `live-prod2.log` (floated) |
+| R23 with the reordered patch 0001 | `jsroot/app/src/r23.tsx`, `r23.log`, and the `ClosePane` binding in `crates/native/src/lib.rs` (added in fix round 2; copied only if the controller refreshes the preserved directory) |
 | Tree-size cost, idle CPU | `jsroot/app/src/live-tree.tsx`, `idle.tsx`, `rebuild-cost.tsx` (outputs recorded in Decision 8 and Consequences) |
 | Test renderer, automation, fonts | `jsroot/app/src/testroot.tsx`, `terminal.test.tsx`, `testroot-init.log`, `shots/s1b-testroot.png`, `shots/late-registration-probe-helvetica.png` |
 | `flush()` stall with a fast producer | `jsroot/app/src/flush-probe.tsx`, `rebuild-probe.tsx`, `flush-probe.log`, `rebuild-probe.log`, `rebuild-probe2.log` |
@@ -527,11 +533,12 @@ All paths below are under `.superpowers/plan/spikes/s1b/`. Scripts run from `jsr
   `TestGpuixRenderer`), and a production build without it for shipping and for every
   performance measurement (P1–P5). GPUIX's default build and its npm binaries include
   `test-support` and draw on every notify, so they are not representative for frame numbers.
-- ⌘W, ⌘Q, ⌘H, ⌥⌘H and ⌘M are bound by GPUIX's app menu (app_menu.rs:44-50) and never reach
-  `render({onKeyDown})`; without a pane focused, ⌘W closes the window, which quits the app
-  (QuitMode::LastWindowClosed, renderer.rs:1157). R23 makes ⌘W close the focused pane through
-  the element's own binding; that it wins over GPUIX's binding and the menu key equivalent is
-  unproven until WP5's live test (Decision 10).
+- ⌘Q, ⌘H, ⌥⌘H and ⌘M are bound by GPUIX's app menu (app_menu.rs:44-50) and never reach
+  `render({onKeyDown})`. R23: with a pane focused, ⌘W closes the pane (measured through GPUI
+  dispatch; the AppKit menu path is WP5's live test). With another element focused, ⌘W closes
+  the window, which quits the app (QuitMode::LastWindowClosed, renderer.rs:1157). With nothing
+  focused, it reaches `render({onKeyDown})` instead (Decision 10), so ply's keymap sees it
+  there.
 - The per-frame cost of a terminal repaint includes a full rebuild of the React tree: ~0.01 ms
   per host node measured (0.75 ms at 24 nodes, 5.0 ms at 504, 20.3 ms at 2004, p90). At
   R-R16's 2 000-node cap the window cannot hold 60 Hz while a pane streams. **Ruling R24
@@ -612,10 +619,11 @@ Corrects (5.1.0):
 - **7.1 K3/K6** (R23) — ⌘Q, ⌘H, ⌥⌘H and ⌘M never reach the app keymap (GPUIX menu bindings).
   ⌘W closes the focused pane through a GPUI binding in the terminal element's key context,
   registered from `CustomElementFactory::init` and reported as `onTerminalEvent`
-  `{kind:"command", id:"pane.close"}`; with no pane focused ⌘W keeps close-window; no third
-  patch. The binding must be added after GPUIX's `app_menu::init` to win GPUI's tie-break
-  (Decision 10). Marked untested until WP5 proves it against the global binding and the menu
-  key equivalent. C6 gains the `command` kind.
+  `{kind:"command", id:"pane.close"}`. Patch 0001 calls `init_global_factories` after
+  `app_menu::init` so the binding wins GPUI's tie-break; `cx.defer` is the fallback; no third
+  patch; INV-13 unchanged. Measured through GPUI dispatch; the AppKit menu path is untested
+  until WP5. With another element focused ⌘W keeps close-window. With nothing focused it
+  reaches `render({onKeyDown})` (Decision 10). C6 gains the `command` kind.
 - **8.1** (R25) — (a) the root `Cargo.toml` needs `[workspace] exclude = ["vendor"]`; (b) `lto` cannot
   go in `[profile.release.package.gpuix-native]`: it goes on a whole profile (`[profile.release]`
   or a dedicated profile used by `just build-native`), and the dev-only `opt-level` overrides
