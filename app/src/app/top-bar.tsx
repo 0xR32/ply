@@ -9,6 +9,7 @@ import { Icon } from '../ui/icons';
 import { Kbd } from '../ui/kbd';
 import { Text } from '../ui/text';
 
+/** The accent square and "ply" at the left end of the top bar. */
 function Wordmark() {
   const { z, accent } = useChrome();
   return (
@@ -38,6 +39,7 @@ function Wordmark() {
   );
 }
 
+/** The amber "n need you" pill, shown while any pane waits; a click jumps to the next one (⌘J). */
 function NeedsYouPill() {
   const dispatch = useDispatch();
   const { z } = useChrome();
@@ -74,6 +76,7 @@ function NeedsYouPill() {
   );
 }
 
+/** The search field look-alike that opens the command palette (⌘K). */
 function PaletteButton() {
   const dispatch = useDispatch();
   const { z } = useChrome();

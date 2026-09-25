@@ -30,6 +30,7 @@ hash. Never run `zig build` by hand inside the cached source: without the flags 
 | `just gen` | `bun scripts/gen.ts`: runs ply-proto's `export_bindings` test with `PLY_GEN_OUT`, formats the ts-rs output with Biome and writes `app/src/ipc/proto.gen.ts` (`--check` compares instead) |
 | `just dev` | `bun --hot app/src/main.tsx` |
 | `just fmt` | `cargo fmt --all` and `biome check --write` |
+| `just fonts` | copies `app/assets/fonts/*.ttf` into `~/Library/Fonts`, the only place the app finds Geist (GPUIX loads no font file); run it once yourself, nothing else does |
 
 `bun run dev`, `bun run check`, `bun run test` and `bun run gen` are the same entry points for the TypeScript side.
 `PLY_WINDOW_FOCUS=0 bun run dev` opens the window without taking focus, which keeps scripted or agent-driven runs from
@@ -76,7 +77,8 @@ exit: it stops only on `daemon.shutdown`, SIGTERM, SIGINT or SIGHUP. Panes whose
 back as `lost` and can be relaunched with `pane.resume`.
 
 How the app finds plyd (`app/src/ipc/daemon-launcher.ts`): it uses the cargo-built plyd — `$PLY_PLYD`, else
-`target/debug/plyd`, else `target/release/plyd`. With `PLY_HOME` set it spawns that binary as `plyd --foreground`,
+`target/release/plyd`, else `target/debug/plyd` (the release build wins when both exist; ply runs from this
+checkout, there is no bundle). With `PLY_HOME` set it spawns that binary as `plyd --foreground`,
 detached; otherwise it runs `plyd install-agent` with it, so `bun run dev` without `PLY_HOME` installs a LaunchAgent
 pointing at the cargo-built plyd. plyd is the only writer of that plist. `docs/configuration.md` lists everything a
 run writes to the machine.

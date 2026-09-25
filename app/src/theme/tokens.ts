@@ -30,7 +30,7 @@ export type AccentName = keyof typeof accentAlternatives;
 
 /** SGR slots 0–15: 0–7 are chrome tokens, 8 is `text3`, 9–15 are 1–7 at +8 points HSL lightness.
  *  `tokens.test.ts` enforces the bright-slot rule, so edit a base colour and its bright twin together. */
-export const ansi16: readonly string[] = [
+export const ansi16: Readonly<TerminalTheme['ansi']> = [
   ground,
   red,
   mint,

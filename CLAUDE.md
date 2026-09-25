@@ -124,8 +124,9 @@ object; there is no `<button>` (use `<div onClick>`); never nest `<text>` inside
 terminal rows rely on. Every host node costs about 0.01 ms per frame.
 
 **Fonts.** GPUIX has no font-loading API, so Geist and Geist Mono
-(`app/assets/fonts/`) are used only when installed in `~/Library/Fonts`;
-otherwise the app falls back to Menlo and the system font.
+(`app/assets/fonts/`) are used only when installed in `~/Library/Fonts`
+(`just fonts` copies them there; the owner runs it); otherwise the app falls
+back to Menlo and the system font.
 
 **The comment hook.** A machine-level hook rejects comment blocks longer than one
 line (two with a tracking link). Doc comments state errors and safety inline
@@ -146,6 +147,7 @@ just check      # fmt, clippy -D warnings, cargo doc -D warnings, check-rules, c
 just test       # cargo nextest, doctests, bun test
 just deny       # licences, advisories, the HTTP-client and gpui bans
 just gen        # regenerate app/src/ipc/proto.gen.ts
+just fonts      # copy the Geist TTFs into ~/Library/Fonts (writes outside the checkout)
 ```
 
 Toolchain: Rust 1.97.1 (`rust-toolchain.toml`), Zig 0.16.0, Bun 1.3.10, just.

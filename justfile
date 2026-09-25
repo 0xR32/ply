@@ -31,3 +31,8 @@ dev:
 fmt:
     cargo fmt --all
     bunx biome check --write
+
+# Installs Geist and Geist Mono for this user: GPUIX loads no font file, so the app finds them only in ~/Library/Fonts.
+fonts:
+    mkdir -p ~/Library/Fonts
+    cp app/assets/fonts/*.ttf ~/Library/Fonts/

@@ -248,8 +248,10 @@ impl<'de> Deserialize<'de> for Rgb {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct TerminalTheme {
-    /// ANSI colours 0–15; exactly 16 entries or the message is rejected.
-    #[ts(type = "Array<string>")]
+    /// ANSI colours 0–15; exactly 16 entries or the message is rejected (a 16-tuple in TypeScript).
+    #[ts(
+        type = "[string, string, string, string, string, string, string, string, string, string, string, string, string, string, string, string]"
+    )]
     pub ansi: [Rgb; 16],
     /// Default foreground (answers OSC 10).
     pub fg: Rgb,

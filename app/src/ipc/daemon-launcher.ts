@@ -1,13 +1,11 @@
 import { existsSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { join } from 'node:path';
 import { log } from './log';
 
 /** Where the starter looks for plyd; everything defaults to the running process and its environment. */
 export interface DaemonLauncherOptions {
   env?: NodeJS.ProcessEnv;
-  /** The app executable; a `plyd` beside it means the app runs from the bundle's `Contents/MacOS`. */
-  execPath?: string;
-  /** Repository root for development builds (`target/{debug,release}/plyd`). */
+  /** Repository root of the cargo builds (`target/{release,debug}/plyd`); ply runs from its checkout (no bundle). */
   repoRoot?: string;
 }
 
@@ -19,24 +17,19 @@ export type LaunchPlan =
 
 const REPO_ROOT = join(import.meta.dir, '..', '..', '..');
 
-const NOT_BUILT = 'plyd is not built (cargo build -p ply-daemon -p ply-hook)';
+const NOT_BUILT = 'plyd is not built (cargo build --release -p ply-daemon -p ply-hook)';
 
-/** Decides how plyd would be started; `PLY_PLYD` names a specific plyd binary for development. */
+/** Decides how plyd would be started: `PLY_PLYD` if set, else the release build, else the debug build (the release one wins when both exist). */
 export function planLaunch(options: DaemonLauncherOptions = {}): LaunchPlan {
   const env = options.env ?? process.env;
-  const bundled = join(dirname(options.execPath ?? process.execPath), 'plyd');
   const root = options.repoRoot ?? REPO_ROOT;
   const built = [
     env.PLY_PLYD,
-    join(root, 'target', 'debug', 'plyd'),
     join(root, 'target', 'release', 'plyd'),
+    join(root, 'target', 'debug', 'plyd'),
   ].find((c): c is string => c !== undefined && existsSync(c));
-  if (env.PLY_HOME) {
-    return built ? { kind: 'spawn', plyd: built } : { kind: 'unavailable', reason: NOT_BUILT };
-  }
-  if (existsSync(bundled)) return { kind: 'launch-agent', plyd: bundled };
-  if (built) return { kind: 'launch-agent', plyd: built };
-  return { kind: 'unavailable', reason: NOT_BUILT };
+  if (!built) return { kind: 'unavailable', reason: NOT_BUILT };
+  return env.PLY_HOME ? { kind: 'spawn', plyd: built } : { kind: 'launch-agent', plyd: built };
 }
 
 async function installAgent(plyd: string, env: NodeJS.ProcessEnv): Promise<void> {

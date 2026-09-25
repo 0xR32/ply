@@ -23,6 +23,12 @@ export function PaneFrame({ paneId, position }: { paneId: number; position: numb
     (title: string) => dispatch({ type: 'pane/title', paneId, title }),
     [dispatch, paneId],
   );
+  const onBell = useCallback(() => dispatch({ type: 'pane/bell', paneId }), [dispatch, paneId]);
+  const onExit = useCallback(
+    (code: number) =>
+      dispatch({ type: 'pane/exited', paneId, code, at: Math.floor(Date.now() / 1000) }),
+    [dispatch, paneId],
+  );
   if (!pane) return null;
   const waiting = needsYou(pane);
   const ring = focused ? accent.a55 : waiting ? tokens.amberA[35] : tokens.hairline;
@@ -83,6 +89,8 @@ export function PaneFrame({ paneId, position }: { paneId: number; position: numb
           fontFamily={fonts.mono}
           fontSize={type.terminal.fontSize}
           onTitle={onTitle}
+          onBell={onBell}
+          onExit={onExit}
           onFocus={activate}
           placeholder={`${pane.cli} · ${abbreviateHome(pane.cwd, home)}`}
         />

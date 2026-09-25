@@ -220,6 +220,42 @@ describe('commands', () => {
     expect(none.notice?.text).toBe('Nothing needs you');
   });
 
+  test('⌘J skips every status but waiting_permission and waiting_input', () => {
+    const others = ['starting', 'idle', 'running', 'exited', 'lost'] as const;
+    const state = makeState([
+      ...others.map((status, i) => makePane({ id: i + 1, position: i, status })),
+      makePane({ id: 9, position: 5, status: 'waiting_input' }),
+    ]);
+    const a = run(state, { type: 'command', id: 'pane.nextWaiting' });
+    expect(a.tabs[0]?.focus_pane_id).toBe(9);
+    const alone = run(a, { type: 'command', id: 'pane.nextWaiting' });
+    expect(alone.tabs[0]?.focus_pane_id).toBe(9);
+  });
+
+  test('a bell marks a pane until it is the one looked at; one on the focused pane marks nothing', () => {
+    const state = threePanes();
+    expect(run(state, { type: 'pane/bell', paneId: 1 })).toBe(state);
+    const rung = run(state, { type: 'pane/bell', paneId: 2 });
+    expect(rung.panes[2]?.bell).toBe(true);
+    const seen = run(rung, { type: 'pane/focus', paneId: 2 });
+    expect(seen.panes[2]?.bell).toBeUndefined();
+  });
+
+  test('an EXIT from the terminal marks the pane exited once, as pane.exit does', () => {
+    const state = run(
+      threePanes(),
+      evt({
+        e: 'pane.status',
+        p: { pane_id: 2, status: 'waiting_input', detail: 'Question', at: 5 },
+      }),
+      { type: 'pane/exited', paneId: 2, code: 3, at: 9 },
+    );
+    expect(state.panes[2]).toMatchObject({ status: 'exited', exit_code: 3, statusSince: 9 });
+    expect(state.panes[2]?.detail).toBeUndefined();
+    const again = run(state, { type: 'pane/exited', paneId: 2, code: 3, at: 12 });
+    expect(again.panes[2]?.statusSince).toBe(9);
+  });
+
   test('⌘⇧W asks before closing a live pane and leaves an exited one to effects', () => {
     expect(run(threePanes(), { type: 'command', id: 'pane.close' }).overlay).toEqual({
       kind: 'close-confirm',

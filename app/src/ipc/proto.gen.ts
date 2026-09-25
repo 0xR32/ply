@@ -262,9 +262,26 @@ export type Session = {
  */
 export type TerminalTheme = {
   /**
-   * ANSI colours 0–15; exactly 16 entries or the message is rejected.
+   * ANSI colours 0–15; exactly 16 entries or the message is rejected (a 16-tuple in TypeScript).
    */
-  ansi: Array<string>;
+  ansi: [
+    string,
+    string,
+    string,
+    string,
+    string,
+    string,
+    string,
+    string,
+    string,
+    string,
+    string,
+    string,
+    string,
+    string,
+    string,
+    string,
+  ];
   /**
    * Default foreground (answers OSC 10).
    */

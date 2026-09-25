@@ -101,7 +101,7 @@ set them in the file with plyd stopped, or with `settings.set`.
 | `PLY_HOME` | plyd, the app, the mock server | Moves every path above under one directory (logs to `$PLY_HOME/logs`). plyd requires an absolute path and treats an empty value as unset. A plyd under `PLY_HOME` is *sandboxed*: it never installs a LaunchAgent and never holds a power assertion. The app then spawns plyd itself instead of going through the LaunchAgent. The mock server refuses to start without it. |
 | `HOME` | plyd | The base of the default paths; also the directory of the default workspace. Must be absolute when `PLY_HOME` is unset. |
 | `PLY_LOG` | plyd | Log level: `error`, `warn`, `info` (default), `debug`, `trace` or `off`. The app's log has no level filter. |
-| `PLY_PLYD` | the app | The plyd binary to start, tried before `target/debug/plyd` and `target/release/plyd`. |
+| `PLY_PLYD` | the app | The plyd binary to start, tried before `target/release/plyd` and then `target/debug/plyd` (release wins when both exist). |
 | `PLY_WINDOW_FOCUS` | the app | `0` opens the window without taking focus, for scripted and agent-driven runs. |
 | `PLY_TERMINAL_STATS` | the app | `1` shows each terminal's last decode and render time in its corner. |
 | `SHELL`, `USER` | plyd | The login shell: `$SHELL` when it is an absolute executable, else the `UserShell` of `dscl . -read /Users/$USER`, else the passwd entry from `id -P`, else `/bin/zsh`. plyd then asks it once for its `PATH` as an interactive login shell (`$SHELL -l -i -c`, 5 s at most, stdin from `/dev/null`), because zsh reads `.zshrc`, where installers put `~/.local/bin`, only when interactive; a shell that fails or hangs so is asked as a plain login shell (`-l -c`). The log says which answered. |
@@ -175,8 +175,8 @@ PLY_HOME=/tmp/ply-dev bun run dev
 ```
 
 - The app connects to `/tmp/ply-dev/run/plyd.sock`. When nothing answers it
-  starts the cargo-built plyd (`$PLY_PLYD`, else `target/debug/plyd`, else
-  `target/release/plyd`) as `plyd --foreground`, detached, with its output
+  starts the cargo-built plyd (`$PLY_PLYD`, else `target/release/plyd`, else
+  `target/debug/plyd`) as `plyd --foreground`, detached, with its output
   discarded.
 - plyd writes only under `/tmp/ply-dev`: the database, `config.toml`, the lock,
   `run/` and `logs/`. The app logs to `/tmp/ply-dev/logs/app.*.log`.
@@ -218,7 +218,8 @@ holds it.
 - Geist and Geist Mono are used only when installed (in `~/Library/Fonts` or
   `/Library/Fonts`), because GPUIX cannot load a font file; otherwise the chrome
   uses the system font and the terminal Menlo. The TTFs, under the SIL Open Font
-  Licence, are in `app/assets/fonts/`.
+  Licence, are in `app/assets/fonts/`; `just fonts` copies them into
+  `~/Library/Fonts`, the one thing it writes.
 - ply makes no network request while it runs (INV-1).
 
 ### Building

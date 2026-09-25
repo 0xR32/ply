@@ -248,6 +248,11 @@ unmounts the old views, which detach, and mounts the new ones, which attach and
 receive a Snapshot each. Hidden panes keep running and emulating in plyd; their
 status keeps arriving over C1.
 
+**Title, bell and exit** reach the pane header through TerminalView's callbacks
+(`pane-frame.tsx`): a TITLE replaces the pane's name, a BELL marks a pane that
+is not the focused one with a bell until it is, and an EXIT marks the pane
+`exited` with its code at once (C1 `pane.exit` says the same a moment later).
+
 **Size.** The view measures its box every 250 ms (every 16 ms until the first
 measurement) and sends the whole cells that fit (`gridFor` in
 `app/src/terminal/metrics.ts`): ATTACH the first time, RESIZE when the grid or
@@ -262,7 +267,8 @@ The height is the font's ascent plus descent, rounded to whole pixels, which is
 the line height at which its box-drawing glyphs join. The width stays
 fractional; ATTACH and RESIZE carry it rounded to a whole pixel. Geist Mono is
 used only when the Geist fonts are installed (in `~/Library/Fonts` or
-`/Library/Fonts`; the TTFs are in `app/assets/fonts/`), because GPUIX cannot
+`/Library/Fonts`; the TTFs are in `app/assets/fonts/`, and `just fonts` installs
+them), because GPUIX cannot
 load a font file; otherwise the terminal uses Menlo and the chrome the system
 font (`app/src/ipc/os.ts`, `geistAvailable`).
 

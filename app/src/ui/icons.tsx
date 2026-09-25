@@ -7,7 +7,10 @@ const PLUS =
 const BRANCH =
   '<svg viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="5" r="2"/><circle cx="6" cy="19" r="2"/><circle cx="18" cy="8" r="2"/><path d="M6 7v10M18 10c0 5-7 3-11 7"/></svg>';
 
-const SOURCES = { search: SEARCH, plus: PLUS, branch: BRANCH } as const;
+const BELL =
+  '<svg viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 16V11a6 6 0 0 1 12 0v5l1.5 2h-15z"/><path d="M10 20.5a2 2 0 0 0 4 0"/></svg>';
+
+const SOURCES = { search: SEARCH, plus: PLUS, branch: BRANCH, bell: BELL } as const;
 
 /** Name of one of the canvas's line icons. */
 export type IconName = keyof typeof SOURCES;

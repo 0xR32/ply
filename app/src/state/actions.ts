@@ -91,6 +91,10 @@ export type Action =
   | { type: 'tab/select'; tabId: number }
   | { type: 'pane/focus'; paneId: number }
   | { type: 'pane/title'; paneId: number; title: string }
+  /** The pane's program rang the bell (C2 BELL through TerminalView). */
+  | { type: 'pane/bell'; paneId: number }
+  /** The pane's C2 connection reported the process's exit (EXIT), at Unix seconds `at`; C1 `pane.exit` says the same. */
+  | { type: 'pane/exited'; paneId: number; code: number; at: number }
   | { type: 'pane/answer'; paneId: number; choice: Choice }
   | { type: 'pane/resume'; paneId: number }
   | { type: 'pane/resumed'; pane: Pane }

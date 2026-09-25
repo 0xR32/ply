@@ -1,6 +1,6 @@
 import { existsSync, readdirSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { basename, dirname, join } from 'node:path';
+import { basename, join } from 'node:path';
 import { log } from './log';
 
 /** The login shell's name for shell panes' status chip, from `$SHELL`; `zsh` when unset. */
@@ -17,10 +17,13 @@ function hasGeist(dir: string): boolean {
   }
 }
 
-/** Whether GPUI will resolve the Geist families: bundled with the .app (Resources/fonts) or installed by the user. */
-export function geistAvailable(execPath: string = process.execPath): boolean {
-  const bundleFonts = join(dirname(execPath), '..', 'Resources', 'fonts');
-  const dirs = [bundleFonts, join(homedir(), 'Library', 'Fonts'), '/Library/Fonts'];
+/** Where macOS looks for user and system fonts; `just fonts` copies Geist into the first. */
+export function fontDirs(home: string = homedir()): string[] {
+  return [join(home, 'Library', 'Fonts'), '/Library/Fonts'];
+}
+
+/** Whether GPUI will resolve the Geist families: GPUIX loads no font files, so they must be installed in `dirs`. */
+export function geistAvailable(dirs: readonly string[] = fontDirs()): boolean {
   return dirs.some((d) => existsSync(d) && hasGeist(d));
 }
 

@@ -11,7 +11,7 @@ import type {
   Tab,
   Workspace,
 } from './actions';
-import { isAlive, nextWaitingPane, tabName } from './selectors';
+import { isAlive, nextWaitingPane, selectActiveTab, tabName } from './selectors';
 
 /** A pane as the app holds it: the C1 record plus what only the app observes. */
 export interface PaneState extends Pane {
@@ -19,6 +19,8 @@ export interface PaneState extends Pane {
   statusSince?: number;
   /** Title the terminal set (C2 TITLE through TerminalView); shown in place of `title` when present. */
   terminalTitle?: string;
+  /** The program rang the bell while the pane was not the focused one; cleared once it is (the header shows a bell). */
+  bell?: boolean;
 }
 
 /** A transient message shown in the status bar; `id` lets a delayed clear skip a newer notice. */
@@ -185,6 +187,7 @@ function applyEvent(state: AppState, event: Event): AppState {
     case 'pane.status': {
       const { pane_id, status, detail, exit_code, at } = event.p;
       return updatePane(state, pane_id, (p) => {
+        // Both belong to the previous status: an event without them must not keep a stale detail or exit code.
         const { detail: _d, exit_code: _e, ...rest } = p;
         return {
           ...rest,
@@ -357,6 +360,19 @@ function runCommand(state: AppState, id: CommandId): AppState {
 
 /** The pure state transition; returns `state` itself when an action changes nothing. */
 export function reduce(state: AppState, action: Action): AppState {
+  return clearSeenBell(reduceAction(state, action));
+}
+
+/** Drops the bell of the pane the user now looks at: the active tab's focused pane. */
+function clearSeenBell(state: AppState): AppState {
+  const id = selectActiveTab(state)?.focus_pane_id;
+  const pane = id === undefined ? undefined : state.panes[id];
+  if (id === undefined || !pane?.bell) return state;
+  const { bell: _seen, ...rest } = pane;
+  return { ...state, panes: { ...state.panes, [id]: rest } };
+}
+
+function reduceAction(state: AppState, action: Action): AppState {
   switch (action.type) {
     case 'connection/changed':
       return { ...state, connection: action.state };
@@ -374,6 +390,16 @@ export function reduce(state: AppState, action: Action): AppState {
       return focusPane(state, action.paneId);
     case 'pane/title':
       return updatePane(state, action.paneId, (p) => ({ ...p, terminalTitle: action.title }));
+    case 'pane/bell':
+      return selectActiveTab(state)?.focus_pane_id === action.paneId
+        ? state
+        : updatePane(state, action.paneId, (p) => (p.bell ? p : { ...p, bell: true }));
+    case 'pane/exited':
+      return updatePane(state, action.paneId, (p) => {
+        if (p.status === 'exited') return p;
+        const { detail: _d, ...rest } = p;
+        return { ...rest, status: 'exited', exit_code: action.code, statusSince: action.at };
+      });
     case 'pane/answer':
     case 'pane/resume':
       return state;

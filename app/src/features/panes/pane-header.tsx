@@ -53,7 +53,7 @@ export interface PaneHeaderProps {
   onActivate: () => void;
 }
 
-/** The 42 px pane header: position key, title, branch, plan progress, CLI and model, status chip. */
+/** The 42 px pane header: position key, title, a bell mark until the pane is looked at, branch, plan progress, CLI and model, status chip. */
 export function PaneHeader({ pane, position, focused, onActivate }: PaneHeaderProps) {
   const chrome = useChrome();
   const { z, accent } = chrome;
@@ -107,6 +107,11 @@ export function PaneHeader({ pane, position, focused, onActivate }: PaneHeaderPr
         <Text color={tokens.text} weight={500} ellipsis testId={`pane-${pane.id}-title`}>
           {paneTitle(pane)}
         </Text>
+        {pane.bell ? (
+          <div testId={`pane-${pane.id}-bell`} style={{ flexShrink: 0, display: 'flex' }}>
+            <Icon name="bell" size={12} color={tokens.amber} />
+          </div>
+        ) : null}
         {branch ? (
           <div
             style={{
