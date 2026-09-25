@@ -7,7 +7,7 @@ use std::ptr;
 use ghostty_sys as sys;
 use ply_proto::data::{CellFlags, Cursor, CursorShape, Style};
 
-use super::cells::{self, CellReadError, RawCell};
+use super::cells::{self, RawCell, RefusedReads};
 use super::{RowSink, check};
 use crate::error::Result;
 
@@ -238,12 +238,12 @@ impl RenderState {
             unsafe { std::slice::from_raw_parts(view.ptr, view.len) }
         };
         sink.begin_row(i32::from(y), wrapped);
-        let mut failed: Option<(CellReadError, usize)> = None;
+        let mut refused = RefusedReads::default();
         for (x, &raw) in raws.iter().enumerate() {
             let cell = match RawCell::decode(raw) {
                 Ok(cell) => cell,
                 Err(e) => {
-                    failed = Some((failed.map_or(e, |f| f.0), failed.map_or(1, |f| f.1 + 1)));
+                    refused.note(e);
                     sink.cell(0, &Style::default(), CellFlags::empty(), &[]);
                     continue;
                 }
@@ -275,7 +275,7 @@ impl RenderState {
             match cell.tag_background(raw) {
                 Ok(Some(bg)) => style.bg = bg,
                 Ok(None) => {}
-                Err(e) => failed = Some((failed.map_or(e, |f| f.0), failed.map_or(1, |f| f.1 + 1))),
+                Err(e) => refused.note(e),
             }
             let mut flags = cell.flags();
             let extra = if cell.has_graphemes() {
@@ -288,16 +288,7 @@ impl RenderState {
             }
             sink.cell(cell.codepoint, &style, flags, extra);
         }
-        if let Some((first, count)) = failed {
-            tracing::warn!(
-                pane_id,
-                row = y,
-                count,
-                data = first.data,
-                code = first.code,
-                "libghostty-vt refused cell reads; those cells are drawn blank"
-            );
-        }
+        refused.log(pane_id, i64::from(y), "live");
         sink.end_row();
         Ok(())
     }

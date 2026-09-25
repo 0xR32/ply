@@ -36,7 +36,7 @@ use ghostty_sys as sys;
 use ply_proto::data::{CellFlags, Cursor, History, Modes, Snapshot, Style};
 use ply_proto::pane::OptionAsMeta;
 
-use self::cells::{CellReadError, RawCell};
+use self::cells::{CellReadError, RawCell, RefusedReads};
 use self::effects::Effects;
 use self::encoders::{KeyEncoder, MouseEncoder, Surface};
 pub(crate) use self::encoders::{KeyInput, MouseInput, PasteResult};
@@ -955,13 +955,10 @@ impl Engine {
                 wrapped = false;
             }
             sink.begin_row(row_index, wrapped);
-            let mut failed: Option<(CellReadError, usize)> = None;
-            let mut note = |e: CellReadError| {
-                failed = Some((failed.map_or(e, |f| f.0), failed.map_or(1, |f| f.1 + 1)));
-            };
+            let mut refused = RefusedReads::default();
             for x in 0..self.cols {
                 let Some(cell_ref) = self.history_ref(x, y) else {
-                    note(CellReadError {
+                    refused.note(CellReadError {
                         data: 0,
                         code: sys::GHOSTTY_INVALID_VALUE,
                     });
@@ -980,7 +977,7 @@ impl Engine {
                         continue;
                     }
                     Err(e) => {
-                        note(e);
+                        refused.note(e);
                         sink.cell(0, &Style::default(), CellFlags::empty(), &[]);
                         continue;
                     }
@@ -997,7 +994,7 @@ impl Engine {
                 match cell.tag_background(raw) {
                     Ok(Some(bg)) => style.bg = bg,
                     Ok(None) => {}
-                    Err(e) => note(e),
+                    Err(e) => refused.note(e),
                 }
                 let mut flags = cell.flags();
                 let mut extra: &[u32] = &[];
@@ -1033,16 +1030,7 @@ impl Engine {
                 }
                 sink.cell(cell.codepoint, &style, flags, extra);
             }
-            if let Some((first, count)) = failed {
-                tracing::warn!(
-                    pane_id = self.pane_id,
-                    row = index,
-                    count,
-                    data = first.data,
-                    code = first.code,
-                    "libghostty-vt refused history cell reads; those cells are drawn blank"
-                );
-            }
+            refused.log(self.pane_id, index, "history");
             sink.end_row();
         }
         Ok(())

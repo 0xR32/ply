@@ -26,6 +26,36 @@ pub(super) struct CellReadError {
     pub(super) code: sys::GhosttyResult,
 }
 
+/// The cell reads of one row the library refused: the first failure and how many, logged once for the row.
+#[derive(Debug, Default)]
+pub(super) struct RefusedReads {
+    first: Option<CellReadError>,
+    count: usize,
+}
+
+impl RefusedReads {
+    /// Records one refused read (the caller draws that cell blank).
+    pub(super) fn note(&mut self, e: CellReadError) {
+        self.first.get_or_insert(e);
+        self.count += 1;
+    }
+
+    /// Logs the row's refused reads, if any; `screen` says which grid the row belongs to (`live` or `history`).
+    pub(super) fn log(&self, pane_id: u64, row: i64, screen: &'static str) {
+        if let Some(first) = self.first {
+            tracing::warn!(
+                pane_id,
+                row,
+                screen,
+                count = self.count,
+                data = first.data,
+                code = first.code,
+                "libghostty-vt refused cell reads; those cells are drawn blank"
+            );
+        }
+    }
+}
+
 /// Reads one field of a packed cell into `out`, which must be the data kind's documented type.
 fn cell_get<T>(
     raw: sys::GhosttyCell,
