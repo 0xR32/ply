@@ -10,7 +10,7 @@ import {
 } from './data-client';
 import { terminalLog } from './log';
 
-/** The side effects a terminal view needs: its C2 connection and the system clipboard; tests pass fakes. */
+/** The side effects a terminal view needs: its C2 connection, the system clipboard and opening links; tests pass fakes. */
 export interface TerminalHost {
   /** C2 socket path each connection opens. */
   readonly socketPath: string;
@@ -18,6 +18,8 @@ export interface TerminalHost {
   /** The clipboard's text, empty when it holds none. */
   readClipboard(): Promise<string>;
   writeClipboard(text: string): Promise<void>;
+  /** Opens an http(s) URL in the default browser; rejects any other scheme. */
+  openUrl(url: string): Promise<void>;
 }
 
 async function run(argv: string[], input?: string): Promise<string> {
@@ -31,7 +33,7 @@ async function run(argv: string[], input?: string): Promise<string> {
   return out;
 }
 
-/** The real host: plyd's data socket and the macOS pasteboard through `pbpaste`/`pbcopy` (GPUIX 0.10.0 gives JavaScript no clipboard API). */
+/** The real host: plyd's data socket, the macOS pasteboard through `pbpaste`/`pbcopy` and links through `open -u` (GPUIX 0.10.0 gives JavaScript neither a clipboard nor a URL API). */
 export function systemTerminalHost(socketPath: string = dataSocketPath()): TerminalHost {
   return {
     socketPath,
@@ -39,6 +41,11 @@ export function systemTerminalHost(socketPath: string = dataSocketPath()): Termi
     readClipboard: () => run(['pbpaste']),
     writeClipboard: async (text) => {
       await run(['pbcopy'], text);
+    },
+    openUrl: async (url) => {
+      // The URL is program output; any other scheme could launch an app.
+      if (!/^https?:\/\//.test(url)) throw new Error('only http and https links open');
+      await run(['open', '-u', url]);
     },
   };
 }
@@ -54,6 +61,7 @@ export const inertTerminalHost: TerminalHost = {
   },
   readClipboard: async () => '',
   writeClipboard: async () => {},
+  openUrl: async () => {},
 };
 
 let fallback: TerminalHost | null = null;

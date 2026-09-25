@@ -21,17 +21,19 @@ export interface FakeConnection {
   setState(state: DataConnectionState): void;
 }
 
-/** A terminal host for tests: no socket, an in-memory clipboard, every connection recorded. */
+/** A terminal host for tests: no socket, an in-memory clipboard, every connection and opened link recorded. */
 export interface FakeHost {
   host: TerminalHost;
   connections: FakeConnection[];
   clipboard: { text: string; writes: string[] };
+  opened: string[];
 }
 
 /** A fresh fake host; its clipboard starts with `clipboard`. */
 export function fakeTerminalHost(clipboard = ''): FakeHost {
   const connections: FakeConnection[] = [];
   const board = { text: clipboard, writes: [] as string[] };
+  const opened: string[] = [];
   const host: TerminalHost = {
     socketPath: '/tmp/example/run/data.sock',
     connect(options: DataConnectionOptions, handlers: DataConnectionHandlers): DataConnection {
@@ -79,8 +81,11 @@ export function fakeTerminalHost(clipboard = ''): FakeHost {
       board.text = text;
       board.writes.push(text);
     },
+    openUrl: async (url) => {
+      opened.push(url);
+    },
   };
-  return { host, connections, clipboard: board };
+  return { host, connections, clipboard: board, opened };
 }
 
 /** Every frame of a recorded fixture in `app/src/terminal/fixtures/` (frames written back to back by ply-term). */

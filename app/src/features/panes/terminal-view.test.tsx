@@ -439,6 +439,68 @@ describe('TerminalView: input', () => {
   });
 });
 
+describe('TerminalView: links (⌘-click)', () => {
+  const LINE = 'go to https://example.com/pr/7 now';
+  const URL = 'https://example.com/pr/7';
+  const cellAt = (m: Mounted, col: number, row: number) => {
+    const b = m.body();
+    return [b.x + (col + 0.5) * cell.width, b.y + (row + 0.5) * cell.height] as const;
+  };
+
+  test('⌘-click opens the URL under the pointer; a plain click or a release off it does not', async () => {
+    const m = await mount();
+    try {
+      await m.deliver([screen([LINE, 'second'])]);
+      m.renderer.nativeSimulateClick(...cellAt(m, 10, 0));
+      await settle(m.renderer);
+      expect(m.fake.opened).toEqual([]);
+      m.renderer.nativeSimulateClick(...cellAt(m, 10, 0), 0, 'cmd');
+      await settle(m.renderer, () => m.fake.opened.length === 1);
+      expect(m.fake.opened).toEqual([URL]);
+      m.renderer.nativeSimulateMouseDown(...cellAt(m, 12, 0), 0, 'cmd');
+      m.renderer.nativeSimulateMouseUp(...cellAt(m, 2, 1), 0, 'cmd');
+      m.renderer.nativeSimulateClick(...cellAt(m, 2, 0), 0, 'cmd');
+      await settle(m.renderer);
+      expect(m.fake.opened).toEqual([URL]);
+    } finally {
+      m.unmount();
+    }
+  });
+
+  test('with mouse reporting on, a ⌘-click on a link opens it and sends the program nothing', async () => {
+    const m = await mount();
+    try {
+      await m.deliver([screen([LINE], { modes: Modes.mouseReporting | Modes.cursorVisible })]);
+      m.renderer.nativeSimulateClick(...cellAt(m, 10, 0), 0, 'cmd');
+      await settle(m.renderer, () => m.fake.opened.length === 1);
+      expect(m.fake.opened).toEqual([URL]);
+      expect(m.sent().filter((f) => f.kind === 'mouse')).toEqual([]);
+    } finally {
+      m.unmount();
+    }
+  });
+
+  test('⌘ over a link underlines it and shows a pointer; a move without ⌘ clears both', async () => {
+    const m = await mount();
+    try {
+      await m.deliver([screen([LINE])]);
+      const b = m.body();
+      m.renderer.nativeSimulateMouseMove(...cellAt(m, 10, 0), undefined, 'cmd');
+      await settle(m.renderer, () => m.renderer.findByTestId('terminal-link') !== undefined);
+      const underline = m.renderer.findByTestId('terminal-link');
+      const u = underline ? m.renderer.getElementBounds(underline.id) : null;
+      expect(u?.x).toBeCloseTo(b.x + Math.round(6 * cell.width), 0);
+      expect(u?.width).toBeCloseTo(Math.round(30 * cell.width) - Math.round(6 * cell.width), 0);
+      expect(m.renderer.getElement(b.id)?.style.cursor).toBe('pointer');
+      m.renderer.nativeSimulateMouseMove(...cellAt(m, 11, 0));
+      await settle(m.renderer, () => m.renderer.findByTestId('terminal-link') === undefined);
+      expect(m.renderer.getElement(b.id)?.style.cursor).toBe('text');
+    } finally {
+      m.unmount();
+    }
+  });
+});
+
 describe('TerminalView: find (⌘F)', () => {
   test('finds in the lines held, selects the newest match, steps with ↑ and closes with esc', async () => {
     const m = await mount();

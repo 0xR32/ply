@@ -82,6 +82,11 @@ are declared once in `terminalBindings`.
 | ⌘A | `terminal.selectAll` | Selects all of the pane's scrollback and screen. |
 | ⌘F | `terminal.find` | Opens the find bar over the pane's scrollback. |
 
+**⌘-click opens a link.** A click with ⌘ held on an http or https URL in the
+pane's text opens it in the default browser, even while the program reports
+the mouse; it is a mouse gesture, not a keymap binding (`docs/terminal.md`,
+**Links**).
+
 `docs/terminal.md` describes selection, copy, paste and search.
 
 ## Reserved

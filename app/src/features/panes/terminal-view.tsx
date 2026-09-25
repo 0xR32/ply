@@ -16,10 +16,17 @@ import type { GridSize } from '../../terminal/data-client';
 import { type Cursor, type KeyFrame, Modes, type Style } from '../../terminal/frames';
 import { defaultTerminalHost, TerminalHostContext } from '../../terminal/host';
 import { keyCode, keyFrame, modsOf, mouseButton, mouseFrame } from '../../terminal/input';
+import { linkAt, type TerminalLink } from '../../terminal/links';
+import { terminalLog } from '../../terminal/log';
 import { cellMetrics, gridFor } from '../../terminal/metrics';
 import { blankRow, type ReplicaRow } from '../../terminal/replica';
 import { rowText, StyleResolver } from '../../terminal/runs';
-import { type SelectionUnit, selectionBounds, selectionOnLine } from '../../terminal/selection';
+import {
+  type CellPoint,
+  type SelectionUnit,
+  selectionBounds,
+  selectionOnLine,
+} from '../../terminal/selection';
 import { type FindMatch, TerminalSession } from '../../terminal/session';
 import { tokens } from '../../theme/tokens';
 import { TerminalRow } from './terminal-row';
@@ -187,7 +194,7 @@ function FindBar({
   );
 }
 
-/** A live pane: rows of `<text>` runs drawn from plyd's C2 frames, with keys, mouse, paste, selection and scrollback. */
+/** A live pane: rows of `<text>` runs drawn from plyd's C2 frames, with keys, mouse, paste, selection, scrollback and ⌘-click links. */
 export function TerminalView({
   paneId,
   focused,
@@ -263,6 +270,9 @@ export function TerminalView({
   const wheel = useRef(0);
   const findKey = useRef(false);
   const lastMouse = useRef<{ col: number; row: number } | null>(null);
+  // Only a mouse move reports ⌘ (GPUIX sends no modifier change), so the hover is the last ⌘-move's cell.
+  const [linkHover, setLinkHover] = useState<CellPoint | null>(null);
+  const linkPress = useRef<TerminalLink | null>(null);
 
   const grid = { width: cell.width, height: cell.height, cols: replica.cols, rows: replica.rows };
   const reporting = (replica.modes & Modes.mouseReporting) !== 0;
@@ -276,6 +286,21 @@ export function TerminalView({
     line: session.viewTop + Math.min(Math.max(Math.floor(y / cell.height), 0), replica.rows - 1),
     col: Math.min(Math.max(Math.floor(x / cell.width), 0), Math.max(replica.cols - 1, 0)),
   });
+  const linkUnder = (e: EventPayload) => {
+    if (replica.rows === 0) return null;
+    const { x, y } = local(e);
+    return linkAt(replica, pointAt(x, y));
+  };
+  const hoverLinks = (e: EventPayload) => {
+    const { x, y } = local(e);
+    const at = e.modifiers?.cmd && replica.rows > 0 ? pointAt(x, y) : null;
+    setLinkHover((old) => (old?.line === at?.line && old?.col === at?.col ? old : at));
+  };
+  const openLink = (url: string) => {
+    host.openUrl(url).catch((error: unknown) => {
+      terminalLog('warn', 'cannot open a link', { pane_id: paneId, error: String(error) });
+    });
+  };
   const ownsKeys = () => {
     const id = ref.current?.id;
     const focusedId = renderer?.getFocusedElementId?.();
@@ -308,6 +333,7 @@ export function TerminalView({
       findKey.current = false;
       return;
     }
+    setLinkHover(null);
     if (!ownsKeys()) return;
     if (e.modifiers?.cmd) {
       const keys = keysOfEvent(e);
@@ -329,6 +355,13 @@ export function TerminalView({
   };
 
   const onMouseDown = (e: EventPayload) => {
+    if (e.button === 0 && e.modifiers?.cmd) {
+      const link = linkUnder(e);
+      if (link) {
+        linkPress.current = link;
+        return;
+      }
+    }
     const { x, y } = local(e);
     if (reporting && !e.modifiers?.shift) {
       session.sendMouse(
@@ -350,6 +383,8 @@ export function TerminalView({
     );
   };
   const onMouseMove = (e: EventPayload) => {
+    if (e.pressedButton === undefined) hoverLinks(e);
+    if (linkPress.current) return;
     const { x, y, height } = local(e);
     if (reporting && !e.modifiers?.shift && !drag.current) {
       const f = mouseFrame(
@@ -373,6 +408,12 @@ export function TerminalView({
     session.select({ ...sel, head: pointAt(x, y) });
   };
   const onMouseUp = (e: EventPayload) => {
+    const pressed = linkPress.current;
+    if (pressed) {
+      linkPress.current = null;
+      if (linkUnder(e)?.url === pressed.url) openLink(pressed.url);
+      return;
+    }
     const { x, y } = local(e);
     if (reporting && !e.modifiers?.shift && !drag.current) {
       session.sendMouse(
@@ -458,6 +499,7 @@ export function TerminalView({
         ? session.state.message
         : null;
   const stats = SHOW_STATS ? session.stats() : null;
+  const link = linkHover ? linkAt(replica, linkHover) : null;
 
   return (
     <div
@@ -470,7 +512,10 @@ export function TerminalView({
         session.focus(true);
         onFocus?.();
       }}
-      onBlur={() => session.focus(false)}
+      onBlur={() => {
+        session.focus(false);
+        setLinkHover(null);
+      }}
       onMouseDown={onMouseDown}
       onMouseMove={onMouseMove}
       onMouseUp={onMouseUp}
@@ -482,7 +527,7 @@ export function TerminalView({
         position: 'relative',
         overflow: 'hidden',
         userSelect: 'none',
-        cursor: 'text',
+        cursor: link ? 'pointer' : 'text',
       }}
     >
       <div
@@ -516,6 +561,23 @@ export function TerminalView({
             cellHeight={cell.height}
           />
         ))}
+        {link?.segments.map((seg) =>
+          seg.line >= top && seg.line < top + replica.rows ? (
+            <div
+              key={`link-${seg.line}`}
+              testId="terminal-link"
+              style={{
+                position: 'absolute',
+                left: Math.round(seg.from * cell.width),
+                top: (seg.line - top + 1) * cell.height - 1,
+                width: Math.round(seg.to * cell.width) - Math.round(seg.from * cell.width),
+                height: 1,
+                backgroundColor: theme.fg,
+                pointerEvents: 'none',
+              }}
+            />
+          ) : null,
+        )}
         {cursorShown && blinkOn ? (
           <CursorBlock
             cursor={cursor}

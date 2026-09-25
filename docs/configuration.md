@@ -229,8 +229,9 @@ holds it.
 - The app runs `defaults read com.apple.universalaccess reduceMotion`,
   `defaults read -g InitialKeyRepeat` and `defaults read -g KeyRepeat` (the
   ⌘U hold's timing, `docs/keybindings.md`) and `git rev-parse --short=12 HEAD`
-  in its checkout (its build id) once at startup, and `pbcopy` or `pbpaste`
-  when you copy or paste in a pane.
+  in its checkout (its build id) once at startup, `pbcopy` or `pbpaste`
+  when you copy or paste in a pane, and `open -u <url>` when you ⌘-click a
+  link, which hands the URL to the default browser.
 - For the new-pane form's folder suggestions (Ruling R57), each time the form
   opens the app checks which working directories of the workspace's panes and
   stored sessions (`session.list`) still exist, and lists the home directory in

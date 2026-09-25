@@ -380,6 +380,22 @@ to the pane. Keys typed into the find field never reach the pty: the field
 marks each key it handled, and the terminal skips that event when it bubbles up.
 (The engine's own `search` is not used by the app.)
 
+**Links.** ⌘-click on an http or https URL opens it in the default browser
+through `open -u` (`linkAt` in `app/src/terminal/links.ts`, `openUrl` in
+`host.ts`). A URL is found in the text of the soft-wrapped line under the
+pointer, so one the terminal wrapped opens whole; one the program broke with a
+newline opens only up to the break. Trailing `.,:;!?'*` and a `)` or `]` with
+no opening partner are left out, so `(https://…)` and `[text](https://…)` work
+and a balanced `Rust_(language)` stays. No other scheme is a link, because the
+text is the program's output and a custom scheme could launch an app; the host
+refuses one as well. The link opens when the button is released over the link
+it was pressed on, and neither the press nor the release reaches the program or
+touches the selection. While ⌘ is held over a link it is underlined and the
+pointer is a hand. GPUIX reports no modifier change, so the underline follows
+the last mouse move: it appears when the pointer moves with ⌘ down, and goes on
+the next move without ⌘, a key or a blur. OSC 8 hyperlinks are not read: panes
+run with `TERM=xterm-256color` and no `TERM_PROGRAM`, so neither CLI sends them.
+
 **IME** is not implemented: every KEY frame carries `composing` 0 and the text
 GPUIX reports for the key, so dead keys and CJK composition do not work in a
 pane.
@@ -509,8 +525,9 @@ p99 and 509 µs max, and 21 / 34 / 62 / 78 µs while another pane streamed
   attaching with the measured grid, painting a recorded Claude Code screen as
   style runs, the cursor, title, bell and exit callbacks, reconnecting,
   resizing, keys (⌘ chords never sent), focus, paste and its confirmation,
-  selection and ⌘C, mouse reporting with ⇧ bypass, wheel scrollback, ⌘A, and
-  the 2 000-node budget.
+  selection and ⌘C, mouse reporting with ⇧ bypass, wheel scrollback, ⌘A,
+  ⌘-click links (opening, the reporting bypass, the hover underline), and the
+  2 000-node budget; `links.test.ts` for what counts as a URL and where it ends.
 - `crates/daemon/tests/lifecycle.rs`:
   `an_osc_11_query_is_answered_with_the_palette_background` and
   `a_shell_survives_detach_and_reattach_with_the_same_screen`.
