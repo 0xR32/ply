@@ -349,6 +349,20 @@ impl PaneTask {
 
     /// Prepares the agent integration for the process about to start from `spec`; shells have none.
     fn prepare(&mut self, spec: &LaunchSpec) {
+        if spec.cli != self.cli {
+            self.cli = spec.cli;
+            self.default_title = match spec.cli {
+                Cli::Claude => "claude".to_owned(),
+                Cli::Codex => "codex".to_owned(),
+                Cli::Shell => spec
+                    .argv
+                    .first()
+                    .and_then(|p| std::path::Path::new(p).file_name())
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("shell")
+                    .to_owned(),
+            };
+        }
         let cli = match spec.cli {
             Cli::Claude => AgentCli::Claude,
             Cli::Codex => AgentCli::Codex,

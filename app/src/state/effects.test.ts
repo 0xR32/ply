@@ -146,6 +146,18 @@ describe('effects', () => {
     expect(state().overlay?.kind).toBe('new-pane');
   });
 
+  test('resuming a lost pane calls pane.resume and takes the relaunched pane', async () => {
+    const { server, store, until, state } = await setup();
+    server.setStatus(4, 'lost');
+    await until(() => state().panes[4]?.status === 'lost', 'the lost pane');
+    store.dispatch({ type: 'pane/resume', paneId: 4 });
+    await until(() => state().panes[4]?.status !== 'lost', 'the resumed pane');
+    expect(server.requestsOf('pane.resume')).toEqual([{ pane_id: 4 }]);
+    store.dispatch({ type: 'pane/resume', paneId: 4 });
+    await until(() => state().notice !== null, 'the refusal notice');
+    expect(state().notice?.text).toContain('Resuming the session failed');
+  });
+
   test('answers go to pane.answer, notices clear themselves, and a reconnect reloads the session', async () => {
     const { server, store, until, state, seen } = await setup();
     store.dispatch({ type: 'pane/answer', paneId: 2, choice: 2 });

@@ -8,6 +8,11 @@
 //! sizes a new engine to the last known view, starts the pane's task with the spec (so the agent integration exists
 //! before the child's first hook) and only then starts the child, which the task adopts before `pane.added` goes out.
 //! A failed spawn leaves no pane behind.
+//!
+//! `pane.resume` (spec 6.2, 11.3, WP9) relaunches a `lost` pane into the same pane and terminal: an agent pane with a
+//! stored session id runs its CLI again from `launch.json` with `--resume <session_id>` (Claude) or `resume
+//! <thread_uuid>` (Codex), in the stored directory and with the original `--worktree` option; a pane without a session
+//! id (a shell, or an agent that never reported one) reopens as a fresh login shell in its last directory.
 
 use std::collections::BTreeMap;
 use std::io::Write;
@@ -224,20 +229,51 @@ async fn relaunch(
     };
     wait_palette(shared).await?;
     let settings = shared.registry().settings();
-    let spec = if stored.cli == Cli::Shell {
-        stored
-    } else {
-        let program = resolve_program(shared, stored.cli)?;
-        let options = LaunchOptions {
-            program: &program,
-            cwd: Path::new(&stored.cwd),
-            settings: &settings,
-            worktree: stored.worktree.as_deref(),
-            resume: pane.session_ref.as_deref(),
-            prompt: None,
-        };
-        build_launch(shared, pane_id, stored.cli, &options)?
+    let session = pane
+        .session_ref
+        .as_deref()
+        .filter(|_| stored.cli != Cli::Shell);
+    let spec = match session {
+        Some(session) => {
+            let program = resolve_program(shared, stored.cli)?;
+            let options = LaunchOptions {
+                program: &program,
+                cwd: Path::new(&stored.cwd),
+                settings: &settings,
+                worktree: stored.worktree.as_deref(),
+                resume: Some(session),
+                prompt: None,
+            };
+            build_launch(shared, pane_id, stored.cli, &options)?
+        }
+        None => {
+            let cwd = [pane.cwd.as_str(), stored.cwd.as_str()]
+                .into_iter()
+                .map(Path::new)
+                .find(|dir| dir.is_dir())
+                .ok_or_else(|| {
+                    tracing::warn!(pane_id, cwd = %pane.cwd, "no directory left to reopen the pane in");
+                    refuse(
+                        ErrorCode::SpawnFailed,
+                        format!("{} no longer exists", pane.cwd),
+                    )
+                })?;
+            let options = LaunchOptions {
+                program: &shared.login.shell,
+                cwd,
+                settings: &settings,
+                worktree: None,
+                resume: None,
+                prompt: None,
+            };
+            build_launch(shared, pane_id, Cli::Shell, &options)?
+        }
     };
+    if spec.cli != pane.cli {
+        tracing::info!(pane_id, from = ?pane.cli, "no session id to resume; reopening the pane as a shell");
+        let title = default_title(spec.cli, &shared.login.shell);
+        shared.registry().set_cli(pane_id, spec.cli, &title);
+    }
     shared.set_status(pane_id, initial_status(spec.cli), None);
     if handle
         .send(PaneCmd::Launch(Box::new(spec.clone())))

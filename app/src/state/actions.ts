@@ -92,6 +92,8 @@ export type Action =
   | { type: 'pane/focus'; paneId: number }
   | { type: 'pane/title'; paneId: number; title: string }
   | { type: 'pane/answer'; paneId: number; choice: Choice }
+  | { type: 'pane/resume'; paneId: number }
+  | { type: 'pane/resumed'; pane: Pane }
   | { type: 'pane/create'; request: NewPaneRequest }
   | { type: 'pane/created'; pane: Pane }
   | { type: 'pane/createFailed'; message: string }

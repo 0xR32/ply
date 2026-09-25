@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { hasNativeTestRenderer } from '@gpuix/react/testing';
 import type { Action } from '../../state/actions';
+import type { PaneState } from '../../state/reducer';
 import { makePane, makeState, mountWithStore } from '../../state/test-support';
 import { matches, paletteItems } from './commands';
 import { Palette } from './palette';
@@ -45,6 +46,25 @@ describe('palette commands', () => {
     expect(items[3]?.hint).toBe('pane 1 in ~/code/ply');
     expect(items.every((i) => i.section === 'Commands')).toBe(true);
     expect(paletteItems(state(false), '', 0).some((i) => i.id === 'pane.nextWaiting')).toBe(false);
+  });
+
+  test('every lost pane gets a resume command saying how it resumes', () => {
+    const lost = state();
+    const panes = {
+      ...lost.panes,
+      3: { ...(lost.panes[3] as PaneState), status: 'lost' as const, session_ref: 'example' },
+    };
+    const items = paletteItems({ ...lost, panes }, '', 0).filter((i) =>
+      i.id.startsWith('pane-resume'),
+    );
+    expect(items.map((i) => [i.label, i.hint])).toEqual([
+      ['Resume Merges', 'tab 2 · pane 1 · codex resume'],
+    ]);
+    expect(items[0]?.actions).toEqual([
+      { type: 'overlay/close' },
+      { type: 'pane/resume', paneId: 3 },
+    ]);
+    expect(paletteItems(lost, 'resume', 0)).toEqual([]);
   });
 
   test('a query filters commands, tabs and panes by every word', () => {

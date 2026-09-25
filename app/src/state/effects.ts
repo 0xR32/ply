@@ -162,6 +162,12 @@ export function startEffects(store: Store, options: EffectsOptions): () => void 
           .request('pane.answer', { pane_id: action.paneId, choice: action.choice })
           .catch((error) => failed('Answering the pane', error));
         break;
+      case 'pane/resume':
+        client
+          .request('pane.resume', { pane_id: action.paneId })
+          .then((pane) => dispatch({ type: 'pane/resumed', pane }))
+          .catch((error) => failed('Resuming the session', error));
+        break;
       case 'pane/create':
         createPane(createParams(next, action.request), true);
         break;

@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { hasNativeTestRenderer, type TestRenderer } from '@gpuix/react/testing';
 import type { ReactNode } from 'react';
 import type { Action } from '../../state/actions';
+import type { PaneState } from '../../state/reducer';
 import { makePane, makeState, mountWithStore } from '../../state/test-support';
 import { PaneGrid } from './pane-grid';
 
@@ -176,6 +177,27 @@ describe.if(hasNativeTestRenderer)('PaneGrid', () => {
         { type: 'pane/answer', paneId: 2, choice: 3 },
       ]);
       expect(renderer.findByTestId('pane-1-waiting')).toBeUndefined();
+    } finally {
+      unmount();
+    }
+  });
+
+  test('a lost pane shows the resume strip, whose button resumes it through pane.resume', () => {
+    const state = demo();
+    const panes = {
+      ...state.panes,
+      3: { ...(state.panes[3] as PaneState), status: 'lost' as const },
+    };
+    const { store, renderer, unmount } = mountWithStore(grid, { ...state, panes });
+    const seen: Action[] = [];
+    store.addEffect((a) => seen.push(a));
+    try {
+      expect(renderer.getAllText()).toContain('shell stopped when plyd did');
+      expect(renderer.getAllText()).toContain('resumes with a fresh shell');
+      expect(renderer.findByTestId('pane-1-lost')).toBeUndefined();
+      const resume = bounds(renderer, 'resume-3');
+      renderer.nativeSimulateClick(resume.x + resume.width / 2, resume.y + resume.height / 2);
+      expect(seen).toEqual([{ type: 'pane/resume', paneId: 3 }]);
     } finally {
       unmount();
     }

@@ -472,12 +472,18 @@ panes come back `lost`. `pane.resume` relaunches one from its `launch.json`
   working directory, with the stored `--worktree` option when there was one.
 - **Codex**: `codex -c … resume <session_ref>`; the new session starts bound to
   that thread.
-- **A shell**: the stored argv again.
+- **A pane without a session id** — a shell, or an agent whose CLI never
+  reported one — reopens as a fresh login shell in its last directory
+  (spec 11.3). An agent pane becomes a shell pane from then on: `cli` is
+  `shell` in its row, in `session.list` and in the returned `Pane`.
 
-The settings file is regenerated with the current settings. An agent pane with
-no `session_ref` (the CLI never reported one) starts a fresh session of the same
-CLI. The screen is not restored: plyd does not keep screens across its own
-restarts, so a resumed pane starts on an empty terminal and the CLI repaints it.
+The settings file is regenerated with the current settings, and `launch.json`
+records the new spawn, so a pane resumes again after the next restart. The pane
+leaves `lost` at once; a second `pane.resume` while one runs is refused. The app
+offers the action on every lost pane: the Resume button of the strip under it
+and a "Resume <pane>" palette command. The screen is not restored: plyd does
+not keep screens across its own restarts, so a resumed pane starts on an empty
+terminal and the CLI repaints it.
 
 ## Tests
 
@@ -505,6 +511,11 @@ restarts, so a resumed pane starts on an empty terminal and the CLI repaints it.
   rollout binding.
 - `crates/daemon/tests/config_untouched.rs`: INV-8, a Claude Code and a Codex
   session leave the user's three config files byte for byte as they were.
+- `crates/daemon/tests/resume.rs`: journey J6 (kill plyd, restart it, the
+  panes are `lost`, `pane.resume` brings a `--worktree` Claude pane, a Codex
+  pane and a shell back with the same option and directory), a pane without a
+  session id reopening as a shell, and F3 (closed sessions keep status, times,
+  exit codes and session ids across app and plyd restarts).
 - `crates/daemon/tests/lifecycle.rs`:
   `an_agent_pane_runs_the_cli_from_the_login_path_with_its_launch_spec` (a fake
   `claude` on the login `PATH` gets the adapter's argv, environment and files)

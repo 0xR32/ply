@@ -1,13 +1,14 @@
 import { useCallback, useMemo } from 'react';
-import { abbreviateHome, needsYou, selectActiveTab } from '../../state/selectors';
+import { abbreviateHome, isLost, needsYou, selectActiveTab } from '../../state/selectors';
 import { useAppSelector, useDispatch } from '../../state/store';
 import { useChrome } from '../../theme/chrome';
 import { terminalThemeFor, tokens } from '../../theme/tokens';
+import { LostStrip } from './lost-strip';
 import { PaneHeader } from './pane-header';
 import { TerminalSlot } from './terminal-slot';
 import { WaitingStrip } from './waiting-strip';
 
-/** One pane card of the grid: header, terminal body and, while the pane needs you, the waiting strip. */
+/** One pane card: header, terminal body, and the waiting strip (needs you) or the resume strip (lost). */
 export function PaneFrame({ paneId, position }: { paneId: number; position: number }) {
   const dispatch = useDispatch();
   const { z, accent, fonts, type } = useChrome();
@@ -87,6 +88,7 @@ export function PaneFrame({ paneId, position }: { paneId: number; position: numb
         />
       </div>
       {waiting ? <WaitingStrip pane={pane} /> : null}
+      {isLost(pane) ? <LostStrip pane={pane} /> : null}
     </div>
   );
 }

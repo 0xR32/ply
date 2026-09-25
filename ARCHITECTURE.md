@@ -113,7 +113,7 @@ app/src
 ├── terminal/        frames.ts (C2 codec) · data-client.ts · replica.ts · runs.ts (row → <text> runs) ·
 │                    input.ts · selection.ts · session.ts · host.ts · metrics.ts
 ├── keymap/          keymap.ts (every binding, once) · dispatcher.ts · reserved.ts
-├── features/        panes/ (grid, frame, header, waiting strip, terminal-view, close confirm) · tabs/ ·
+├── features/        panes/ (grid, frame, header, waiting and lost strips, terminal-view, close confirm) · tabs/ ·
 │                    statusbar/ · palette/ · new-pane/ · settings/
 ├── ui/              presentational primitives: text, kbd, chip, button, segments, switch, overlay card
 └── theme/           tokens.ts (the only palette and type scale) · chrome.ts

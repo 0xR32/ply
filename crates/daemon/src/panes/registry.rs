@@ -648,6 +648,19 @@ impl Registry {
         }));
     }
 
+    /// Makes the pane run `cli` from now on, titled `title`; `pane.resume` reopens a pane without a session as a shell.
+    pub fn set_cli(&mut self, id: PaneId, cli: Cli, title: &str) {
+        let Some(entry) = self.panes.get_mut(&id) else {
+            return;
+        };
+        entry.pane.cli = cli;
+        entry.pane.title = title.to_owned();
+        entry.pane.progress = None;
+        entry.pane.model_seen = None;
+        let pane = entry.pane.clone();
+        self.store(&pane);
+    }
+
     fn emit_meta(&self, pane: &Pane) {
         self.emit(Event::PaneMeta(PaneMeta {
             pane_id: pane.id,

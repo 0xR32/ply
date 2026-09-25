@@ -89,6 +89,9 @@ are sent as KEY frames and plyd encodes them against the pane's modes
 - **The CLIs' dialogs answer to 1, 2 and 3**, typed into the pane like any key.
   The needs-you strip's buttons send the same digits through `pane.answer`; the
   strip itself binds no key.
+- **A lost pane resumes by mouse or palette.** The Resume button of the strip
+  under it and the palette's "Resume <pane>" command both send `pane.resume`;
+  neither binds a key.
 
 **⌥ is not Meta by default.** `option_as_meta` (Settings, "⌥ as Meta") is
 `off`, `left`, `right` or `both`. With `off`, ⌥ types the layout's character,

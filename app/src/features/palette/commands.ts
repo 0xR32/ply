@@ -3,9 +3,11 @@ import type { Action, CommandId } from '../../state/actions';
 import type { AppState } from '../../state/reducer';
 import {
   abbreviateHome,
+  isLost,
   nextWaitingPane,
   panePlace,
   paneTitle,
+  resumeHow,
   selectActiveTab,
   selectFocusedPane,
   selectWaitingCount,
@@ -39,6 +41,26 @@ function command(id: CommandId, label: string, hint: string, dot: ItemDot): Pale
   };
 }
 
+function resumeItems(state: AppState): PaletteItem[] {
+  return state.tabs.flatMap((t, tabIndex) =>
+    t.pane_ids.flatMap((id, paneIndex): PaletteItem[] => {
+      const pane = state.panes[id];
+      if (!pane || !isLost(pane)) return [];
+      return [
+        {
+          id: `pane-resume-${id}`,
+          section: 'Commands',
+          label: `Resume ${paneTitle(pane)}`,
+          hint: `tab ${tabIndex + 1} · pane ${paneIndex + 1} · ${resumeHow(pane)}`,
+          keys: '',
+          dot: 'accent',
+          actions: [{ type: 'overlay/close' }, { type: 'pane/resume', paneId: id }],
+        },
+      ];
+    }),
+  );
+}
+
 function commands(state: AppState): PaletteItem[] {
   const home = state.env.home;
   const tab = selectActiveTab(state);
@@ -56,6 +78,7 @@ function commands(state: AppState): PaletteItem[] {
     const hint = where ? `tab ${where.tab} · pane ${where.pane} · ${kind}` : kind;
     items.push(command('pane.nextWaiting', 'Go to what needs you', hint, 'amber'));
   }
+  items.push(...resumeItems(state));
   const here = focused?.cwd ?? state.workspace?.path ?? home;
   const hereHint = place
     ? `pane ${place.pane} in ${abbreviateHome(here, home)}`

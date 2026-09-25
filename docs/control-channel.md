@@ -229,11 +229,13 @@ its `run/panes/<id>/launch.json`. The pane leaves `lost` at once (`pane.status`
 `starting`), and goes back to `lost` when the relaunch fails. An agent pane's launch
 spec is rebuilt through its adapter with the pane's `session_ref` as the session
 to resume (`claude --resume <id>`, `codex resume <thread>`), in the stored
-working directory and with the stored worktree option; a shell pane runs its
-stored argv again. Waits for a palette like `pane.create`. `spawn_failed` when
-`launch.json` is missing or unreadable or the spawn fails; `cli_not_found`,
-`cli_too_old` and `bad_request` as for `pane.create`. Returns the pane, which is
-`starting` (agents) or `idle` (shells) again.
+working directory and with the stored worktree option; a pane without a
+session id (a shell, or an agent whose CLI never reported one) reopens as a
+fresh login shell in its last directory and is a `shell` pane from then on.
+Waits for a palette like `pane.create`. `spawn_failed` when `launch.json` is
+missing or unreadable, the directory is gone or the spawn fails;
+`cli_not_found`, `cli_too_old` and `bad_request` as for `pane.create`. Returns
+the pane, which is `starting` (agents) or `idle` (shells) again.
 
 ### `session.list`
 

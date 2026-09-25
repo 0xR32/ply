@@ -374,7 +374,10 @@ export function reduce(state: AppState, action: Action): AppState {
     case 'pane/title':
       return updatePane(state, action.paneId, (p) => ({ ...p, terminalTitle: action.title }));
     case 'pane/answer':
+    case 'pane/resume':
       return state;
+    case 'pane/resumed':
+      return upsertPane(state, action.pane);
     case 'pane/create':
       return { ...state, create: { pending: true, error: null } };
     case 'pane/created': {

@@ -281,13 +281,13 @@ impl Db {
         self.last_id()
     }
 
-    /// Writes every mutable column of an existing pane.
+    /// Writes every mutable column of an existing pane (`cli` too: a resumed pane without a session becomes a shell).
     /// Fails with [`Error::Db`].
     pub fn update_pane(&self, pane: &Pane) -> Result<()> {
         self.conn.execute(
             "UPDATE panes SET tab_id = ?2, position = ?3, cwd = ?4, model_seen = ?5, worktree_seen = ?6, \
-             exit_code = ?7, last_activity_at = ?8, session_ref = ?9, title = ?10, status = ?11, closed_at = ?12 \
-             WHERE id = ?1",
+             exit_code = ?7, last_activity_at = ?8, session_ref = ?9, title = ?10, status = ?11, closed_at = ?12, \
+             cli = ?13 WHERE id = ?1",
             params![
                 pane.id,
                 pane.tab_id,
@@ -301,6 +301,7 @@ impl Db {
                 pane.title,
                 status_str(pane.status),
                 pane.closed_at,
+                cli_str(pane.cli),
             ],
         )?;
         Ok(())

@@ -3,7 +3,9 @@ import type { Action, Event } from './actions';
 import { type AppState, reduce } from './reducer';
 import {
   formatElapsed,
+  isLost,
   nextWaitingPane,
+  resumeHow,
   selectCliCounts,
   selectWaitingCount,
   statusView,
@@ -284,6 +286,36 @@ describe('pane creation', () => {
     );
     expect(state.overlay?.kind).toBe('new-pane');
     expect(state.create).toEqual({ pending: false, error: 'claude is not on PATH' });
+  });
+});
+
+describe('session resume', () => {
+  test('pane/resumed replaces the lost pane in place, keeping its tab, focus and terminal title', () => {
+    const lost = makeState([
+      makePane({ id: 1, status: 'lost', session_ref: 'example-session', terminalTitle: 'fix it' }),
+      makePane({ id: 2, position: 1 }),
+    ]);
+    const next = run(
+      lost,
+      { type: 'pane/resume', paneId: 1 },
+      {
+        type: 'pane/resumed',
+        pane: makePane({ id: 1, status: 'starting', session_ref: 'example-session' }),
+      },
+    );
+    expect(next.panes[1]?.status).toBe('starting');
+    expect(next.panes[1]?.terminalTitle).toBe('fix it');
+    expect(next.tabs[0]?.pane_ids).toEqual([1, 2]);
+    expect(next.tabs[0]?.focus_pane_id).toBe(1);
+  });
+
+  test('a lost pane resumes with the CLI when it has a session id, else as a fresh shell', () => {
+    expect(isLost(makePane({ id: 1, status: 'lost' }))).toBe(true);
+    expect(isLost(makePane({ id: 1, status: 'exited' }))).toBe(false);
+    expect(resumeHow(makePane({ id: 1, session_ref: 'x' }))).toBe('claude --resume');
+    expect(resumeHow(makePane({ id: 1, cli: 'codex', session_ref: 'x' }))).toBe('codex resume');
+    expect(resumeHow(makePane({ id: 1 }))).toBe('a fresh shell');
+    expect(resumeHow(makePane({ id: 1, cli: 'shell' }))).toBe('a fresh shell');
   });
 });
 

@@ -348,7 +348,9 @@ export class MockServer {
       case 'pane.resume': {
         const pane = this.requirePane((p as Methods['pane.resume']['params']).pane_id);
         if (pane.status !== 'lost') throw new MethodError('invalid_state', 'the pane is not lost');
-        this.setStatus(pane.id, 'running');
+        const resumable = pane.cli !== 'shell' && pane.session_ref !== undefined;
+        if (!resumable) this.panes.set(pane.id, { ...pane, cli: 'shell', title: 'zsh' });
+        this.setStatus(pane.id, resumable ? 'starting' : 'idle');
         return this.requirePane(pane.id);
       }
       case 'session.list':

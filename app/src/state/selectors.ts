@@ -26,6 +26,17 @@ export function needsYou(pane: Pick<Pane, 'status'>): boolean {
   return pane.status === 'waiting_permission' || pane.status === 'waiting_input';
 }
 
+/** Whether `pane.resume` applies: the pane's process vanished across a plyd restart (spec 6.3 `lost`). */
+export function isLost(pane: Pick<Pane, 'status'>): boolean {
+  return pane.status === 'lost';
+}
+
+/** What resuming a lost pane runs: the CLI's own resume with the stored session id, else a fresh shell (spec 11.3). */
+export function resumeHow(pane: Pick<Pane, 'cli' | 'session_ref'>): string {
+  if (pane.session_ref === undefined || pane.cli === 'shell') return 'a fresh shell';
+  return pane.cli === 'claude' ? 'claude --resume' : 'codex resume';
+}
+
 /** Whether the pane's process still runs, so closing it must confirm and kill (Ruling R7). */
 export function isAlive(pane: Pick<Pane, 'status'>): boolean {
   return pane.status !== 'exited' && pane.status !== 'lost';
