@@ -1,10 +1,9 @@
 import { afterEach, describe, expect, test } from 'bun:test';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createDaemonStarter, launchAgentPlist, planLaunch } from './daemon-launcher';
+import { createDaemonStarter, planLaunch } from './daemon-launcher';
 import { geistAvailable, shellName } from './os';
-import { LAUNCH_AGENT_LABEL } from './paths';
 
 const dirs: string[] = [];
 
@@ -22,17 +21,28 @@ function tree(files: string[]): string {
   return root;
 }
 
+function fakePlyd(path: string, exitCode: number): void {
+  mkdirSync(join(path, '..'), { recursive: true });
+  const record = join(path, '..', 'args.txt');
+  writeFileSync(path, `#!/bin/sh\necho "$@" > '${record}'\necho boom >&2\nexit ${exitCode}\n`);
+  chmodSync(path, 0o755);
+}
+
 describe('planLaunch', () => {
-  test('a plyd beside the app binary means the bundle: start it through the LaunchAgent', () => {
+  test('a plyd beside the app binary means the bundle: plyd installs its LaunchAgent', () => {
     const root = tree(['Ply.app/Contents/MacOS/ply', 'Ply.app/Contents/MacOS/plyd']);
     const plan = planLaunch({ env: {}, execPath: join(root, 'Ply.app/Contents/MacOS/ply') });
-    expect(plan).toMatchObject({
-      kind: 'launch-agent',
-      plyd: join(root, 'Ply.app/Contents/MacOS/plyd'),
-    });
+    expect(plan).toEqual({ kind: 'launch-agent', plyd: join(root, 'Ply.app/Contents/MacOS/plyd') });
   });
 
-  test('PLY_HOME or a development run spawns the build-dir plyd, and says so when none is built', () => {
+  test('a development run installs the agent for the cargo-built plyd (Ruling R38)', () => {
+    const repo = tree(['target/debug/plyd']);
+    const empty = tree([]);
+    const plan = planLaunch({ env: {}, execPath: join(empty, 'bun'), repoRoot: repo });
+    expect(plan).toEqual({ kind: 'launch-agent', plyd: join(repo, 'target/debug/plyd') });
+  });
+
+  test('PLY_HOME always spawns a build-dir plyd, never the LaunchAgent, and says when none is built', () => {
     const bundle = tree(['MacOS/ply', 'MacOS/plyd']);
     const repo = tree(['target/debug/plyd']);
     const exec = join(bundle, 'MacOS/ply');
@@ -41,26 +51,45 @@ describe('planLaunch', () => {
       plyd: join(repo, 'target/debug/plyd'),
     });
     const empty = tree([]);
-    const plan = planLaunch({ env: {}, execPath: join(empty, 'bun'), repoRoot: empty });
-    expect(plan).toEqual({
+    expect(planLaunch({ env: { PLY_HOME: '/x' }, execPath: exec, repoRoot: empty })).toEqual({
       kind: 'unavailable',
-      reason: 'plyd is not built (cargo build -p ply-daemon)',
+      reason: 'plyd is not built (cargo build -p ply-daemon -p ply-hook)',
     });
+    expect(planLaunch({ env: {}, execPath: join(empty, 'bun'), repoRoot: empty }).kind).toBe(
+      'unavailable',
+    );
   });
+});
 
-  test('the starter rejects with that reason', async () => {
+describe('createDaemonStarter', () => {
+  test('rejects with the reason when plyd cannot be found', async () => {
     const empty = tree([]);
     const start = createDaemonStarter({ env: {}, execPath: join(empty, 'bun'), repoRoot: empty });
     await expect(start()).rejects.toThrow('plyd is not built');
   });
 
-  test('the LaunchAgent restarts plyd only after a crash and never throttles it (spec 11.3)', () => {
-    const plist = launchAgentPlist('/Applications/Ply.app/Contents/MacOS/plyd');
-    expect(plist).toContain(`<string>${LAUNCH_AGENT_LABEL}</string>`);
-    expect(plist).toContain('<key>SuccessfulExit</key>\n    <false/>');
-    expect(plist).toContain('<key>ProcessType</key>\n  <string>Standard</string>');
-    expect(plist).toContain('<key>RunAtLoad</key>\n  <false/>');
-    expect(launchAgentPlist('/a&b/plyd')).toContain('<string>/a&amp;b/plyd</string>');
+  test('runs `plyd install-agent` instead of writing the plist itself', async () => {
+    const root = tree(['Ply.app/Contents/MacOS/ply']);
+    const plyd = join(root, 'Ply.app/Contents/MacOS/plyd');
+    fakePlyd(plyd, 0);
+    const start = createDaemonStarter({
+      env: {},
+      execPath: join(root, 'Ply.app/Contents/MacOS/ply'),
+    });
+    await start();
+    expect(readFileSync(join(root, 'Ply.app/Contents/MacOS/args.txt'), 'utf8')).toBe(
+      'install-agent\n',
+    );
+  });
+
+  test('a failing install-agent rejects with its status and stderr', async () => {
+    const root = tree(['Ply.app/Contents/MacOS/ply']);
+    fakePlyd(join(root, 'Ply.app/Contents/MacOS/plyd'), 3);
+    const start = createDaemonStarter({
+      env: {},
+      execPath: join(root, 'Ply.app/Contents/MacOS/ply'),
+    });
+    await expect(start()).rejects.toThrow('plyd install-agent failed (3): boom');
   });
 });
 

@@ -36,7 +36,8 @@ pulling it in front of your editor.
 | What | Path |
 |---|---|
 | Database | `~/Library/Application Support/ply/ply.db` |
-| Settings | `~/Library/Application Support/ply/config.toml` |
+| Settings | `~/Library/Application Support/ply/config.toml` (also keeps the last `theme.set` palette) |
+| Instance lock | `~/Library/Application Support/ply/plyd.lock` (holds the running plyd's pid) |
 | Sockets and per-pane files | `~/Library/Application Support/ply/run/` (mode 0700): `plyd.sock` (C1), `data.sock` (C2), `hook.sock` (C3), `panes/<id>/claude-settings.json` and `panes/<id>/launch.json` |
 | Logs | `~/Library/Logs/ply/app.YYYY-MM-DD.log` and `plyd.YYYY-MM-DD.log`, kept 14 days |
 | LaunchAgent | `~/Library/LaunchAgents/dev.ply.app.plyd.plist` |
@@ -46,15 +47,47 @@ Socket paths must stay under 104 bytes, the macOS limit for a Unix socket path.
 ## Running plyd in the foreground
 
 ```sh
+cargo build -p ply-daemon -p ply-hook
 PLY_HOME=/tmp/ply-dev cargo run -p ply-daemon -- --foreground
 ```
 
-`PLY_HOME` moves every path above (database, settings, run directory, logs) under one directory, so a development
-daemon never touches the installed one and a test can start from an empty state. `--foreground` keeps plyd attached
-to the terminal instead of expecting launchd. The daemon arrives in WP4; until then the binary exits at once.
+Build `ply-hook` with plyd: agent panes run it from the directory plyd lives in.
+
+`PLY_HOME` moves every path above (database, settings, run directory, logs, which go to `$PLY_HOME/logs`) under one
+directory, so a development daemon never touches the installed one and a test can start from an empty state. A
+sandboxed plyd also never installs a LaunchAgent and never holds the keep-awake power assertion. Keep `PLY_HOME`
+short: the socket paths below it must stay under 104 bytes.
+
+| Flag or variable | Effect |
+|---|---|
+| `--foreground` | also log to stderr (launchd starts plyd without it; both modes serve the same way) |
+| `--run-dir <dir>` | put the sockets and `panes/` in another absolute directory |
+| `PLY_LOG` | log level: `error`, `warn`, `info` (default), `debug`, `trace` |
+| `plyd install-agent [--dry-run]` | write `~/Library/LaunchAgents/dev.ply.app.plyd.plist` for this plyd binary and `launchctl bootstrap` + `kickstart` it; `--dry-run` prints the plist and the commands instead. Refused while `PLY_HOME` is set |
+
+plyd refuses to start a second time for the same data directory (it prints the running pid and exits 0), refuses a
+database written by a newer plyd, and has no idle exit: it stops only on `daemon.shutdown`, SIGTERM, SIGINT or
+SIGHUP. Panes whose process ran when plyd stopped come back as `lost` and can be relaunched with `pane.resume`.
+
+How the app finds plyd (`app/src/ipc/daemon-launcher.ts`): with `PLY_HOME` set it spawns `target/debug/plyd
+--foreground` (or `$PLY_PLYD`) detached; otherwise it runs `plyd install-agent` for the bundle's
+`Contents/MacOS/plyd`, or in development for the cargo-built one, so `bun run dev` without `PLY_HOME` installs a
+LaunchAgent pointing at `target/debug/plyd`. plyd is the only writer of that plist.
+
+A command-line client drives a running plyd through C1 and C2:
+
+```sh
+PLY_HOME=/tmp/ply-dev cargo run -p ply-daemon --example ply-cli -- demo
+PLY_HOME=/tmp/ply-dev cargo run -p ply-daemon --example ply-cli -- list
+PLY_HOME=/tmp/ply-dev cargo run -p ply-daemon --example ply-cli -- screen 1
+```
+
+`demo` opens a shell pane, runs an `echo`, detaches, reattaches and compares the two screens, then closes the pane;
+`list` prints every workspace's panes; `screen` attaches at 80 × 24 (which resizes the pane) and prints its screen.
 
 Tests that start real or fake CLIs also set a sandboxed `HOME` (and `CODEX_HOME`), so `~/.claude/settings.json` and
-`~/.codex/config.toml` are never written (INV-8).
+`~/.codex/config.toml` are never written (INV-8). plyd's own integration tests (`crates/daemon/tests/`) start plyd
+with a cleared environment, a temporary `HOME` and `PLY_HOME`, and `/bin/sh` as the login shell.
 
 ## The gates
 

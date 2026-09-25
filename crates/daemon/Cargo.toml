@@ -6,6 +6,10 @@ edition.workspace = true
 rust-version.workspace = true
 publish.workspace = true
 
+[lib]
+name = "ply_daemon"
+path = "src/lib.rs"
+
 [[bin]]
 name = "plyd"
 path = "src/main.rs"
@@ -14,6 +18,17 @@ path = "src/main.rs"
 ply-proto.workspace = true
 ply-term = { workspace = true, features = ["engine"] }
 ply-agents.workspace = true
+anyhow.workspace = true
+rusqlite.workspace = true
+rustix.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+toml.workspace = true
+tracing.workspace = true
+tracing-appender.workspace = true
+tracing-subscriber.workspace = true
 
 [lints]
 workspace = true
