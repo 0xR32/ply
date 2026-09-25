@@ -206,14 +206,19 @@ class UnixControlClient implements ControlClient {
       log('warn', 'control connect failed', { code, socket: this.options.socketPath });
     }
     const start = this.options.startDaemon;
-    if (start && !this.startedThisOutage) {
+    const again = this.startedThisOutage;
+    // A start can find the old plyd still holding its lock (a Restart), so a long outage starts plyd again at every capped retry.
+    if (start && (!again || this.backoffMs >= this.maxBackoffMs)) {
       this.startedThisOutage = true;
+      if (again) log('debug', 'plyd is still not up; starting it again');
       this.setState({ kind: 'down', reason, retryInMs: 0, starting: true });
       try {
         await start();
+        this.startError = null;
       } catch (startError) {
-        log('error', 'starting plyd failed', { error: String(startError) });
-        this.startError = startError instanceof Error ? startError.message : String(startError);
+        const why = startError instanceof Error ? startError.message : String(startError);
+        log(why === this.startError ? 'debug' : 'error', 'starting plyd failed', { error: why });
+        this.startError = why;
       }
     }
     if (this.startError) reason = `${reason} and could not be started: ${this.startError}`;

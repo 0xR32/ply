@@ -106,7 +106,7 @@ function commands(state: AppState): PaletteItem[] {
   return items;
 }
 
-/** Replacing plyd (Ruling R53): a restart that the launcher follows with the current build, and a confirmed quit. */
+/** Replacing plyd (Ruling R53): a restart that the launcher follows with the build in target/, and a confirmed quit. */
 function daemonItems(state: AppState): PaletteItem[] {
   const foreign = selectForeignDaemon(state);
   return [
@@ -114,7 +114,7 @@ function daemonItems(state: AppState): PaletteItem[] {
       id: 'daemon-restart',
       section: 'Commands',
       label: 'Restart plyd',
-      hint: `${foreign ? 'plyd is from another build; ' : ''}starts the current build, running sessions come back lost`,
+      hint: `${foreign ? 'plyd is from another build, rebuild it first; ' : ''}starts the build in target/, running sessions come back lost`,
       keys: '',
       dot: foreign ? 'amber' : 'dim',
       actions: [{ type: 'overlay/close' }, { type: 'daemon/restart' }],

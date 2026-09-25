@@ -81,7 +81,7 @@ describe('palette commands', () => {
     const foreign = { ...base, env: { ...base.env, buildId: '0.1.0+0a1b2c3d4e5f' } };
     expect(find(foreign, 'daemon-restart')).toMatchObject({
       dot: 'amber',
-      hint: 'plyd is from another build; starts the current build, running sessions come back lost',
+      hint: 'plyd is from another build, rebuild it first; starts the build in target/, running sessions come back lost',
     });
   });
 

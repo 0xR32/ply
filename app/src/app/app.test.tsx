@@ -131,7 +131,9 @@ describe.if(hasNativeTestRenderer)('App', () => {
     const seen: string[] = [];
     store.addEffect((a) => seen.push(a.type));
     try {
-      expect(renderer.getAllText()).toContain('plyd is from another build — Restart plyd');
+      expect(renderer.getAllText()).toContain(
+        'plyd is from another build — cargo build --release -p ply-daemon, then Restart plyd',
+      );
       renderer.simulateKeystrokes('cmd-k');
       for (const k of ['q', 'u', 'i', 't']) renderer.simulateKeystrokes(k);
       renderer.simulateKeystrokes('enter');
@@ -152,7 +154,9 @@ describe.if(hasNativeTestRenderer)('App', () => {
       });
       await Bun.sleep(10);
       renderer.flush();
-      expect(renderer.getAllText()).not.toContain('plyd is from another build — Restart plyd');
+      expect(renderer.getAllText()).not.toContain(
+        'plyd is from another build — cargo build --release -p ply-daemon, then Restart plyd',
+      );
     } finally {
       unmount();
     }

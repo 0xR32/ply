@@ -449,7 +449,7 @@ use the same vocabulary. The table lives in
 | `running`, `idle` | `InputRequested` | Codex OSC 9 question or plan prompt · a Claude Notification that is neither `permission_prompt` nor `idle_prompt` (R46) | `waiting_input` |
 | `waiting_permission` | `CallSettled`, same call | Claude PostToolUse, PostToolUseFailure or PermissionDenied | `running` |
 | `waiting_permission`, `waiting_input` | `KeyTyped` | any key typed in the pane | `running` |
-| `running`, `waiting_permission` without a pending call | `TurnComplete` | Claude Stop or StopFailure · Codex notify for the bound thread · Codex OSC 9 of any other body · Codex rollout `task_complete` or `turn_aborted` for the current turn | `idle` |
+| `running` (Claude also `waiting_permission` without a pending call) | `TurnComplete` | Claude Stop or StopFailure · Codex notify for the bound thread · Codex OSC 9 of any other body · Codex rollout `task_complete` or `turn_aborted` for the current turn | `idle` |
 | `running` (Claude) | `QuietTimeout` | the pty silent and no hook for 5 s | `idle` |
 | any | the process exits | pty EOF | `exited(code)` |
 | any live status, after a plyd restart | the process is gone | plyd's start | `lost` |
@@ -470,8 +470,10 @@ Transitions not in the table are ignored and counted.
   `permission_prompt` Notification can arrive after the call it asked about
   settled, putting the pane back into `waiting_permission` with no pending call;
   the turn's Stop then still makes it `idle`. A wait whose call is still pending
-  ignores `TurnComplete`
-  (`a_turn_ends_a_wait_for_permission_that_has_no_pending_call`).
+  ignores `TurnComplete`, and so does every Codex approval (an OSC 9 approval
+  has no call, and the previous turn's `task_complete` can be read from the
+  rollout after it) (`a_turn_ends_a_wait_for_permission_that_has_no_pending_call`,
+  `a_codex_approval_outlives_a_lagging_turn_end`; Ruling R54).
 
 - **SessionEnd** changes nothing (Ruling R47). Claude fires it for `/clear` and
   an in-session `/resume` while the process keeps running, so it is logged and

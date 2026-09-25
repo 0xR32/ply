@@ -77,7 +77,7 @@ export function StatusBar() {
         </Text>
       ) : foreign ? (
         <Text color={tokens.amber} variant="small" weight={400} ellipsis testId="foreign-daemon">
-          plyd is from another build — Restart plyd
+          plyd is from another build — cargo build --release -p ply-daemon, then Restart plyd
         </Text>
       ) : null}
       <Text color={tokens.hint} variant="label" mono testId="cli-counts">

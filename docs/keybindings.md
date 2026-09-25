@@ -93,7 +93,7 @@ are sent as KEY frames and plyd encodes them against the pane's modes
   under it and the palette's "Resume <pane>" command both send `pane.resume`;
   neither binds a key.
 - **plyd is replaced from the palette** (Ruling R53). "Restart plyd" stops it
-  without the sessions and the app starts the current build; "Quit ply and stop
+  without the sessions and the app starts the build in `target/`; "Quit ply and stop
   sessions" asks first, then stops every pane's process and quits
   (`docs/control-channel.md`, `daemon.shutdown`). Neither binds a key: ⌘Q
   belongs to GPUIX and quits only the window's app, leaving plyd running.

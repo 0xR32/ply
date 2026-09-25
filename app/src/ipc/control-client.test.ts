@@ -98,6 +98,19 @@ describe('ControlClient', () => {
     expect(recentLogLines().some((l) => l.includes('WARN control connect failed'))).toBe(true);
   });
 
+  test('a start whose plyd never comes up is run again once the retries reach the cap', async () => {
+    const path = socketPath();
+    let starts = 0;
+    const c = client(path, async () => {
+      starts++;
+      // The first plyd found the old one still holding the lock and exited, as after a Restart.
+      if (starts > 1) serve(path);
+    });
+    c.start();
+    await until(() => c.state.kind === 'connected');
+    expect(starts).toBe(2);
+  });
+
   test('a failed start is reported and retried with backoff up to the cap', async () => {
     const path = socketPath();
     const c = client(path, async () => {

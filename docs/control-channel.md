@@ -461,17 +461,23 @@ module that calls it.
   `<app/package.json version>+<commit>`, with `git rev-parse --short=12 HEAD`
   in its checkout (`readBuildId`, `app/src/ipc/os.ts`). While it is connected
   to a plyd whose `daemon_version` differs, the status bar says "plyd is from
-  another build — Restart plyd" (`selectForeignDaemon`); with no id (git
+  another build — cargo build --release -p ply-daemon, then Restart plyd"
+  (`selectForeignDaemon`): the app's id is the checkout's `HEAD`, plyd's the
+  commit its binary was built from, so after a commit plyd must be rebuilt
+  before a restart runs anything newer. With no id (git
   cannot tell) it says nothing.
 - **Reconnect.** A failed connect or a closed connection retries after 100 ms,
   doubling to at most 2 s; a `welcome` resets the delay. The retries continue
   in `incompatible` too, until a compatible plyd answers.
 - **Starting plyd.** The first failed connect of an outage calls
-  `createDaemonStarter()` (`app/src/ipc/daemon-launcher.ts`) once, before the
-  first retry: with `PLY_HOME` set it spawns the cargo-built `plyd --foreground`
+  `createDaemonStarter()` (`app/src/ipc/daemon-launcher.ts`) before the first
+  retry: with `PLY_HOME` set it spawns the cargo-built `plyd --foreground`
   detached; without it, it runs `plyd install-agent`, which installs and
-  kickstarts the LaunchAgent (`docs/configuration.md`). A start that fails is
-  appended to the `down` reason.
+  kickstarts the LaunchAgent (`docs/configuration.md`). Once the retries reach
+  their 2 s cap (an outage of about 3 s) it runs again before every retry,
+  because a start can come to nothing: after "Restart plyd" the new plyd may
+  find the old one still holding the instance lock and exit (Ruling R54). A
+  start that fails is appended to the `down` reason.
 - **Timeouts.** A `welcome` must arrive within 5 s of connecting, else the
   client closes and retries. A request with no answer in 10 s fails with
   `timeout`; a late answer is logged and dropped.
@@ -552,7 +558,8 @@ are allowed for those two pairs.
   order) and `crates/daemon/src/server/control.rs`
   (`lines_are_capped_and_split_at_newlines`).
 - `app/src/ipc/control-client.test.ts` (handshake, errors, reconnect, starting
-  plyd once per outage, incompatibility) and `app/src/state/effects.test.ts`
+  plyd at the first failed connect and again once the retries reach their cap,
+  incompatibility) and `app/src/state/effects.test.ts`
   (the load order, an event in the same read as the `pane.list` answer, a
   failed `theme.set`, the saves) against the mock server, and
   `app/src/state/reducer.test.ts` (a `pane.create` answer that events

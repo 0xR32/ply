@@ -87,9 +87,12 @@ run writes to the machine.
 ### Replacing a running plyd
 
 A rebuilt plyd runs only once the running one stops: plyd has no idle exit, and `install-agent` never boots out an
-agent whose plyd holds the lock. The status bar says "plyd is from another build — Restart plyd" whenever the
-connected plyd's build id (`welcome.daemon_version`, `<version>+<commit>`, stamped by `crates/daemon/build.rs`)
-differs from the app's (`<version>+<commit>` of the checkout). Three ways to stop it:
+agent whose plyd holds the lock. The status bar says "plyd is from another build — cargo build --release -p
+ply-daemon, then Restart plyd" whenever the connected plyd's build id (`welcome.daemon_version`, `<version>+<commit>`,
+stamped by `crates/daemon/build.rs`) differs from the app's (`<version>+<commit>` of the checkout's `HEAD`). The
+comparison is with the commit, not with the binary on disk: after a commit, or a debug-only rebuild while
+`target/release/plyd` exists (the release build wins), a restart starts the same stale binary again, so build first
+(`cargo build --release -p ply-daemon -p ply-hook`), then stop the running plyd. Three ways to stop it:
 
 - **"Restart plyd"** in the palette (⌘K) sends `daemon.shutdown {kill_panes:false}`. The app reconnects, finds nothing
   and starts the cargo-built plyd as always (`install-agent`, or `--foreground` under `PLY_HOME`); running agents
