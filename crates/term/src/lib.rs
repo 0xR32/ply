@@ -75,8 +75,9 @@ mod replica;
 pub use delta::{DeltaBuilder, Update};
 #[cfg(feature = "engine")]
 pub use engine::{
-    ClipboardContent, ClipboardWrite, Compression, Engine, EngineOutput, Notification,
-    ProgressReport, ProgressState, SCROLLBACK_SLACK, SearchMatch, TERMINFO_NAME, XTVERSION,
+    CLIPBOARD_WRITE_MAX_BYTES, ClipboardContent, ClipboardWrite, Compression, Engine, EngineOutput,
+    Notification, ProgressReport, ProgressState, SCROLLBACK_SLACK, SearchMatch, TERMINFO_NAME,
+    XTVERSION,
 };
 pub use error::{Error, Result};
 #[cfg(feature = "engine")]

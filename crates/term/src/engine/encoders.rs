@@ -3,6 +3,11 @@
 //! Each encode first copies the pane's live modes from the terminal (`setopt_from_terminal`), so the bytes always
 //! match what the program asked for (spec R-R5, R-R9). Key encoding re-applies option-as-alt after that copy,
 //! because the copy resets it (`key/encoder.h`, ADR-0005).
+//!
+//! libghostty-vt's ReleaseFast build does not range-check enum arguments or float-to-int conversions, so an
+//! undefined key, action or button, a non-finite or huge pointer position, or a zero cell size would be undefined
+//! behaviour inside the library. Every encode here refuses such values (encoding nothing) before the unsafe call;
+//! `crate::input` rejects them earlier with a log line, so these checks are the last line of defence.
 
 use std::ffi::{c_char, c_void};
 use std::ptr;
@@ -11,6 +16,12 @@ use ghostty_sys as sys;
 
 use super::check;
 use crate::error::Result;
+
+/// The modifier bits libghostty-vt defines (`key/event.h`); bits 10–15 are padding it assumes zero.
+const MODS_DEFINED: sys::GhosttyMods = 0x03FF;
+
+/// Largest pointer coordinate, in pixels, passed to the mouse encoder, so its `i32` pixel and cell math cannot overflow.
+const POSITION_LIMIT: f32 = 1.0e9;
 
 /// A key encoder and a reusable key event.
 pub(super) struct KeyEncoder {
@@ -56,7 +67,10 @@ impl KeyEncoder {
         option_as_alt: sys::GhosttyOptionAsAlt,
         input: &KeyInput<'_>,
     ) -> Result<Vec<u8>> {
-        // SAFETY: the handles are live, `term` is serialized by the engine, and `input.text` outlives the encode.
+        if !(0..=sys::GHOSTTY_KEY_MAX).contains(&input.key) || !(0..=2).contains(&input.action) {
+            return Ok(Vec::new());
+        }
+        // SAFETY: live handles, serialized `term`; key and action range-checked above, mods masked, so every enum argument is defined; `input.text` outlives the call.
         unsafe {
             sys::ghostty_key_encoder_setopt_from_terminal(self.encoder, term);
             sys::ghostty_key_encoder_setopt(
@@ -65,8 +79,11 @@ impl KeyEncoder {
                 (&raw const option_as_alt).cast::<c_void>(),
             );
             sys::ghostty_key_event_set_key(self.event, input.key);
-            sys::ghostty_key_event_set_mods(self.event, input.mods);
-            sys::ghostty_key_event_set_consumed_mods(self.event, input.consumed_mods);
+            sys::ghostty_key_event_set_mods(self.event, input.mods & MODS_DEFINED);
+            sys::ghostty_key_event_set_consumed_mods(
+                self.event,
+                input.consumed_mods & MODS_DEFINED,
+            );
             sys::ghostty_key_event_set_action(self.event, input.action);
             sys::ghostty_key_event_set_composing(self.event, input.composing);
             sys::ghostty_key_event_set_unshifted_codepoint(self.event, input.unshifted_codepoint);
@@ -145,16 +162,36 @@ impl MouseEncoder {
         surface: Surface,
         input: &MouseInput,
     ) -> Result<Vec<u8>> {
+        let button_ok = input.button.is_none_or(|b| (1..=11).contains(&b));
+        if surface.cell_width == 0
+            || surface.cell_height == 0
+            || !(0..=2).contains(&input.action)
+            || !button_ok
+            || !input.x.is_finite()
+            || !input.y.is_finite()
+        {
+            return Ok(Vec::new());
+        }
+        let width = u32::from(surface.cols) * u32::from(surface.cell_width);
+        let height = u32::from(surface.rows) * u32::from(surface.cell_height);
+        let clamp = |v: f32, extent: u32| {
+            let extent = (extent as f32).min(POSITION_LIMIT);
+            v.clamp(-extent, 2.0 * extent)
+        };
+        let position = sys::GhosttyMousePosition {
+            x: clamp(input.x, width),
+            y: clamp(input.y, height),
+        };
         let size = sys::GhosttyMouseEncoderSize {
             size: size_of::<sys::GhosttyMouseEncoderSize>(),
-            screen_width: u32::from(surface.cols) * u32::from(surface.cell_width),
-            screen_height: u32::from(surface.rows) * u32::from(surface.cell_height),
+            screen_width: width,
+            screen_height: height,
             cell_width: u32::from(surface.cell_width),
             cell_height: u32::from(surface.cell_height),
             ..Default::default()
         };
         let track_last_cell = true;
-        // SAFETY: the handles are live, `term` is serialized by the engine, each option value has its documented type.
+        // SAFETY: live handles, serialized `term`, documented option types; action/button defined, cells non-zero, position finite and clamped above, so no Zig conversion overflows.
         unsafe {
             sys::ghostty_mouse_encoder_setopt_from_terminal(self.encoder, term);
             sys::ghostty_mouse_encoder_setopt(
@@ -177,19 +214,21 @@ impl MouseEncoder {
                 Some(button) => sys::ghostty_mouse_event_set_button(self.event, button),
                 None => sys::ghostty_mouse_event_clear_button(self.event),
             }
-            sys::ghostty_mouse_event_set_mods(self.event, input.mods);
-            sys::ghostty_mouse_event_set_position(
-                self.event,
-                sys::GhosttyMousePosition {
-                    x: input.x,
-                    y: input.y,
-                },
-            );
+            sys::ghostty_mouse_event_set_mods(self.event, input.mods & MODS_DEFINED);
+            sys::ghostty_mouse_event_set_position(self.event, position);
         }
         encode_with("ghostty_mouse_encoder_encode", |buf, cap, len| {
             // SAFETY: `buf` has `cap` writable bytes (or is null with `cap` 0 for a size query).
             unsafe { sys::ghostty_mouse_encoder_encode(self.encoder, self.event, buf, cap, len) }
         })
+    }
+}
+
+impl MouseEncoder {
+    /// Forgets the last reported cell, so the next motion is reported even inside it.
+    pub(super) fn reset(&mut self) {
+        // SAFETY: the encoder handle is live and owned by this value.
+        unsafe { sys::ghostty_mouse_encoder_reset(self.encoder) };
     }
 }
 

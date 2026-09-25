@@ -21,7 +21,7 @@ mod common;
 use std::fmt::Write as _;
 use std::path::PathBuf;
 
-use common::{attach, palette, pump, view};
+use common::{assert_matches_formatter, attach, palette, pump, view};
 use ply_proto::data::{Color, Style};
 use ply_term::{Engine, EngineOutput, Replica};
 
@@ -109,6 +109,7 @@ struct Replayed {
     replica: Replica,
     output: Vec<EngineOutput>,
     deltas: usize,
+    oracle_checks: usize,
 }
 
 fn replay(bytes: &[u8], cols: u16, rows: u16, chunk: usize) -> Replayed {
@@ -117,18 +118,25 @@ fn replay(bytes: &[u8], cols: u16, rows: u16, chunk: usize) -> Replayed {
     let (mut client, mut replica) = attach(&mut engine);
     let mut output = Vec::new();
     let mut deltas = 0;
-    for piece in bytes.chunks(chunk) {
+    let mut oracle_checks = 0;
+    for (i, piece) in bytes.chunks(chunk).enumerate() {
         output.push(engine.write(piece));
         if pump(&mut engine, &mut client, &mut replica) {
             deltas += 1;
         }
+        if i % 4 == 3 {
+            assert_matches_formatter(&mut engine, &replica, &format!("after chunk {i}"));
+            oracle_checks += 1;
+        }
     }
     pump(&mut engine, &mut client, &mut replica);
+    assert_matches_formatter(&mut engine, &replica, "at the end");
     Replayed {
         engine,
         replica,
         output,
         deltas,
+        oracle_checks: oracle_checks + 1,
     }
 }
 
@@ -139,6 +147,11 @@ fn check_against_stored(name: &str, cols: u16, rows: u16) -> Replayed {
         run.deltas > 10,
         "{name}: the replay drove {} Deltas",
         run.deltas
+    );
+    assert!(
+        run.oracle_checks > 4,
+        "{name}: {} formatter checkpoints",
+        run.oracle_checks
     );
     assert_eq!(
         view(&run.replica),

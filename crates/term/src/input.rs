@@ -6,9 +6,15 @@
 //! program enabled mode 1004 (R-R8); mouse events are encoded from the pixel position against the engine's grid and
 //! cell size, with the pressed-button state tracked per pane for drag reporting (R-R9); unsafe pastes are refused
 //! until the user confirms (Ruling R21). INPUT_RAW frames are not encoded: their bytes go to the pty as they are.
+//!
+//! Frames decoded by `ply_proto` are already range-checked, but the event types are plain structs plyd could build
+//! by hand, and libghostty-vt treats an undefined enum value or a non-finite position as undefined behaviour. So a key
+//! above [`ply_proto::data::MAX_KEY_CODE`], an unshifted codepoint that is not a Unicode scalar value (sent as 0), and a non-finite
+//! pointer position are refused here with a debug log line; huge finite positions are clamped to the surface.
 
 use ply_proto::data::{
-    Focus, Frame, KeyAction, KeyEvent, Mods, MouseAction, MouseButton, MouseEvent, Paste,
+    Focus, Frame, KeyAction, KeyEvent, MAX_KEY_CODE, Mods, MouseAction, MouseButton, MouseEvent,
+    Paste,
 };
 
 use crate::engine::{Engine, KeyInput, MouseInput, PasteResult};
@@ -75,6 +81,14 @@ pub fn encode_input(engine: &mut Engine, input: Input<'_>) -> Result<Encoded> {
 }
 
 fn encode_key(engine: &mut Engine, key: &KeyEvent) -> Result<Encoded> {
+    if key.key > MAX_KEY_CODE {
+        tracing::debug!(
+            pane_id = engine.pane_id(),
+            key = key.key,
+            "key code outside GhosttyKey; nothing encoded"
+        );
+        return Ok(Encoded::Nothing);
+    }
     let chord = Mods::SHIFT | Mods::CTRL | Mods::ALT | Mods::SUPER;
     if key.key == KEY_ENTER
         && key.action != KeyAction::Release
@@ -90,7 +104,7 @@ fn encode_key(engine: &mut Engine, key: &KeyEvent) -> Result<Encoded> {
         consumed_mods: key.consumed_mods.bits(),
         action: key.action as i32,
         composing: key.composing,
-        unshifted_codepoint: key.unshifted_codepoint,
+        unshifted_codepoint: char::from_u32(key.unshifted_codepoint).map_or(0, u32::from),
         text: &key.text,
     };
     engine.encode_key(&input).map(bytes_or_nothing)
@@ -102,6 +116,15 @@ fn encode_mouse(engine: &mut Engine, mouse: &MouseEvent) -> Result<Encoded> {
         tracing::debug!(
             pane_id = engine.pane_id(),
             "mouse event before the cell size is known; nothing encoded"
+        );
+        return Ok(Encoded::Nothing);
+    }
+    if !mouse.x.is_finite() || !mouse.y.is_finite() {
+        tracing::debug!(
+            pane_id = engine.pane_id(),
+            x = mouse.x,
+            y = mouse.y,
+            "non-finite mouse position; nothing encoded"
         );
         return Ok(Encoded::Nothing);
     }
@@ -141,5 +164,17 @@ fn bytes_or_nothing(bytes: Vec<u8>) -> Encoded {
         Encoded::Nothing
     } else {
         Encoded::Bytes(bytes)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn ply_proto_accepts_exactly_the_keys_libghostty_defines() {
+        assert_eq!(
+            i32::from(ply_proto::data::MAX_KEY_CODE),
+            ghostty_sys::GHOSTTY_KEY_MAX
+        );
+        assert_eq!(i32::from(super::KEY_ENTER), ghostty_sys::GHOSTTY_KEY_ENTER);
     }
 }

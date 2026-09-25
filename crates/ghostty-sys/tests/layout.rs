@@ -298,6 +298,52 @@ fn struct_layouts_match_the_manifest() {
             ("allow_unsafe", offset_of!(GhosttyPaste, allow_unsafe)),
         ],
     );
+    layout(
+        &m,
+        "GhosttyFormatterScreenExtra",
+        size_of::<GhosttyFormatterScreenExtra>(),
+        &[
+            ("cursor", offset_of!(GhosttyFormatterScreenExtra, cursor)),
+            (
+                "charsets",
+                offset_of!(GhosttyFormatterScreenExtra, charsets),
+            ),
+        ],
+    );
+    layout(
+        &m,
+        "GhosttyFormatterTerminalExtra",
+        size_of::<GhosttyFormatterTerminalExtra>(),
+        &[
+            (
+                "palette",
+                offset_of!(GhosttyFormatterTerminalExtra, palette),
+            ),
+            (
+                "keyboard",
+                offset_of!(GhosttyFormatterTerminalExtra, keyboard),
+            ),
+            ("screen", offset_of!(GhosttyFormatterTerminalExtra, screen)),
+        ],
+    );
+    layout(
+        &m,
+        "GhosttyFormatterTerminalOptions",
+        size_of::<GhosttyFormatterTerminalOptions>(),
+        &[
+            ("emit", offset_of!(GhosttyFormatterTerminalOptions, emit)),
+            (
+                "unwrap",
+                offset_of!(GhosttyFormatterTerminalOptions, unwrap),
+            ),
+            ("trim", offset_of!(GhosttyFormatterTerminalOptions, trim)),
+            ("extra", offset_of!(GhosttyFormatterTerminalOptions, extra)),
+            (
+                "selection",
+                offset_of!(GhosttyFormatterTerminalOptions, selection),
+            ),
+        ],
+    );
     for (ty, size) in [
         ("GhosttyCell", size_of::<GhosttyCell>()),
         ("GhosttyRow", size_of::<GhosttyRow>()),
@@ -370,6 +416,10 @@ fn enum_constants_match_the_manifest() {
         ("MODE_DEFAULT", GHOSTTY_TERMINAL_OPT_MODE_DEFAULT),
         ("MODE", GHOSTTY_TERMINAL_OPT_MODE),
         ("TERMINFO_NAME", GHOSTTY_TERMINAL_OPT_TERMINFO_NAME),
+        (
+            "CLIPBOARD_WRITE_MAX_BYTES",
+            GHOSTTY_TERMINAL_OPT_CLIPBOARD_WRITE_MAX_BYTES,
+        ),
     ] {
         v("GhosttyTerminalOption", name, got);
     }
@@ -587,6 +637,11 @@ fn enum_constants_match_the_manifest() {
     v("GhosttyKey", "UNIDENTIFIED", GHOSTTY_KEY_UNIDENTIFIED);
     v("GhosttyKey", "ENTER", GHOSTTY_KEY_ENTER);
     v(
+        "GhosttyFormatterFormat",
+        "PLAIN",
+        GHOSTTY_FORMATTER_FORMAT_PLAIN,
+    );
+    v(
         "GhosttyKeyEncoderOption",
         "MACOS_OPTION_AS_ALT",
         GHOSTTY_KEY_ENCODER_OPT_MACOS_OPTION_AS_ALT,
@@ -667,5 +722,9 @@ fn ply_proto_numbering_matches_the_library() {
         .filter(|(k, _)| *k != "MAX_VALUE")
         .filter_map(|(_, v)| v.as_i64())
         .max();
-    assert_eq!(max, Some(175), "ply_proto::data::MAX_KEY_CODE");
+    assert_eq!(
+        max,
+        Some(i64::from(GHOSTTY_KEY_MAX)),
+        "the highest defined key"
+    );
 }

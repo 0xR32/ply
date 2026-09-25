@@ -1,14 +1,16 @@
 //! The safe per-pane libghostty-vt terminal (feature `engine`, plyd only; INV-17).
 //!
 //! This module and its children are the only place in ply-term with `unsafe`: every libghostty-vt handle is owned
-//! by an [`Engine`] and freed on drop, every call goes through `&mut self` so the library's no-concurrent-access rule
-//! holds, and callbacks write only into state the engine owns (see `effects`). Nothing here blocks or does I/O.
+//! by an [`Engine`] and freed on drop. An `Engine` is `Send` but not `Sync`, so all calls on one terminal, through
+//! `&self` or `&mut self`, run on one thread at a time, as the library requires; calls that mutate the terminal take
+//! `&mut self`. Callbacks write only into state the engine owns (see `effects`). Nothing here blocks or does I/O.
 //!
 //! An [`Engine`] is configured the way ADR-0005 Decision 4 lists before any child byte arrives: effect callbacks,
 //! the palette (so OSC 4/10/11 are answered, R-R4), XTVERSION `ply <version>` and grapheme clustering (mode 2027) as
 //! the reset default (R22), `TERMINFO_NAME` `xterm-256color`, no scrollback byte cap and a line cap of
-//! `scrollback_lines + 300` (R-R22), continuation tracking for snapshots, and Kitty graphics and the Glyph Protocol
-//! off (C2 carries neither). The library's log goes to `tracing` under the target `libghostty_vt`.
+//! `scrollback_lines + 300` (R-R22), continuation tracking for snapshots, OSC 5522 clipboard writes capped at
+//! [`CLIPBOARD_WRITE_MAX_BYTES`], and Kitty graphics and the Glyph Protocol off (C2 carries neither). The library's
+//! log goes to `tracing` under the target `libghostty_vt`; the hook is installed before the first terminal exists.
 //!
 //! Dirty tracking: libghostty-vt's render state consumes the terminal's dirty flags, so each engine owns exactly one
 //! and records, per viewport row, the generation at which it last changed; every [`crate::DeltaBuilder`] (one per
@@ -22,6 +24,7 @@ mod encoders;
 mod render;
 
 use std::ffi::c_void;
+use std::marker::PhantomData;
 use std::ptr::{self, NonNull};
 use std::sync::Once;
 
@@ -29,7 +32,7 @@ use ghostty_sys as sys;
 use ply_proto::data::{CellFlags, Cursor, History, Modes, Snapshot, Style};
 use ply_proto::pane::OptionAsMeta;
 
-use self::cells::RawCell;
+use self::cells::{CellReadError, RawCell};
 use self::effects::Effects;
 use self::encoders::{KeyEncoder, MouseEncoder, Surface};
 pub(crate) use self::encoders::{KeyInput, MouseInput, PasteResult};
@@ -50,6 +53,9 @@ pub const SCROLLBACK_SLACK: u32 = 300;
 /// Bytes of an unfinished escape sequence kept so a snapshot taken mid-sequence restores it.
 const CONTINUATION_MAX_BYTES: usize = 64 * 1024;
 
+/// Most decoded bytes one OSC 5522 clipboard write may buffer (the library's default is 64 MiB); OSC 52 is bounded by the sequence length instead.
+pub const CLIPBOARD_WRITE_MAX_BYTES: usize = 4 * 1024 * 1024;
+
 /// OSC 9 / OSC 777 desktop notification (C8); OSC 9 bodies libghostty-vt parses as ConEmu commands never arrive.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Notification {
@@ -62,22 +68,22 @@ pub struct Notification {
 /// State of an OSC 9;4 progress report.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProgressState {
-    /// Remove the progress indicator.
+    /// The program cleared its progress; hide the indicator.
     Remove,
-    /// Show `percent`.
+    /// Normal progress at `percent`.
     Set,
-    /// Error state.
+    /// The task failed; show `percent`, if any, as an error.
     Error,
-    /// Busy without a percentage.
+    /// Busy with no measurable progress (`percent` is `None`).
     Indeterminate,
-    /// Paused.
+    /// The task is paused; keep showing `percent` as paused.
     Pause,
 }
 
 /// An OSC 9;4 progress report.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ProgressReport {
-    /// What the program reported.
+    /// The state the program reported.
     pub state: ProgressState,
     /// Percent 0–100 when the program gave one.
     pub percent: Option<u8>,
@@ -88,7 +94,7 @@ pub struct ProgressReport {
 pub struct ClipboardContent {
     /// MIME type, e.g. `text/plain`, lossy UTF-8.
     pub mime: String,
-    /// Decoded data.
+    /// The data, already base64-decoded, in the representation `mime` names.
     pub data: Vec<u8>,
 }
 
@@ -104,7 +110,7 @@ pub struct ClipboardWrite {
 pub struct EngineOutput {
     /// Bytes to write back to the pty, in order: query answers (DA, DSR, OSC 4/10/11, `CSI ? u`, size reports), mode reports and XTVERSION.
     pub reply: Vec<u8>,
-    /// BEL characters received.
+    /// BEL characters received during the call, 0 when none.
     pub bells: u32,
     /// The new title (OSC 0/2, lossy UTF-8) when it changed, however often it changed during the write.
     pub title: Option<String>,
@@ -145,13 +151,13 @@ pub enum Compression {
 /// One search match in C2 row coordinates (0.. the screen, negative the scrollback); start and end are inclusive.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct SearchMatch {
-    /// Row of the first cell.
+    /// C2 row of the first matched cell.
     pub start_row: i64,
-    /// Column of the first cell.
+    /// 0-based column of the first matched cell.
     pub start_col: u16,
-    /// Row of the last cell.
+    /// C2 row of the last matched cell (after `start_row` when the match wraps).
     pub end_row: i64,
-    /// Column of the last cell.
+    /// 0-based column of the last matched cell.
     pub end_col: u16,
 }
 
@@ -205,13 +211,14 @@ pub struct Engine {
     render: RenderState,
     effects: NonNull<Effects>,
     term: Terminal,
+    not_sync: PhantomData<*mut ()>,
 }
 
-// SAFETY: every handle is owned by this Engine and used via `&mut self`; libghostty-vt has no thread affinity.
+// SAFETY: every handle is owned by this Engine, which is !Sync (the marker), so one thread uses it at a time; libghostty-vt has no thread affinity.
 unsafe impl Send for Engine {}
 
 impl Engine {
-    /// A `cols` × `rows` terminal configured as the module docs list; fails with [`Error::InvalidSize`] for a zero size or [`Error::Ghostty`] if the library refuses.
+    /// A `cols` × `rows` terminal configured as the module docs list; errors: [`Error::InvalidSize`] for a zero size, [`Error::Ghostty`] if the library refuses.
     pub fn new(
         pane_id: u64,
         cols: u16,
@@ -219,6 +226,7 @@ impl Engine {
         scrollback_lines: u32,
         palette: &Palette,
     ) -> Result<Self> {
+        install_log_hook();
         if cols == 0 || rows == 0 {
             return Err(Error::InvalidSize { cols, rows });
         }
@@ -230,13 +238,14 @@ impl Engine {
         Self::configure(pane_id, Terminal::new(raw), scrollback_lines, palette)
     }
 
-    /// A terminal decoded from [`Engine::save`] output (possibly from an earlier plyd), re-configured as [`Engine::new`] does; fails with [`Error::Ghostty`] when the bytes do not decode.
+    /// A terminal decoded from [`Engine::save`] output (possibly from an earlier plyd), re-configured as [`Engine::new`] does; errors: [`Error::Ghostty`] when the bytes do not decode.
     pub fn restore(
         pane_id: u64,
         state: &[u8],
         scrollback_lines: u32,
         palette: &Palette,
     ) -> Result<Self> {
+        install_log_hook();
         let mut decoder = ptr::null_mut();
         // SAFETY: `state` outlives the decoder, which is freed below before returning.
         check("ghostty_snapshot_decoder_new_buf", unsafe {
@@ -284,8 +293,8 @@ impl Engine {
         scrollback_lines: u32,
         palette: &Palette,
     ) -> Result<Self> {
-        install_log_hook();
         let effects = NonNull::from(Box::leak(Box::new(Effects {
+            pane_id,
             dark: palette.is_dark(),
             ..Effects::default()
         })));
@@ -306,6 +315,7 @@ impl Engine {
             render: RenderState::new()?,
             effects,
             term,
+            not_sync: PhantomData,
         };
         // SAFETY: the terminal is live and `effects` is owned by the engine until drop, after the terminal is freed.
         unsafe { effects::install(engine.term.raw, engine.effects.as_ptr()) }
@@ -316,6 +326,7 @@ impl Engine {
         let lines = usize::try_from(scrollback_lines.saturating_add(SCROLLBACK_SLACK))
             .unwrap_or(usize::MAX);
         let continuation = CONTINUATION_MAX_BYTES;
+        let clipboard_max = CLIPBOARD_WRITE_MAX_BYTES;
         let kitty_storage = 0u64;
         let glyph_protocol = false;
         let grapheme = sys::GhosttyTerminalModeConfig {
@@ -338,6 +349,10 @@ impl Engine {
                 (&raw const continuation).cast(),
             )?;
         }
+        engine.set(
+            sys::GHOSTTY_TERMINAL_OPT_CLIPBOARD_WRITE_MAX_BYTES,
+            (&raw const clipboard_max).cast(),
+        )?;
         engine.set(
             sys::GHOSTTY_TERMINAL_OPT_KITTY_IMAGE_STORAGE_LIMIT,
             (&raw const kitty_storage).cast(),
@@ -363,7 +378,7 @@ impl Engine {
         self.pane_id
     }
 
-    /// Grid size as `(cols, rows)`.
+    /// Grid size as `(cols, rows)`, as last set by [`Engine::new`], [`Engine::restore`] or [`Engine::resize`].
     pub fn size(&self) -> (u16, u16) {
         (self.cols, self.rows)
     }
@@ -385,7 +400,7 @@ impl Engine {
         self.drain()
     }
 
-    /// Resizes to `cols` × `rows` cells of `cell_width_px` × `cell_height_px` (the primary screen reflows, DEC 2026 ends); the output may hold a mode 2048 report.
+    /// Resizes to `cols` × `rows` cells of `cell_width_px` × `cell_height_px` (the primary screen reflows, DEC 2026 ends); the output may hold a mode 2048 report; errors: [`Error::InvalidSize`] for a zero size, [`Error::Ghostty`] if refused (the old size stays).
     pub fn resize(
         &mut self,
         cols: u16,
@@ -420,7 +435,7 @@ impl Engine {
         Ok(self.drain())
     }
 
-    /// Sets the default colours the terminal answers OSC 4/10/11/12 and the colour-scheme query from (R-R4); OSC overrides a program made stay.
+    /// Sets the default colours the terminal answers OSC 4/10/11/12 and the colour-scheme query from (R-R4); OSC overrides a program made stay; errors: [`Error::Ghostty`] if refused.
     pub fn set_palette(&mut self, palette: &Palette) -> Result<()> {
         let rgb = |c: ply_proto::pane::Rgb| sys::GhosttyColorRgb {
             r: c.r,
@@ -531,7 +546,7 @@ impl Engine {
         self.mode(sys::GHOSTTY_MODE_SYNC_OUTPUT)
     }
 
-    /// Ends an open DEC 2026 update, for plyd's 150 ms cap (R-R18); a no-op when none is open.
+    /// Ends an open DEC 2026 update, for plyd's 150 ms cap (R-R18); a no-op when none is open; errors: [`Error::Ghostty`] if refused.
     pub fn end_synchronized_update(&mut self) -> Result<()> {
         let off = sys::GhosttyTerminalModeConfig {
             mode: sys::GHOSTTY_MODE_SYNC_OUTPUT,
@@ -556,7 +571,7 @@ impl Engine {
         token
     }
 
-    /// One bounded incremental compression step over idle scrollback (milliseconds at most); repeat while it returns [`Compression::Pending`].
+    /// One bounded incremental compression step over idle scrollback (milliseconds at most); repeat while it returns [`Compression::Pending`]; errors: [`Error::Ghostty`].
     pub fn compress_idle(&mut self) -> Result<Compression> {
         let mut result = sys::GHOSTTY_TERMINAL_COMPRESSION_RESULT_UNSUPPORTED;
         // SAFETY: the terminal is live; the out pointer is a compression result.
@@ -574,7 +589,7 @@ impl Engine {
         })
     }
 
-    /// Every match of `needle` (ASCII letters case-insensitive, else byte-exact) on the active screen and its scrollback, newest first; empty for an empty needle.
+    /// Every match of `needle` (ASCII letters case-insensitive, else byte-exact) on the active screen and its scrollback, newest first; empty for an empty needle; blocks for the scrollback's size; errors: [`Error::Ghostty`].
     pub fn search(&mut self, needle: &str) -> Result<Vec<SearchMatch>> {
         if needle.is_empty() {
             return Ok(Vec::new());
@@ -692,7 +707,7 @@ impl Engine {
         (code == sys::GHOSTTY_SUCCESS).then_some(point)
     }
 
-    /// The terminal's full state (screen, scrollback, modes, title, colours, unfinished sequence) for [`Engine::restore`]; the format is libghostty-vt's and valid only for the same pin (ADR-0005).
+    /// The terminal's full state (screen, scrollback, modes, title, colours, unfinished sequence) for [`Engine::restore`], valid only for the same libghostty-vt pin (ADR-0005); errors: [`Error::Ghostty`].
     pub fn save(&mut self) -> Result<Vec<u8>> {
         let (mut data, mut len) = (ptr::null_mut(), 0usize);
         // SAFETY: the terminal is live; on success the library hands us `len` bytes at `data` to free with ghostty_free.
@@ -714,12 +729,12 @@ impl Engine {
         Ok(bytes)
     }
 
-    /// The whole screen as a C2 Snapshot with its own complete style table (seq 1), for one-off readers; attached clients use their [`DeltaBuilder`].
+    /// The whole screen as a C2 Snapshot with its own complete style table (seq 1), for one-off readers; attached clients use their [`DeltaBuilder`]; errors: [`Error::Ghostty`].
     pub fn snapshot(&mut self) -> Result<Snapshot> {
         DeltaBuilder::new().snapshot(self)
     }
 
-    /// Scrollback rows `start..start + count` (C2 indexes, clipped to what exists and to one frame) with their own style table, for one-off readers.
+    /// Scrollback rows `start..start + count` (C2 indexes, clipped to what exists and to one frame) with their own style table, for one-off readers; errors: [`Error::Ghostty`].
     pub fn scroll_history(&mut self, start: i64, count: u16) -> Result<History> {
         DeltaBuilder::new().history(self, start, count)
     }
@@ -771,7 +786,7 @@ impl Engine {
         want: impl Fn(u16) -> bool,
         sink: &mut S,
     ) -> Result<()> {
-        self.render.read_rows(want, sink)
+        self.render.read_rows(self.pane_id, want, sink)
     }
 
     /// Feeds scrollback rows `lo..hi` (C2 indexes, already clipped) into `sink`; stops early when `keep_going` says so.
@@ -793,22 +808,41 @@ impl Engine {
                 continue;
             };
             let mut wrapped = false;
-            if let Some(first) = self.history_ref(0, y) {
-                let mut header: sys::GhosttyRow = 0;
+            let mut header: sys::GhosttyRow = 0;
+            let code = match self.history_ref(0, y) {
                 // SAFETY: the reference is fresh; out pointers have their documented types.
-                unsafe {
-                    if sys::ghostty_grid_ref_row(&first, &raw mut header) == sys::GHOSTTY_SUCCESS {
-                        sys::ghostty_row_get(
+                Some(first) => unsafe {
+                    match sys::ghostty_grid_ref_row(&first, &raw mut header) {
+                        sys::GHOSTTY_SUCCESS => sys::ghostty_row_get(
                             header,
                             sys::GHOSTTY_ROW_DATA_WRAP,
                             (&raw mut wrapped).cast(),
-                        );
+                        ),
+                        other => other,
                     }
-                }
+                },
+                None => sys::GHOSTTY_INVALID_VALUE,
+            };
+            if code != sys::GHOSTTY_SUCCESS {
+                tracing::warn!(
+                    pane_id = self.pane_id,
+                    row = index,
+                    code,
+                    "libghostty-vt could not read a history row's wrap flag; treated as unwrapped"
+                );
+                wrapped = false;
             }
             sink.begin_row(row_index, wrapped);
+            let mut failed: Option<(CellReadError, usize)> = None;
+            let mut note = |e: CellReadError| {
+                failed = Some((failed.map_or(e, |f| f.0), failed.map_or(1, |f| f.1 + 1)));
+            };
             for x in 0..self.cols {
                 let Some(cell_ref) = self.history_ref(x, y) else {
+                    note(CellReadError {
+                        data: 0,
+                        code: sys::GHOSTTY_INVALID_VALUE,
+                    });
                     sink.cell(0, &Style::default(), CellFlags::empty(), &[]);
                     continue;
                 };
@@ -817,11 +851,18 @@ impl Engine {
                 check("ghostty_grid_ref_cell", unsafe {
                     sys::ghostty_grid_ref_cell(&cell_ref, &raw mut raw)
                 })?;
-                let cell = RawCell::decode(raw);
-                if cell.is_blank() {
-                    sink.cell(0, &Style::default(), CellFlags::empty(), &[]);
-                    continue;
-                }
+                let cell = match RawCell::decode(raw) {
+                    Ok(cell) if !cell.is_blank() => cell,
+                    Ok(_) => {
+                        sink.cell(0, &Style::default(), CellFlags::empty(), &[]);
+                        continue;
+                    }
+                    Err(e) => {
+                        note(e);
+                        sink.cell(0, &Style::default(), CellFlags::empty(), &[]);
+                        continue;
+                    }
+                };
                 let mut style = Style::default();
                 if cell.styled {
                     let mut raw_style = cells::empty_style();
@@ -831,8 +872,10 @@ impl Engine {
                     })?;
                     style = cells::style(&raw_style);
                 }
-                if let Some(bg) = cell.tag_background(raw) {
-                    style.bg = bg;
+                match cell.tag_background(raw) {
+                    Ok(Some(bg)) => style.bg = bg,
+                    Ok(None) => {}
+                    Err(e) => note(e),
                 }
                 let mut flags = cell.flags();
                 let mut extra: &[u32] = &[];
@@ -860,12 +903,23 @@ impl Engine {
                         };
                     }
                     check("ghostty_grid_ref_graphemes", code)?;
+                    let len = len.min(graphemes.len());
                     if len > 1 {
                         extra = &graphemes[1..len];
                         flags = flags | CellFlags::GRAPHEME;
                     }
                 }
                 sink.cell(cell.codepoint, &style, flags, extra);
+            }
+            if let Some((first, count)) = failed {
+                tracing::warn!(
+                    pane_id = self.pane_id,
+                    row = index,
+                    count,
+                    data = first.data,
+                    code = first.code,
+                    "libghostty-vt refused history cell reads; those cells are drawn blank"
+                );
             }
             sink.end_row();
         }
@@ -930,6 +984,58 @@ impl Engine {
 
     pub(crate) fn pressed_buttons(&mut self) -> &mut u16 {
         &mut self.buttons
+    }
+
+    /// Forgets every held mouse button and the last reported cell; plyd calls it when a client detaches or the view loses focus, so a release seen elsewhere does not leave a drag stuck.
+    pub fn reset_mouse_buttons(&mut self) {
+        self.buttons = 0;
+        self.mouse.reset();
+    }
+
+    /// The active screen and its scrollback as plain text from libghostty-vt's own formatter (trailing whitespace trimmed, soft wraps kept as line breaks), an oracle independent of the C2 path; errors: [`Error::Ghostty`] when the formatter fails.
+    pub fn plain_text(&mut self) -> Result<String> {
+        let options = sys::GhosttyFormatterTerminalOptions {
+            size: size_of::<sys::GhosttyFormatterTerminalOptions>(),
+            emit: sys::GHOSTTY_FORMATTER_FORMAT_PLAIN,
+            unwrap: false,
+            trim: true,
+            extra: sys::GhosttyFormatterTerminalExtra {
+                size: size_of::<sys::GhosttyFormatterTerminalExtra>(),
+                screen: sys::GhosttyFormatterScreenExtra {
+                    size: size_of::<sys::GhosttyFormatterScreenExtra>(),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            selection: ptr::null(),
+        };
+        let mut formatter = ptr::null_mut();
+        // SAFETY: the terminal is live; the formatter is freed below, before the terminal can be.
+        check("ghostty_formatter_terminal_new", unsafe {
+            sys::ghostty_formatter_terminal_new(
+                ptr::null(),
+                &raw mut formatter,
+                self.term.raw,
+                options,
+            )
+        })?;
+        let (mut data, mut len) = (ptr::null_mut(), 0usize);
+        // SAFETY: the formatter is live and the terminal does not change during the call.
+        let code = unsafe {
+            sys::ghostty_formatter_format_alloc(formatter, ptr::null(), &raw mut data, &raw mut len)
+        };
+        // SAFETY: the formatter was created above and is freed once.
+        unsafe { sys::ghostty_formatter_free(formatter) };
+        check("ghostty_formatter_format_alloc", code)?;
+        if data.is_null() {
+            return Ok(String::new());
+        }
+        // SAFETY: `data` holds `len` initialised bytes owned by us until freed right after the copy.
+        let text =
+            String::from_utf8_lossy(unsafe { std::slice::from_raw_parts(data, len) }).into_owned();
+        // SAFETY: frees the allocation the library made for this call, once.
+        unsafe { sys::ghostty_free(ptr::null(), data, len) };
+        Ok(text)
     }
 
     pub(crate) fn encode_focus(&self, gained: bool) -> Result<Vec<u8>> {

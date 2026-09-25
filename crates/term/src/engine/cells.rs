@@ -19,39 +19,42 @@ pub(super) struct RawCell {
     pub(super) styled: bool,
 }
 
+/// A `ghostty_cell_get` the library refused: the data kind asked for and its `GhosttyResult`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct CellReadError {
+    pub(super) data: sys::GhosttyCellData,
+    pub(super) code: sys::GhosttyResult,
+}
+
+/// Reads one field of a packed cell into `out`, which must be the data kind's documented type.
+fn cell_get<T>(
+    raw: sys::GhosttyCell,
+    data: sys::GhosttyCellData,
+    out: &mut T,
+) -> Result<(), CellReadError> {
+    // SAFETY: `ghostty_cell_get` reads the packed value; callers pass an `out` of the type `data` documents.
+    let code = unsafe { sys::ghostty_cell_get(raw, data, (out as *mut T).cast::<c_void>()) };
+    if code == sys::GHOSTTY_SUCCESS {
+        Ok(())
+    } else {
+        Err(CellReadError { data, code })
+    }
+}
+
 impl RawCell {
-    /// Decodes `raw` through `ghostty_cell_get`; fields the library refuses read as an empty narrow cell.
-    pub(super) fn decode(raw: sys::GhosttyCell) -> Self {
+    /// Decodes `raw` through `ghostty_cell_get`; fails with the first field the library refuses (the caller draws a blank).
+    pub(super) fn decode(raw: sys::GhosttyCell) -> Result<Self, CellReadError> {
         let mut cell = Self {
             codepoint: 0,
             tag: sys::GHOSTTY_CELL_CONTENT_CODEPOINT,
             wide: sys::GHOSTTY_CELL_WIDE_NARROW,
             styled: false,
         };
-        // SAFETY: `ghostty_cell_get` reads the packed value; each out pointer has the type its data kind documents.
-        unsafe {
-            sys::ghostty_cell_get(
-                raw,
-                sys::GHOSTTY_CELL_DATA_CODEPOINT,
-                (&raw mut cell.codepoint).cast::<c_void>(),
-            );
-            sys::ghostty_cell_get(
-                raw,
-                sys::GHOSTTY_CELL_DATA_CONTENT_TAG,
-                (&raw mut cell.tag).cast::<c_void>(),
-            );
-            sys::ghostty_cell_get(
-                raw,
-                sys::GHOSTTY_CELL_DATA_WIDE,
-                (&raw mut cell.wide).cast::<c_void>(),
-            );
-            sys::ghostty_cell_get(
-                raw,
-                sys::GHOSTTY_CELL_DATA_HAS_STYLING,
-                (&raw mut cell.styled).cast::<c_void>(),
-            );
-        }
-        cell
+        cell_get(raw, sys::GHOSTTY_CELL_DATA_CODEPOINT, &mut cell.codepoint)?;
+        cell_get(raw, sys::GHOSTTY_CELL_DATA_CONTENT_TAG, &mut cell.tag)?;
+        cell_get(raw, sys::GHOSTTY_CELL_DATA_WIDE, &mut cell.wide)?;
+        cell_get(raw, sys::GHOSTTY_CELL_DATA_HAS_STYLING, &mut cell.styled)?;
+        Ok(cell)
     }
 
     /// An empty, unstyled, narrow cell: the C2 default blank.
@@ -72,34 +75,23 @@ impl RawCell {
         }
     }
 
-    /// The background a bg-only cell carries in its content tag, if it is one.
-    pub(super) fn tag_background(&self, raw: sys::GhosttyCell) -> Option<Color> {
+    /// The background a bg-only cell carries in its content tag, if it is one; fails when the library refuses the read.
+    pub(super) fn tag_background(
+        &self,
+        raw: sys::GhosttyCell,
+    ) -> Result<Option<Color>, CellReadError> {
         match self.tag {
             sys::GHOSTTY_CELL_CONTENT_BG_COLOR_PALETTE => {
                 let mut index = 0u8;
-                // SAFETY: the tag says the cell holds a palette index; the out pointer is a u8.
-                unsafe {
-                    sys::ghostty_cell_get(
-                        raw,
-                        sys::GHOSTTY_CELL_DATA_COLOR_PALETTE,
-                        (&raw mut index).cast::<c_void>(),
-                    );
-                }
-                Some(Color::Indexed(index))
+                cell_get(raw, sys::GHOSTTY_CELL_DATA_COLOR_PALETTE, &mut index)?;
+                Ok(Some(Color::Indexed(index)))
             }
             sys::GHOSTTY_CELL_CONTENT_BG_COLOR_RGB => {
                 let mut rgb = sys::GhosttyColorRgb::default();
-                // SAFETY: the tag says the cell holds an RGB colour; the out pointer is a GhosttyColorRgb.
-                unsafe {
-                    sys::ghostty_cell_get(
-                        raw,
-                        sys::GHOSTTY_CELL_DATA_COLOR_RGB,
-                        (&raw mut rgb).cast::<c_void>(),
-                    );
-                }
-                Some(Color::Rgb(rgb.r, rgb.g, rgb.b))
+                cell_get(raw, sys::GHOSTTY_CELL_DATA_COLOR_RGB, &mut rgb)?;
+                Ok(Some(Color::Rgb(rgb.r, rgb.g, rgb.b)))
             }
-            _ => None,
+            _ => Ok(None),
         }
     }
 

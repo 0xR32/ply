@@ -5,7 +5,11 @@
 //! table and carries all of it; a Delta carries only the rows whose generation in the [`Engine`] is newer than the
 //! client's last frame, plus the styles first used since. A client that has not been sent anything, whose grid size
 //! changed, or whose table is full (65 535 styles) gets a Snapshot instead of a Delta. Trailing default blank cells
-//! are left out of every row. Frames never exceed [`MAX_FRAME_LEN`]: a History page stops at the last row that fits.
+//! are left out of every row.
+//!
+//! A History page never exceeds [`MAX_FRAME_LEN`]: it stops at the last row that fits, and its `styles_added` may
+//! hold styles of rows it left out, which the client must still add to its table (later frames use those ids without
+//! resending them). Snapshots and Deltas are bounded by the grid, at most 23 bytes a cell plus grapheme codepoints.
 
 use std::collections::HashMap;
 
@@ -19,10 +23,12 @@ use crate::error::Result;
 
 /// Bytes of a frame before its rows, generous for every kind, used to keep History pages under the frame cap.
 const FRAME_OVERHEAD: usize = 64;
-/// Encoded bytes of one style entry.
-const STYLE_ENTRY_LEN: usize = 14;
+/// Encoded bytes of one style entry (`id:u16 · fg · bg · underline colour (4 each) · attrs:u16`), pinned by a test against the encoder.
+const STYLE_ENTRY_LEN: usize = 16;
 /// Encoded bytes of a row header (`index:i32 · flags:u8 · n:u16`).
 const ROW_HEADER_LEN: usize = 7;
+/// Encoded bytes of a cell without grapheme codepoints (`codepoint:u32 · style:u16 · flags:u8`).
+const CELL_LEN: usize = 7;
 
 /// A frame that brings a client up to date: a Delta normally, a Snapshot when one is required.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -73,14 +79,14 @@ impl DeltaBuilder {
         self.seq
     }
 
-    /// The whole screen with a complete, fresh style table; answers ATTACH, RESIZE and plyd's forced resend (spec 4.2).
+    /// The whole screen with a complete, fresh style table; answers ATTACH, RESIZE and plyd's forced resend (spec 4.2); errors: [`crate::Error::Ghostty`] when the render state cannot be read.
     pub fn snapshot(&mut self, engine: &mut Engine) -> Result<Snapshot> {
         engine.refresh()?;
         self.styles.clear();
         self.next_id = 1;
         self.table_full_logged = false;
         let (cols, rows) = engine.render_size()?;
-        let mut sink = RowCollector::new(self, cols);
+        let mut sink = RowCollector::new(self, cols, engine.pane_id());
         engine.read_rows(|_| true, &mut sink)?;
         let (lines, styles) = sink.finish();
         let sent = Sent {
@@ -105,7 +111,7 @@ impl DeltaBuilder {
         })
     }
 
-    /// What changed since this client's last frame, or `None` when nothing it shows changed (idle panes send nothing, R-R21); a Snapshot when one is required (module docs).
+    /// What changed since this client's last frame: rows newer than it, or a row-less Delta when only the cursor, modes or scrollback count changed (Ruling R39); `None` when nothing changed (R-R21); a Snapshot when one is required; errors: [`crate::Error::Ghostty`].
     pub fn delta(&mut self, engine: &mut Engine) -> Result<Option<Update>> {
         engine.refresh()?;
         let (cols, rows) = engine.render_size()?;
@@ -131,7 +137,7 @@ impl DeltaBuilder {
         if !changed.contains(&true) && now == last {
             return Ok(None);
         }
-        let mut sink = RowCollector::new(self, cols);
+        let mut sink = RowCollector::new(self, cols, engine.pane_id());
         engine.read_rows(
             |y| changed.get(usize::from(y)).copied().unwrap_or(false),
             &mut sink,
@@ -150,28 +156,29 @@ impl DeltaBuilder {
         })))
     }
 
-    /// Scrollback rows answering FETCH_HISTORY `start..start + count`, clipped to what exists and to one frame (the client asks again for the rest); styles are interned into this client's table.
+    /// Scrollback rows answering FETCH_HISTORY `start..start + count`, clipped to what exists and to one frame (the client asks again for the rest); styles are interned into this client's table; errors: [`crate::Error::Ghostty`].
     pub fn history(&mut self, engine: &mut Engine, start: i64, count: u16) -> Result<History> {
         let scrollback = i64::from(engine.scrollback_rows());
         let lo = start.max(-scrollback);
         let hi = start.saturating_add(i64::from(count)).min(0);
         let (cols, _) = engine.size();
-        let mut sink = RowCollector::new(self, cols);
+        // One more row can add at most a header, its cells and one new style per cell (graphemes are trimmed below).
+        let row_margin = ROW_HEADER_LEN + usize::from(cols) * (CELL_LEN + STYLE_ENTRY_LEN);
+        let mut sink = RowCollector::new(self, cols, engine.pane_id());
         if lo < hi {
             engine.read_history(lo, hi, &mut sink, |s| {
-                s.encoded_len + FRAME_OVERHEAD < MAX_FRAME_LEN
+                s.encoded_len + s.added.len() * STYLE_ENTRY_LEN + FRAME_OVERHEAD + row_margin
+                    <= MAX_FRAME_LEN
             })?;
         }
         let (mut lines, styles_added) = sink.finish();
-        let mut budget = FRAME_OVERHEAD + styles_added.len() * STYLE_ENTRY_LEN;
-        let fits = lines
-            .iter()
-            .take_while(|row| {
-                budget += encoded_row_len(row);
-                budget <= MAX_FRAME_LEN
-            })
-            .count();
-        lines.truncate(fits);
+        let mut total = FRAME_OVERHEAD
+            + styles_added.len() * STYLE_ENTRY_LEN
+            + lines.iter().map(encoded_row_len).sum::<usize>();
+        while total > MAX_FRAME_LEN {
+            let Some(row) = lines.pop() else { break };
+            total -= encoded_row_len(&row);
+        }
         Ok(History {
             start: if lines.is_empty() { start } else { lo },
             lines,
@@ -188,7 +195,7 @@ impl DeltaBuilder {
         self.history(engine, request.start, request.count)
     }
 
-    fn intern(&mut self, style: &Style, added: &mut Vec<StyleEntry>) -> u16 {
+    fn intern(&mut self, style: &Style, added: &mut Vec<StyleEntry>, pane_id: u64) -> u16 {
         if *style == Style::default() {
             return 0;
         }
@@ -198,6 +205,7 @@ impl DeltaBuilder {
         if self.next_id == u16::MAX {
             if !self.table_full_logged {
                 tracing::warn!(
+                    pane_id,
                     styles = self.styles.len(),
                     "C2 style table is full; new styles draw as the default until the next Snapshot"
                 );
@@ -222,11 +230,13 @@ struct RowCollector<'a> {
     last_style: (Style, u16),
     cols: usize,
     encoded_len: usize,
+    pane_id: u64,
 }
 
 impl<'a> RowCollector<'a> {
-    fn new(builder: &'a mut DeltaBuilder, cols: u16) -> Self {
+    fn new(builder: &'a mut DeltaBuilder, cols: u16, pane_id: u64) -> Self {
         Self {
+            pane_id,
             builder,
             rows: Vec::new(),
             added: Vec::new(),
@@ -255,12 +265,13 @@ impl RowSink for RowCollector<'_> {
         let id = if *style == self.last_style.0 {
             self.last_style.1
         } else {
-            let id = self.builder.intern(style, &mut self.added);
+            let id = self.builder.intern(style, &mut self.added, self.pane_id);
             self.last_style = (*style, id);
             id
         };
         let extra = if extra.len() > usize::from(u8::MAX) {
             tracing::debug!(
+                pane_id = self.pane_id,
                 len = extra.len(),
                 "grapheme cluster longer than C2 carries; truncated to 255 codepoints"
             );
@@ -296,11 +307,42 @@ fn encoded_row_len(row: &Row) -> usize {
             .cells
             .iter()
             .map(|c| {
-                7 + if c.extra.is_empty() {
-                    0
-                } else {
-                    1 + 4 * c.extra.len()
-                }
+                CELL_LEN
+                    + if c.extra.is_empty() {
+                        0
+                    } else {
+                        1 + 4 * c.extra.len()
+                    }
             })
             .sum::<usize>()
+}
+
+#[cfg(test)]
+mod tests {
+    use ply_proto::data::{Color, Frame, History, Style, StyleEntry};
+
+    use super::STYLE_ENTRY_LEN;
+
+    #[test]
+    fn the_style_entry_size_matches_the_encoder() {
+        let encoded = |styles_added: Vec<StyleEntry>| {
+            let mut wire = Vec::new();
+            Frame::History(History {
+                start: -1,
+                lines: vec![],
+                styles_added,
+            })
+            .encode(&mut wire)
+            .unwrap();
+            wire.len()
+        };
+        let entry = StyleEntry {
+            id: 1,
+            style: Style {
+                fg: Color::Rgb(1, 2, 3),
+                ..Style::default()
+            },
+        };
+        assert_eq!(encoded(vec![entry]) - encoded(vec![]), STYLE_ENTRY_LEN);
+    }
 }

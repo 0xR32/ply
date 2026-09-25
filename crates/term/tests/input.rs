@@ -344,3 +344,102 @@ fn pastes_are_validated_and_bracketed() {
         "paste bytes are returned, not left behind as replies"
     );
 }
+
+#[test]
+fn undefined_key_codes_encode_nothing_instead_of_reaching_the_library() {
+    let mut e = engine(80, 24);
+    for code in [176, 200, u16::MAX] {
+        assert_eq!(
+            send(&mut e, &key(code, Mods::empty(), "a", 'a')),
+            Encoded::Nothing,
+            "key {code}"
+        );
+    }
+    assert_eq!(
+        send(&mut e, &key(175, Mods::empty(), "", '\0')),
+        Encoded::Nothing,
+        "the last defined key is accepted"
+    );
+    assert_eq!(
+        send(&mut e, &key(A, Mods::empty(), "a", 'a')),
+        bytes(b"a"),
+        "the encoder still works afterwards"
+    );
+    for bad in [0xD800, 0x11_0000, u32::MAX] {
+        let odd = KeyEvent {
+            unshifted_codepoint: bad,
+            ..key(A, Mods::empty(), "a", 'a')
+        };
+        assert_eq!(
+            send(&mut e, &odd),
+            bytes(b"a"),
+            "an invalid unshifted codepoint {bad:#x} is sent as unknown"
+        );
+    }
+}
+
+#[test]
+fn huge_or_non_finite_pointer_positions_are_clamped_or_refused() {
+    let mut e = engine(80, 24);
+    e.resize(80, 24, 10, 20).unwrap();
+    e.write(b"\x1b[?1000h\x1b[?1006h");
+    let none = Mods::empty();
+    let far = |action| mouse(action, MouseButton::Left, none, 1e30, 1e30);
+    assert_eq!(
+        click(&mut e, far(MouseAction::Press)),
+        Encoded::Nothing,
+        "a press outside the surface is not reported"
+    );
+    assert_eq!(
+        click(&mut e, far(MouseAction::Release)),
+        bytes(b"\x1b[<0;80;24m"),
+        "a release anywhere is, at the last cell"
+    );
+    let near = mouse(MouseAction::Release, MouseButton::Left, none, -1e30, -1e30);
+    assert_eq!(click(&mut e, near), bytes(b"\x1b[<0;1;1m"));
+    e.write(b"\x1b[?1016h");
+    let pixels = mouse(MouseAction::Release, MouseButton::Left, none, 1e30, 5.0);
+    assert_eq!(
+        click(&mut e, pixels),
+        bytes(b"\x1b[<0;1600;5m"),
+        "SGR pixels stop at twice the surface width"
+    );
+    for (x, y) in [
+        (f32::NAN, 5.0),
+        (5.0, f32::INFINITY),
+        (f32::NEG_INFINITY, f32::NAN),
+    ] {
+        assert_eq!(
+            click(
+                &mut e,
+                mouse(MouseAction::Release, MouseButton::Left, none, x, y)
+            ),
+            Encoded::Nothing
+        );
+    }
+}
+
+#[test]
+fn resetting_the_buttons_ends_a_drag_the_view_lost() {
+    let mut e = engine(80, 24);
+    e.resize(80, 24, 10, 20).unwrap();
+    e.write(b"\x1b[?1002h\x1b[?1006h");
+    let none = Mods::empty();
+    click(
+        &mut e,
+        mouse(MouseAction::Press, MouseButton::Left, none, 45.0, 50.0),
+    );
+    let outside = mouse(MouseAction::Motion, MouseButton::Left, none, 900.0, 50.0);
+    assert_eq!(
+        click(&mut e, outside),
+        bytes(b"\x1b[<32;80;3M"),
+        "held: dragging out of the surface is reported"
+    );
+    e.reset_mouse_buttons();
+    let outside = mouse(MouseAction::Motion, MouseButton::Left, none, 950.0, 60.0);
+    assert_eq!(
+        click(&mut e, outside),
+        Encoded::Nothing,
+        "after the reset no button is held"
+    );
+}

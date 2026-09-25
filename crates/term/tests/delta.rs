@@ -119,6 +119,7 @@ fn a_replica_fed_random_snapshots_and_deltas_equals_the_engine() {
                 let want = view(&truth(&mut e));
                 assert_eq!(view(&ra), want, "seed {seed} step {step}: client A");
                 assert_eq!(view(&rb), want, "seed {seed} step {step}: client B");
+                common::assert_matches_formatter(&mut e, &ra, &format!("seed {seed} step {step}"));
             }
         }
     }
@@ -369,4 +370,51 @@ fn a_history_page_never_exceeds_one_frame() {
     let mut wire = Vec::new();
     Frame::History(h).encode(&mut wire).unwrap();
     assert!(wire.len() <= ply_proto::data::MAX_FRAME_LEN + ply_proto::data::HEADER_LEN);
+}
+
+#[test]
+fn a_styled_history_page_never_exceeds_one_frame() {
+    let mut e = engine(168, 5);
+    for i in 0..1100u32 {
+        let mut line = String::new();
+        for w in 0..16u32 {
+            let (r, g, b) = (
+                (i * 7 + w) % 256,
+                (i * 13 + w * 17) % 256,
+                (i * 3 + w * 29) % 256,
+            );
+            line.push_str(&format!("\x1b[38;2;{r};{g};{b}mword{w:02}{i:04}\x1b[0m"));
+        }
+        line.push_str("\x1b[48;5;4m........\x1b[0m");
+        e.write(format!("{line}\r\n").as_bytes());
+    }
+    let (mut client, mut replica) = attach(&mut e);
+    let page = client.history(&mut e, -1050, 1000).unwrap();
+    assert!(
+        page.styles_added.len() > 1000,
+        "a style per word: {}",
+        page.styles_added.len()
+    );
+    assert!(
+        !page.lines.is_empty() && page.lines.len() < 1000,
+        "cut to fit: {} rows",
+        page.lines.len()
+    );
+    let frame = Frame::History(page);
+    let mut wire = Vec::new();
+    frame.encode(&mut wire).unwrap();
+    assert!(wire.len() - ply_proto::data::HEADER_LEN <= ply_proto::data::MAX_FRAME_LEN);
+    replica.apply(&frame).unwrap();
+    let Frame::History(page) = frame else {
+        unreachable!()
+    };
+    let next = client
+        .history(&mut e, -1050 + page.lines.len() as i64, 1000)
+        .unwrap();
+    assert_eq!(
+        next.start,
+        -1050 + page.lines.len() as i64,
+        "the next page continues where the cut one stopped"
+    );
+    replica.apply(&Frame::History(next)).unwrap();
 }

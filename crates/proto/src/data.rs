@@ -551,7 +551,7 @@ pub struct History {
     pub start: i64,
     /// Rows `start..start+len`, oldest first; their styles arrive in this frame's `styles_added` or earlier.
     pub lines: Vec<Row>,
-    /// Styles those rows use that the client has not seen yet.
+    /// Styles new to the client; apply them even when discarding the rows (a page cut to fit may name styles of rows it left out, and later frames reuse the ids without resending).
     pub styles_added: Vec<StyleEntry>,
 }
 

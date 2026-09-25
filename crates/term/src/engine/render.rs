@@ -7,7 +7,7 @@ use std::ptr;
 use ghostty_sys as sys;
 use ply_proto::data::{CellFlags, Cursor, CursorShape, Style};
 
-use super::cells::{self, RawCell};
+use super::cells::{self, CellReadError, RawCell};
 use super::{RowSink, check};
 use crate::error::Result;
 
@@ -167,6 +167,7 @@ impl RenderState {
     /// Feeds every row `want` selects, top to bottom, cell by cell into `sink`.
     pub(super) fn read_rows<S: RowSink>(
         &mut self,
+        pane_id: u64,
         want: impl Fn(u16) -> bool,
         sink: &mut S,
     ) -> Result<()> {
@@ -175,14 +176,14 @@ impl RenderState {
         // SAFETY: the iterator was just positioned on this live render state.
         while unsafe { sys::ghostty_render_state_row_iterator_next(self.rows) } {
             if want(y) {
-                self.read_row(y, sink)?;
+                self.read_row(pane_id, y, sink)?;
             }
             y = y.saturating_add(1);
         }
         Ok(())
     }
 
-    fn read_row<S: RowSink>(&mut self, y: u16, sink: &mut S) -> Result<()> {
+    fn read_row<S: RowSink>(&mut self, pane_id: u64, y: u16, sink: &mut S) -> Result<()> {
         let mut header: sys::GhosttyRow = 0;
         let mut wrapped = false;
         let mut view = sys::GhosttyCellsView {
@@ -199,11 +200,20 @@ impl RenderState {
                     (&raw mut header).cast(),
                 ),
             )?;
-            sys::ghostty_row_get(
+            let code = sys::ghostty_row_get(
                 header,
                 sys::GHOSTTY_ROW_DATA_WRAP,
                 (&raw mut wrapped).cast(),
             );
+            if code != sys::GHOSTTY_SUCCESS {
+                tracing::warn!(
+                    pane_id,
+                    row = y,
+                    code,
+                    "libghostty-vt could not read a row's wrap flag; treated as unwrapped"
+                );
+                wrapped = false;
+            }
             check(
                 "ghostty_render_state_row_get(CELLS_RAW)",
                 sys::ghostty_render_state_row_get(
@@ -228,8 +238,16 @@ impl RenderState {
             unsafe { std::slice::from_raw_parts(view.ptr, view.len) }
         };
         sink.begin_row(i32::from(y), wrapped);
+        let mut failed: Option<(CellReadError, usize)> = None;
         for (x, &raw) in raws.iter().enumerate() {
-            let cell = RawCell::decode(raw);
+            let cell = match RawCell::decode(raw) {
+                Ok(cell) => cell,
+                Err(e) => {
+                    failed = Some((failed.map_or(e, |f| f.0), failed.map_or(1, |f| f.1 + 1)));
+                    sink.cell(0, &Style::default(), CellFlags::empty(), &[]);
+                    continue;
+                }
+            };
             if cell.is_blank() {
                 sink.cell(0, &Style::default(), CellFlags::empty(), &[]);
                 continue;
@@ -254,8 +272,10 @@ impl RenderState {
                 })?;
                 style = cells::style(&raw_style);
             }
-            if let Some(bg) = cell.tag_background(raw) {
-                style.bg = bg;
+            match cell.tag_background(raw) {
+                Ok(Some(bg)) => style.bg = bg,
+                Ok(None) => {}
+                Err(e) => failed = Some((failed.map_or(e, |f| f.0), failed.map_or(1, |f| f.1 + 1))),
             }
             let mut flags = cell.flags();
             let extra = if cell.has_graphemes() {
@@ -267,6 +287,16 @@ impl RenderState {
                 flags = flags | CellFlags::GRAPHEME;
             }
             sink.cell(cell.codepoint, &style, flags, extra);
+        }
+        if let Some((first, count)) = failed {
+            tracing::warn!(
+                pane_id,
+                row = y,
+                count,
+                data = first.data,
+                code = first.code,
+                "libghostty-vt refused cell reads; those cells are drawn blank"
+            );
         }
         sink.end_row();
         Ok(())

@@ -4,7 +4,9 @@
 //! (`terminal.h`, "Effects"). Each callback receives the [`Effects`] pointer installed as `OPT_USERDATA`; the
 //! [`super::Engine`] owns that allocation for the terminal's whole life and never holds a Rust reference to it while
 //! a libghostty-vt call runs, so a callback's `&mut Effects` is the only live reference. Callbacks never block and
-//! never call back into the terminal except for read-only `terminal_get`.
+//! never call terminal functions (title and pwd are only flagged here and read after the write returns); the
+//! clipboard-write callback calls the reply function its request carries, as the protocol requires. A callback that
+//! receives a sized struct reads its `size` first and skips a struct smaller than ply's declaration.
 
 use std::ffi::c_void;
 use std::ptr;
@@ -18,6 +20,7 @@ use super::{
 /// What the callbacks collected since the engine last drained them.
 #[derive(Debug, Default)]
 pub(super) struct Effects {
+    pub(super) pane_id: u64,
     pub(super) reply: Vec<u8>,
     pub(super) bells: u32,
     pub(super) title_changed: bool,
@@ -141,11 +144,20 @@ unsafe extern "C" fn on_notification(
     userdata: *mut c_void,
     notification: *const sys::GhosttyTerminalDesktopNotification,
 ) {
-    if notification.is_null() {
+    // SAFETY: libghostty-vt passes our userdata.
+    let fx = unsafe { effects(userdata) };
+    // SAFETY: a non-null request is readable at least up to its leading `size` field.
+    if notification.is_null()
+        || unsafe { (*notification).size } < size_of::<sys::GhosttyTerminalDesktopNotification>()
+    {
+        tracing::debug!(
+            pane_id = fx.pane_id,
+            "desktop notification smaller than expected; ignored"
+        );
         return;
     }
-    // SAFETY: libghostty-vt passes our userdata and a notification borrowed for this call.
-    let (fx, n) = unsafe { (effects(userdata), &*notification) };
+    // SAFETY: the notification is borrowed for this call and at least as large as ply's declaration.
+    let n = unsafe { &*notification };
     // SAFETY: the strings are borrowed for this call.
     let (title, body) = unsafe { (bytes(&n.title), bytes(&n.body)) };
     fx.notifications.push(Notification {
@@ -159,11 +171,20 @@ unsafe extern "C" fn on_progress(
     userdata: *mut c_void,
     report: *const sys::GhosttyTerminalProgressReport,
 ) {
-    if report.is_null() {
+    // SAFETY: libghostty-vt passes our userdata.
+    let fx = unsafe { effects(userdata) };
+    // SAFETY: a non-null report is readable at least up to its leading `size` field.
+    if report.is_null()
+        || unsafe { (*report).size } < size_of::<sys::GhosttyTerminalProgressReport>()
+    {
+        tracing::debug!(
+            pane_id = fx.pane_id,
+            "progress report smaller than expected; ignored"
+        );
         return;
     }
-    // SAFETY: libghostty-vt passes our userdata and a report borrowed for this call.
-    let (fx, r) = unsafe { (effects(userdata), &*report) };
+    // SAFETY: the report is borrowed for this call and at least as large as ply's declaration.
+    let r = unsafe { &*report };
     let state = match r.state {
         0 => ProgressState::Remove,
         1 => ProgressState::Set,
@@ -172,6 +193,7 @@ unsafe extern "C" fn on_progress(
         4 => ProgressState::Pause,
         other => {
             tracing::debug!(
+                pane_id = fx.pane_id,
                 state = other,
                 "libghostty-vt reported an unknown OSC 9;4 state"
             );
@@ -189,11 +211,25 @@ unsafe extern "C" fn on_clipboard_write(
     userdata: *mut c_void,
     write: *const sys::GhosttyClipboardWrite,
 ) {
-    if write.is_null() {
+    // SAFETY: libghostty-vt passes our userdata.
+    let fx = unsafe { effects(userdata) };
+    // SAFETY: a non-null request is readable at least up to its leading `size` field.
+    if write.is_null() || unsafe { (*write).size } < size_of::<sys::GhosttyClipboardWrite>() {
+        tracing::debug!(
+            pane_id = fx.pane_id,
+            "clipboard write smaller than expected; denied"
+        );
         return;
     }
-    // SAFETY: libghostty-vt passes our userdata and a request borrowed for this call.
-    let (fx, w) = unsafe { (effects(userdata), &*write) };
+    // SAFETY: the request is borrowed for this call and at least as large as ply's declaration.
+    let w = unsafe { &*write };
+    if w.contents.is_null() && w.contents_len > 0 {
+        tracing::debug!(
+            pane_id = fx.pane_id,
+            "clipboard write without contents; denied"
+        );
+        return;
+    }
     let mut contents = Vec::with_capacity(w.contents_len);
     for i in 0..w.contents_len {
         // SAFETY: `contents` holds `contents_len` entries borrowed for this call.

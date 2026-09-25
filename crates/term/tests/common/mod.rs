@@ -138,3 +138,38 @@ impl Rng {
         self.below(100) < percent
     }
 }
+
+/// Compares the client's view with libghostty-vt's own plain-text formatter, which shares no code with the C2 path:
+/// scrollback (read through History pages) plus the Delta-fed screen, trailing empty lines dropped on both sides
+/// (the formatter keeps a row of background-only cells as an empty line).
+pub fn assert_matches_formatter(engine: &mut Engine, replica: &Replica, context: &str) {
+    let text = engine.plain_text().unwrap();
+    let mut got: Vec<&str> = if text.is_empty() {
+        Vec::new()
+    } else {
+        text.split('\n').collect()
+    };
+    while got.last().is_some_and(|l| l.is_empty()) {
+        got.pop();
+    }
+    let scrollback = i64::from(engine.scrollback_rows());
+    let mut want: Vec<String> = Vec::new();
+    let mut next = -scrollback;
+    while next < 0 {
+        let page = engine.scroll_history(next, 1000).unwrap();
+        assert!(
+            !page.lines.is_empty(),
+            "{context}: history page at {next} is empty"
+        );
+        next += page.lines.len() as i64;
+        want.extend(page.lines.iter().map(|r| ply_term::cells_text(&r.cells)));
+    }
+    want.extend(replica.screen_text());
+    while want.last().is_some_and(String::is_empty) {
+        want.pop();
+    }
+    assert_eq!(
+        got, want,
+        "{context}: the replica disagrees with libghostty-vt's formatter"
+    );
+}
