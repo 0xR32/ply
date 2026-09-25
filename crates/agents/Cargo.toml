@@ -1,0 +1,13 @@
+[package]
+name = "ply-agents"
+description = "Per-CLI launch specs, hook config generation and session metadata for Claude Code and Codex"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+ply-proto.workspace = true
+
+[lints]
+workspace = true

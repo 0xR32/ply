@@ -1,0 +1,16 @@
+[package]
+name = "ply-hook"
+description = "ply-hook: forwards one Claude Code hook or Codex notify payload to plyd and exits 0"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "ply-hook"
+path = "src/main.rs"
+
+[dependencies]
+
+[lints]
+workspace = true

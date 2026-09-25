@@ -1,0 +1,39 @@
+[workspace]
+resolver = "3"
+members = [
+  "crates/proto",
+  "crates/ghostty-sys",
+  "crates/term",
+  "crates/agents",
+  "crates/daemon",
+  "crates/hook",
+]
+exclude = ["vendor"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.97.1"
+publish = false
+
+[workspace.dependencies]
+ply-proto = { path = "crates/proto" }
+ghostty-sys = { path = "crates/ghostty-sys" }
+ply-term = { path = "crates/term" }
+ply-agents = { path = "crates/agents" }
+
+[workspace.lints.rust]
+missing_docs = "warn"
+unsafe_op_in_unsafe_fn = "deny"
+
+[workspace.lints.rustdoc]
+broken_intra_doc_links = "deny"
+missing_crate_level_docs = "warn"
+
+[workspace.lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+dbg_macro = "deny"
+
+[profile.release]
+lto = "thin"

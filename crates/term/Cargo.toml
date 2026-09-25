@@ -1,0 +1,18 @@
+[package]
+name = "ply-term"
+description = "ply's headless terminal core: the libghostty-vt engine wrapper (feature `engine`) and the C2 replica"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[features]
+default = []
+engine = ["dep:ghostty-sys"]
+
+[dependencies]
+ply-proto.workspace = true
+ghostty-sys = { workspace = true, optional = true }
+
+[lints]
+workspace = true

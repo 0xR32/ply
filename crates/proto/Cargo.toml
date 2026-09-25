@@ -1,0 +1,12 @@
+[package]
+name = "ply-proto"
+description = "Wire types for ply's C1 control, C2 screen-data and C3 hook-ingress protocols"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+
+[lints]
+workspace = true

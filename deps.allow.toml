@@ -1,0 +1,63 @@
+# INV-16 admission list. Numbers come from `bun scripts/check-deps.ts --refresh`; see docs/development.md.
+
+[npm."@biomejs/biome"]
+repo = "biomejs/biome"
+stars = 25856
+last_commit = "2026-09-25"
+contributors_5plus = 127
+checked = "2026-09-25"
+
+[npm."@gpuix/native"]
+repo = "remorses/gpuix"
+stars = 2316
+last_commit = "2026-09-23"
+contributors_5plus = 3
+checked = "2026-09-25"
+exception = "D4"
+note = "GPUIX is ply's UI framework by the owner's decision (ADR-0007, ADR-0011); pinned exactly at 0.10.0 (INV-13)"
+
+[npm."@gpuix/react"]
+repo = "remorses/gpuix"
+stars = 2316
+last_commit = "2026-09-23"
+contributors_5plus = 3
+checked = "2026-09-25"
+exception = "D4"
+note = "GPUIX is ply's UI framework by the owner's decision (ADR-0007, ADR-0011); pinned exactly at 0.10.0 (INV-13)"
+
+[npm."@types/bun"]
+repo = "DefinitelyTyped/DefinitelyTyped"
+stars = 51440
+last_commit = "2026-09-24"
+contributors_5plus = 383
+checked = "2026-09-25"
+
+[npm."@types/react"]
+repo = "DefinitelyTyped/DefinitelyTyped"
+stars = 51440
+last_commit = "2026-09-24"
+contributors_5plus = 383
+checked = "2026-09-25"
+
+[npm.react]
+repo = "facebook/react"
+stars = 250713
+last_commit = "2026-09-22"
+contributors_5plus = 176
+checked = "2026-09-25"
+
+[npm.typescript]
+repo = "microsoft/TypeScript"
+stars = 111191
+last_commit = "2026-09-24"
+contributors_5plus = 160
+checked = "2026-09-25"
+
+[vendor.libghostty-vt]
+repo = "ghostty-org/ghostty"
+stars = 61524
+last_commit = "2026-09-25"
+contributors_5plus = 138
+checked = "2026-09-25"
+exception = "D5"
+note = "terminal engine by the owner's decision (ADR-0008); maintainers declare the C API work in progress; vendored at 44f2a44 (INV-17)"

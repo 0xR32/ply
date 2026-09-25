@@ -1,0 +1,12 @@
+[package]
+name = "ghostty-sys"
+description = "Zig build of the vendored libghostty-vt and its C declarations; the only FFI crate in ply"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+
+[lints]
+workspace = true

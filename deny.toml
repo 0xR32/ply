@@ -1,0 +1,55 @@
+# cargo-deny policy for every ply-* crate: INV-1 (no HTTP clients), INV-3 (no gpui), licences, advisories.
+
+[graph]
+targets = ["aarch64-apple-darwin"]
+all-features = true
+
+[advisories]
+ignore = []
+
+[licenses]
+allow = [
+  "Apache-2.0",
+  "Apache-2.0 WITH LLVM-exception",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "CC0-1.0",
+  "ISC",
+  "MIT",
+  "MIT-0",
+  "Unicode-3.0",
+  "Zlib",
+]
+confidence-threshold = 0.93
+unused-allowed-license = "allow"
+exceptions = []
+
+[licenses.private]
+ignore = true
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+allow-wildcard-paths = true
+highlight = "all"
+deny = [
+  { crate = "reqwest", reason = "INV-1: ply makes no network requests" },
+  { crate = "hyper", reason = "INV-1: ply makes no network requests" },
+  { crate = "hyper-util", reason = "INV-1: ply makes no network requests" },
+  { crate = "ureq", reason = "INV-1: ply makes no network requests" },
+  { crate = "isahc", reason = "INV-1: ply makes no network requests" },
+  { crate = "surf", reason = "INV-1: ply makes no network requests" },
+  { crate = "attohttpc", reason = "INV-1: ply makes no network requests" },
+  { crate = "curl", reason = "INV-1: ply makes no network requests" },
+  { crate = "curl-sys", reason = "INV-1: ply makes no network requests" },
+  { crate = "http-client", reason = "INV-1: ply makes no network requests" },
+  { crate = "awc", reason = "INV-1: ply makes no network requests" },
+  { crate = "gpui", reason = "INV-3: no ply crate links gpui (ADR-0011)" },
+  { crate = "gpuix-native", reason = "INV-3: no ply crate links gpuix-native (ADR-0011)" },
+]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

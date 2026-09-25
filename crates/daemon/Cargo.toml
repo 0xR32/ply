@@ -1,0 +1,19 @@
+[package]
+name = "ply-daemon"
+description = "plyd: the background daemon that owns every pane's pty and libghostty-vt terminal"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "plyd"
+path = "src/main.rs"
+
+[dependencies]
+ply-proto.workspace = true
+ply-term = { workspace = true, features = ["engine"] }
+ply-agents.workspace = true
+
+[lints]
+workspace = true

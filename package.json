@@ -1,0 +1,19 @@
+{
+  "name": "ply",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "bun@1.3.10",
+  "workspaces": [
+    "app"
+  ],
+  "scripts": {
+    "dev": "bun --hot app/src/main.tsx",
+    "check": "biome check && tsc -p app && tsc -p scripts && bun scripts/check-rules.ts && bun scripts/check-deps.ts",
+    "test": "bun test ./app ./scripts",
+    "gen": "bun scripts/gen.ts"
+  },
+  "devDependencies": {
+    "@types/bun": "1.3.10"
+  }
+}
