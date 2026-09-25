@@ -205,7 +205,8 @@ function applyEvent(state: AppState, event: Event): AppState {
     case 'pane.meta': {
       const { pane_id, model, worktree, cwd, branch } = event.p;
       return updatePane(state, pane_id, (p) => {
-        const { branch: oldBranch, ...rest } = p;
+        // plyd sends the live worktree with every pane.meta, so its absence means the pane left the worktree.
+        const { branch: oldBranch, worktree_seen: _left, ...rest } = p;
         const keptBranch = branch ?? (cwd === p.cwd ? oldBranch : undefined);
         return {
           ...rest,

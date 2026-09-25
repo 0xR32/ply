@@ -86,10 +86,11 @@ fn j6_killing_plyd_leaves_lost_panes_that_resume_brings_back() {
     plyd.child.wait().unwrap();
     let _plyd = sb.start();
     let mut c = Control::connect(&sb.control_socket()).unwrap();
-    for pane in [claude, codex, shell] {
+    for pane in [claude, codex] {
         let p = listed(&mut c, ws, pane);
         assert_eq!(p["status"], "lost", "{p}");
     }
+    wait_listed(&mut c, ws, shell, "status", &json!("idle"));
     assert_eq!(listed(&mut c, ws, claude)["worktree_seen"], "feat-x");
     let (_, first) = Data::attach(&sb.data_socket(), claude, 80, 24).unwrap();
     assert!(matches!(first, ply_proto::data::Frame::Snapshot(_)));
@@ -145,11 +146,16 @@ fn j6_killing_plyd_leaves_lost_panes_that_resume_brings_back() {
         "the resumed pane follows its thread's rollout again"
     );
 
-    let shell_pane = c.call("pane.resume", json!({"pane_id": shell})).unwrap();
-    assert_eq!(shell_pane["status"], "idle");
     let mut d = sb.attach_ready(shell);
     d.input(b"echo back-$((40+2))\r").unwrap();
-    assert!(d.pump_until(WAIT, |d| d.shows("back-42")).unwrap());
+    assert!(
+        d.pump_until(WAIT, |d| d.shows("back-42")).unwrap(),
+        "R50: the shell reopened by itself"
+    );
+    let not_lost = c
+        .call("pane.resume", json!({"pane_id": shell}))
+        .unwrap_err();
+    assert_eq!(not_lost.code, ErrorCode::InvalidState);
 
     let again = c
         .call("pane.resume", json!({"pane_id": claude}))
@@ -158,7 +164,7 @@ fn j6_killing_plyd_leaves_lost_panes_that_resume_brings_back() {
 }
 
 #[test]
-fn a_pane_without_a_session_id_reopens_as_a_fresh_shell() {
+fn a_pane_without_a_session_id_reopens_as_a_fresh_shell_by_itself() {
     let sb = Sandbox::new("fresh");
     install(&sb);
     hook_program();
@@ -176,10 +182,8 @@ fn a_pane_without_a_session_id_reopens_as_a_fresh_shell() {
     plyd.child.wait().unwrap();
     let _plyd = sb.start();
     let mut c = Control::connect(&sb.control_socket()).unwrap();
-    assert_eq!(listed(&mut c, ws, pane)["status"], "lost");
-    let resumed = c.call("pane.resume", json!({"pane_id": pane})).unwrap();
-    assert_eq!(resumed["cli"], "shell");
-    assert_eq!(resumed["status"], "idle");
+    wait_listed(&mut c, ws, pane, "cli", &json!("shell"));
+    wait_listed(&mut c, ws, pane, "status", &json!("idle"));
     assert_eq!(launches(&sb, "claude").len(), 1, "claude was not run again");
     let mut d = sb.attach_ready(pane);
     d.input(b"echo shell-$((6*7))\r").unwrap();

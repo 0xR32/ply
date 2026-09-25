@@ -348,7 +348,7 @@ fn an_exiting_shell_reports_its_code_on_c1_and_c2() {
 }
 
 #[test]
-fn a_restart_marks_live_panes_lost_and_resume_relaunches_them() {
+fn a_restart_reopens_a_shell_by_itself_and_keeps_the_settings() {
     let sb = Sandbox::new("restart");
     let mut plyd = sb.start();
     let (mut c, ws) = sb.control();
@@ -373,17 +373,12 @@ fn a_restart_marks_live_panes_lost_and_resume_relaunches_them() {
         stored["option_as_meta"], "left",
         "settings survive a restart"
     );
-    let panes = c.call("pane.list", json!({"workspace_id": ws})).unwrap();
-    assert_eq!(panes[0]["status"], "lost");
-    let (_, first) = Data::attach(&sb.data_socket(), pane, 80, 24).unwrap();
+    let idle = eventually(WAIT, || {
+        c.call("pane.list", json!({"workspace_id": ws})).unwrap()[0]["status"] == "idle"
+    });
     assert!(
-        matches!(first, Frame::Snapshot(_)),
-        "a lost pane can still be viewed"
-    );
-    let resumed = c.call("pane.resume", json!({"pane_id": pane})).unwrap();
-    assert_eq!(
-        resumed["status"], "idle",
-        "the stored palette lets it spawn before any theme.set"
+        idle,
+        "R50: a shell has no session to resume, so it reopens by itself (the stored palette spawns it before any theme.set)"
     );
     let mut d = sb.attach_ready(pane);
     d.input(b"echo back-$((40+2))\r").unwrap();

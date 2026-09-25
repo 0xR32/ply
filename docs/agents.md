@@ -393,7 +393,9 @@ nothing else:
 The worktree label is `<name>` when the working directory is at or below
 `<repo>/.claude/worktrees/<name>` (the innermost such directory), else none.
 It is display and session record only: `worktree_seen` is the only worktree
-column ply keeps (INV-7). The model is shown exactly as reported; with none
+column ply keeps (INV-7). The live label (in `pane.meta` and `pane.list`)
+clears when the pane leaves the worktree; the stored session record keeps the
+last worktree the pane was in. The model is shown exactly as reported; with none
 reported the pane header shows only the CLI name.
 
 The branch label comes from `git rev-parse --abbrev-ref HEAD` in the pane's
@@ -512,7 +514,10 @@ sandboxed `HOME` and `CODEX_HOME`.
 ## Resume
 
 After a logout, a reboot or a plyd restart the processes are gone, and their
-panes come back `lost`. `pane.resume` relaunches one from its `launch.json`
+panes come back `lost`. Right after its sockets are bound, plyd reopens every
+`lost` pane without a session id to resume by itself, as below (Ruling R50,
+`reopen_sessionless`); the panes with a session id stay `lost` until
+`pane.resume` relaunches one from its `launch.json`
 (`crates/daemon/src/panes/launch.rs`, `resume`):
 
 - **Claude Code**: `claude --settings … --resume <session_ref>` in the stored
@@ -521,8 +526,10 @@ panes come back `lost`. `pane.resume` relaunches one from its `launch.json`
   that thread.
 - **A pane without a session id** — a shell, or an agent whose CLI never
   reported one — reopens as a fresh login shell in its last directory
-  (spec 11.3). An agent pane becomes a shell pane from then on: `cli` is
-  `shell` in its row, in `session.list` and in the returned `Pane`.
+  (spec 11.3), at plyd's start without a click. An agent pane becomes a shell
+  pane from then on: `cli` is `shell` in its row, in `session.list` and in the
+  returned `Pane`. Only when that reopening fails (the directory is gone, no
+  palette arrived) does such a pane stay `lost`.
 
 The settings file is regenerated with the current settings, and `launch.json`
 records the new spawn, so a pane resumes again after the next restart. The pane
@@ -561,11 +568,12 @@ terminal and the CLI repaints it.
 - `crates/daemon/tests/config_untouched.rs`: INV-8, a Claude Code and a Codex
   session leave the user's three config files byte for byte as they were.
 - `crates/daemon/tests/resume.rs`: journey J6 (kill plyd, restart it, the
-  panes are `lost`, `pane.resume` brings a `--worktree` Claude pane, a Codex
-  pane and a shell back with the same option and directory), a pane without a
-  session id reopening as a shell, and F3 (closed sessions keep status, times,
-  exit codes and session ids across app and plyd restarts).
+  agent panes are `lost` and the shell is back by itself, `pane.resume` brings a
+  `--worktree` Claude pane and a Codex pane back with the same option and
+  directory), a pane without a session id reopening as a shell by itself, and
+  F3 (closed sessions keep status, times, exit codes and session ids across app
+  and plyd restarts).
 - `crates/daemon/tests/lifecycle.rs`:
   `an_agent_pane_runs_the_cli_from_the_login_path_with_its_launch_spec` (a fake
   `claude` on the login `PATH` gets the adapter's argv, environment and files)
-  and `a_restart_marks_live_panes_lost_and_resume_relaunches_them`.
+  and `a_restart_reopens_a_shell_by_itself_and_keeps_the_settings`.

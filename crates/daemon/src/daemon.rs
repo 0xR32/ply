@@ -3,7 +3,8 @@
 //! [`run`] expects the caller to hold the [`crate::lock::InstanceLock`]; it prepares the run directory, opens the
 //! database (refusing a newer schema), loads `config.toml`, resolves the login shell, gives every stored open pane a
 //! task (a pane whose process ran at the last stop comes back `lost`), replaces stale socket files and serves C1, C2
-//! and C3 until `daemon.shutdown` or SIGTERM, SIGINT or SIGHUP. There is no
+//! and C3 until `daemon.shutdown` or SIGTERM, SIGINT or SIGHUP. Right after binding, the `lost` panes without a CLI
+//! session to resume reopen as fresh shells (Ruling R50); the others wait for `pane.resume`. There is no
 //! idle exit (spec 11.3): with no client connected plyd keeps every pane running. On the way out it broadcasts
 //! `daemon.stopping`, stops the panes' processes when asked to (`kill_panes`), removes its sockets and returns; the
 //! processes of panes it did not stop lose their pty with plyd and come back as `lost` after the next start.
@@ -230,6 +231,7 @@ pub async fn run(options: Options) -> Result<()> {
         hooks = %shared.paths.hook_socket().display(),
         "plyd is serving"
     );
+    tokio::spawn(launch::reopen_sessionless(Arc::clone(&shared)));
     let control_task = tokio::spawn(control::serve(control_listener, Arc::clone(&shared)));
     let data_task = tokio::spawn(data::serve(data_listener, Arc::clone(&shared)));
     let hook_task = tokio::spawn(hooks::serve(hook_listener, Arc::clone(&shared)));

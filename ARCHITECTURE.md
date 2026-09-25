@@ -149,8 +149,9 @@ cargo-built `plyd --foreground` against that directory; without it, it calls
 `plyd install-agent`, which writes `~/Library/LaunchAgents/dev.ply.app.plyd.plist`
 and kickstarts it. plyd takes the single-instance lock, opens `ply.db`, restores
 tabs and panes (a pane whose process is gone becomes `lost` and can be resumed
-with the CLI's own resume), binds its sockets under `run/` (mode 0700) and
-serves until `daemon.shutdown`.
+with the CLI's own resume), binds its sockets under `run/` (mode 0700), reopens
+the lost panes that have no session to resume as fresh shells, and serves until
+`daemon.shutdown`.
 
 ## Layering rules
 

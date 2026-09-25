@@ -168,6 +168,8 @@ describe('daemon events', () => {
     const c = run(b, evt({ e: 'pane.meta', p: { pane_id: 1, cwd: '/tmp', worktree: 'wt' } }));
     expect(c.panes[1]).toMatchObject({ cwd: '/tmp', worktree_seen: 'wt' });
     expect(c.panes[1]?.branch).toBeUndefined();
+    const d = run(c, evt({ e: 'pane.meta', p: { pane_id: 1, cwd: '/Users/example/code/ply' } }));
+    expect(d.panes[1]?.worktree_seen).toBeUndefined();
   });
 });
 

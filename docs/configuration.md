@@ -184,7 +184,7 @@ PLY_HOME=/tmp/ply-dev bun run dev
 - The spawned plyd outlives the app, as it is meant to. Stop it with
   `kill $(cat /tmp/ply-dev/plyd.lock)` (SIGTERM, a clean stop) or a C1
   `daemon.shutdown`, which nothing in the app sends yet; panes whose process was
-  still running come back `lost` next time.
+  still running come back `lost` next time (shells reopen by themselves).
 
 A plyd started by hand with `PLY_HOME=/tmp/ply-dev cargo run -p ply-daemon --
 --foreground` is found by the app the same way.

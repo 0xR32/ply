@@ -231,7 +231,9 @@ spec is rebuilt through its adapter with the pane's `session_ref` as the session
 to resume (`claude --resume <id>`, `codex resume <thread>`), in the stored
 working directory and with the stored worktree option; a pane without a
 session id (a shell, or an agent whose CLI never reported one) reopens as a
-fresh login shell in its last directory and is a `shell` pane from then on.
+fresh login shell in its last directory and is a `shell` pane from then on;
+plyd does that by itself at its start (Ruling R50), so such a pane is `lost`
+only when that reopening failed.
 Waits for a palette like `pane.create`. `spawn_failed` when `launch.json` is
 missing or unreadable, the directory is gone or the spawn fails;
 `cli_not_found`, `cli_too_old` and `bad_request` as for `pane.create`. Returns
@@ -509,7 +511,7 @@ are allowed for those two pairs.
   `handshakes_check_versions_and_panes`,
   `a_live_pane_closes_only_with_kill_and_its_session_is_kept`,
   `an_exiting_shell_reports_its_code_on_c1_and_c2`,
-  `a_restart_marks_live_panes_lost_and_resume_relaunches_them`,
+  `a_restart_reopens_a_shell_by_itself_and_keeps_the_settings`,
   `a_second_plyd_refuses_to_start`.
 - `crates/daemon/src/panes/registry.rs` unit tests (layout, closing, event
   order) and `crates/daemon/src/server/control.rs`

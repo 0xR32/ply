@@ -67,6 +67,8 @@ pub struct PaneEntry {
     pub announced: bool,
     /// A `pane.resume` is relaunching the pane's process; a second one is refused.
     pub resuming: bool,
+    /// The last worktree the CLI reported, which the stored session record keeps after the live label cleared.
+    pub recorded_worktree: Option<String>,
 }
 
 /// What `pane.create` asks the registry to record.
@@ -182,6 +184,7 @@ impl Registry {
             reg.panes.insert(
                 pane.id,
                 PaneEntry {
+                    recorded_worktree: pane.worktree_seen.clone(),
                     pane,
                     handle: None,
                     close_on_exit: false,
@@ -426,6 +429,7 @@ impl Registry {
                 close_on_exit: false,
                 announced: false,
                 resuming: false,
+                recorded_worktree: None,
             },
         );
         Ok(pane)
@@ -607,6 +611,9 @@ impl Registry {
         if let Some(cwd) = &meta.cwd {
             p.cwd.clone_from(cwd);
             p.worktree_seen.clone_from(&meta.worktree);
+            if meta.worktree.is_some() {
+                entry.recorded_worktree.clone_from(&meta.worktree);
+            }
         }
         if moved {
             p.branch = None;
@@ -896,8 +903,20 @@ impl Registry {
         Ok(())
     }
 
+    /// Writes the pane's row; its `worktree_seen` keeps the last worktree reported even after the live label cleared.
     fn store(&self, pane: &Pane) {
-        if let Err(e) = self.db.update_pane(pane) {
+        let recorded = self
+            .panes
+            .get(&pane.id)
+            .and_then(|e| e.recorded_worktree.as_ref());
+        let written = match (recorded, &pane.worktree_seen) {
+            (Some(worktree), None) => self.db.update_pane(&Pane {
+                worktree_seen: Some(worktree.clone()),
+                ..pane.clone()
+            }),
+            _ => self.db.update_pane(pane),
+        };
+        if let Err(e) = written {
             tracing::error!(pane_id = pane.id, error = %e, "cannot store the pane");
         }
     }
@@ -953,6 +972,32 @@ mod tests {
 
     fn shell(reg: &mut Registry, tab: Option<u64>, cwd: &str) -> Pane {
         reg.insert_pane(&new_pane(tab, cwd), 10).unwrap()
+    }
+
+    #[test]
+    fn leaving_a_worktree_clears_the_live_label_but_the_session_record_keeps_it() {
+        let (mut reg, _) = registry();
+        let pane = shell(&mut reg, None, "/Users/example/repo");
+        let meta = |cwd: &str, worktree: Option<&str>| SessionMeta {
+            cwd: Some(cwd.to_owned()),
+            worktree: worktree.map(str::to_owned),
+            ..SessionMeta::default()
+        };
+        reg.set_meta(
+            pane.id,
+            &meta(
+                "/Users/example/repo/.claude/worktrees/feat-x",
+                Some("feat-x"),
+            ),
+        );
+        reg.set_meta(pane.id, &meta("/Users/example/repo", None));
+        assert_eq!(
+            reg.entry(pane.id).unwrap().pane.worktree_seen,
+            None,
+            "the live label clears"
+        );
+        let stored = reg.sessions(1, true).unwrap();
+        assert_eq!(stored[0].worktree_seen.as_deref(), Some("feat-x"));
     }
 
     #[test]

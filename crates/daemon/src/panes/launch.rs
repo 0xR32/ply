@@ -332,6 +332,34 @@ pub fn restore(shared: &Arc<Shared>) {
     }
 }
 
+/// Reopens, as fresh shells in their directories, the panes plyd's start left `lost` that have no session to resume:
+/// shells and agent panes whose CLI never reported a session id (Ruling R50, spec 11.3). Panes with a session stay
+/// `lost` for `pane.resume`. Runs after the sockets are bound, since a first start may have to wait for `theme.set`.
+pub async fn reopen_sessionless(shared: Arc<Shared>) {
+    let panes: Vec<PaneId> = {
+        let reg = shared.registry();
+        reg.workspaces()
+            .iter()
+            .filter_map(|w| reg.panes_of(w.id).ok())
+            .flatten()
+            .filter(|p| {
+                p.status == PaneStatus::Lost && (p.cli == Cli::Shell || p.session_ref.is_none())
+            })
+            .map(|p| p.id)
+            .collect()
+    };
+    for pane_id in panes {
+        match resume(&shared, pane_id).await {
+            Ok(pane) => {
+                tracing::info!(pane_id, cli = ?pane.cli, "reopened a pane without a session as a fresh shell");
+            }
+            Err(e) => {
+                tracing::warn!(pane_id, error = %e.msg, "cannot reopen the pane; it stays lost");
+            }
+        }
+    }
+}
+
 /// Deletes `run/panes/<id>/` of a closed pane; a failure is only logged.
 pub fn remove_pane_dir(pane_id: PaneId, dir: &Path) {
     match std::fs::remove_dir_all(dir) {
