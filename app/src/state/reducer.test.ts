@@ -325,23 +325,52 @@ describe('pane creation', () => {
     expect(state.overlay?.kind).toBe('new-pane');
     expect(state.create).toEqual({ pending: false, error: 'claude is not on PATH' });
   });
+
+  test('a pane.create answer never undoes the events that overtook it', () => {
+    const added = run(
+      threePanes(),
+      evt({
+        e: 'pane.added',
+        p: makePane({ id: 8, tab_id: 5, cli: 'claude', status: 'starting' }),
+      }),
+      evt({
+        e: 'pane.status',
+        p: { pane_id: 8, status: 'waiting_permission', detail: 'Write a.txt', at: 20 },
+      }),
+      evt({ e: 'pane.progress', p: { pane_id: 8, progress: { done: 1, total: 3 } } }),
+    );
+    const done = run(added, {
+      type: 'pane/created',
+      pane: makePane({ id: 8, tab_id: 5, cli: 'claude', status: 'starting', title: 'fix it' }),
+    });
+    expect(done.panes[8]).toMatchObject({
+      status: 'waiting_permission',
+      detail: 'Write a.txt',
+      progress: { done: 1, total: 3 },
+      title: 'fix it',
+    });
+    expect(done.tabs.find((t) => t.id === 5)?.pane_ids).toEqual([8]);
+    expect(done.activeTabId).toBe(5);
+  });
 });
 
 describe('session resume', () => {
-  test('pane/resumed replaces the lost pane in place, keeping its tab, focus and terminal title', () => {
+  test('pane/resumed keeps the pane in place and its status from the events, taking cli and title', () => {
     const lost = makeState([
-      makePane({ id: 1, status: 'lost', session_ref: 'example-session', terminalTitle: 'fix it' }),
+      makePane({ id: 1, status: 'lost', terminalTitle: 'fix it' }),
       makePane({ id: 2, position: 1 }),
     ]);
     const next = run(
       lost,
       { type: 'pane/resume', paneId: 1 },
+      evt({ e: 'pane.status', p: { pane_id: 1, status: 'starting', at: 20 } }),
+      evt({ e: 'pane.status', p: { pane_id: 1, status: 'idle', at: 21 } }),
       {
         type: 'pane/resumed',
-        pane: makePane({ id: 1, status: 'starting', session_ref: 'example-session' }),
+        pane: makePane({ id: 1, status: 'starting', cli: 'shell', title: 'zsh' }),
       },
     );
-    expect(next.panes[1]?.status).toBe('starting');
+    expect(next.panes[1]).toMatchObject({ status: 'idle', cli: 'shell', title: 'zsh' });
     expect(next.panes[1]?.terminalTitle).toBe('fix it');
     expect(next.tabs[0]?.pane_ids).toEqual([1, 2]);
     expect(next.tabs[0]?.focus_pane_id).toBe(1);

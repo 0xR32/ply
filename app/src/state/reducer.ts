@@ -178,6 +178,15 @@ function upsertPane(state: AppState, pane: Pane): AppState {
   return { ...state, panes: { ...state.panes, [pane.id]: merged }, tabs, activeTabId };
 }
 
+/** A pane a response carries (`pane.create`, `pane.resume`): events sent after plyd built it may already be applied, so a known pane takes only its `cli` and `title`. */
+function takeResponsePane(state: AppState, pane: Pane): AppState {
+  const known = state.panes[pane.id];
+  if (!known) return upsertPane(state, pane);
+  if (known.cli === pane.cli && known.title === pane.title) return state;
+  const next: PaneState = { ...known, cli: pane.cli, title: pane.title };
+  return { ...state, panes: { ...state.panes, [pane.id]: next } };
+}
+
 function applyEvent(state: AppState, event: Event): AppState {
   switch (event.e) {
     case 'pane.added':
@@ -404,11 +413,11 @@ function reduceAction(state: AppState, action: Action): AppState {
     case 'pane/resume':
       return state;
     case 'pane/resumed':
-      return upsertPane(state, action.pane);
+      return takeResponsePane(state, action.pane);
     case 'pane/create':
       return { ...state, create: { pending: true, error: null } };
     case 'pane/created': {
-      const next = focusPane(upsertPane(state, action.pane), action.pane.id);
+      const next = focusPane(takeResponsePane(state, action.pane), action.pane.id);
       const overlay = next.overlay?.kind === 'new-pane' ? null : next.overlay;
       return { ...next, overlay, create: { pending: false, error: null } };
     }

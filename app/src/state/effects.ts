@@ -3,7 +3,7 @@ import { log } from '../ipc/log';
 import { readReducedMotion } from '../ipc/os';
 import type { Layout, PaneCreateParams, Workspace } from '../ipc/proto.gen';
 import { terminalThemeFor } from '../theme/tokens';
-import type { Action, NewPaneRequest } from './actions';
+import type { Action, Event, NewPaneRequest } from './actions';
 import type { AppState } from './reducer';
 import { isAlive, selectActiveTab, selectFocusedPane } from './selectors';
 import type { Store } from './store';
@@ -57,6 +57,7 @@ export function startEffects(store: Store, options: EffectsOptions): () => void 
   const noticeMs = options.noticeMs ?? 5_000;
   const timers = new Set<ReturnType<typeof setTimeout>>();
   let loadGeneration = 0;
+  let loadEvents: Event[] | null = null;
   let layoutTimer: ReturnType<typeof setTimeout> | null = null;
   let settingsTimer: ReturnType<typeof setTimeout> | null = null;
   let stopped = false;
@@ -82,22 +83,34 @@ export function startEffects(store: Store, options: EffectsOptions): () => void 
 
   async function load(): Promise<void> {
     const generation = ++loadGeneration;
+    let events: Event[] | null = null;
     try {
       const settings = await client.request('settings.get', {});
-      await client.request('theme.set', { palette: terminalThemeFor(settings.accent) });
+      try {
+        await client.request('theme.set', { palette: terminalThemeFor(settings.accent) });
+      } catch (error) {
+        if (error instanceof RequestError && error.code === 'disconnected') throw error;
+        failed('Setting the terminal colours', error);
+      }
       const home = store.getState().env.home;
       const workspace =
         pickWorkspace(await client.request('workspace.list', {}), home) ??
         (await client.request('workspace.open', { path: home }));
       const ref = { workspace_id: workspace.id };
+      // An event read with the pane.list answer is applied before the await resumes, so it is replayed after the load.
+      events = [];
+      loadEvents = events;
       const [layout, panes] = await Promise.all([
         client.request('layout.get', ref),
         client.request('pane.list', ref),
       ]);
       if (generation !== loadGeneration) return;
       dispatch({ type: 'session/loaded', workspace, panes, layout, settings });
+      for (const event of events) dispatch({ type: 'daemon/event', event });
     } catch (error) {
       failed('Loading the session', error);
+    } finally {
+      if (loadEvents === events) loadEvents = null;
     }
   }
 
@@ -216,7 +229,10 @@ export function startEffects(store: Store, options: EffectsOptions): () => void 
     if (state.kind === 'connected') void load();
     else loadGeneration++;
   });
-  const offEvent = client.onEvent((event) => dispatch({ type: 'daemon/event', event }));
+  const offEvent = client.onEvent((event) => {
+    dispatch({ type: 'daemon/event', event });
+    if (event.e !== 'daemon.stopping') loadEvents?.push(event);
+  });
   const offEffect = store.addEffect((action, next, prev) => {
     try {
       onAction(action, next, prev);

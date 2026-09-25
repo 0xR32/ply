@@ -79,6 +79,8 @@ export class MockServer {
   readonly workspace: Workspace;
   private readonly clients = new Set<Socket<{ buffer: string; welcomed: boolean }>>();
   private readonly timers = new Set<ReturnType<typeof setTimeout>>();
+  private readonly trailers = new Map<Method, Event[]>();
+  private readonly refusals = new Map<Method, { code: ErrorCode; msg: string }>();
   private listener: UnixSocketListener<{ buffer: string; welcomed: boolean }> | null = null;
   private nextPaneId = 1;
   private nextTabId = 1;
@@ -188,6 +190,16 @@ export class MockServer {
     const { progress: _old, ...rest } = pane;
     this.panes.set(paneId, progress ? { ...rest, progress } : rest);
     this.emit({ e: 'pane.progress', p: { pane_id: paneId, ...(progress ? { progress } : {}) } });
+  }
+
+  /** Writes `event` in the same socket write as the answer to the next `method` request, as plyd's writer can; the mock's state is left as it is. */
+  trailAnswer(method: Method, event: Event): void {
+    this.trailers.set(method, [...(this.trailers.get(method) ?? []), event]);
+  }
+
+  /** Answers the next `method` request with the error `code` instead of handling it. */
+  refuseNext(method: Method, code: ErrorCode, msg: string): void {
+    this.refusals.set(method, { code, msg });
   }
 
   /** Requests of one method, in arrival order. */
@@ -302,6 +314,11 @@ export class MockServer {
     this.requests.push({ m: msg.m, p: msg.p });
     let reply: string;
     try {
+      const refusal = this.refusals.get(msg.m);
+      if (refusal) {
+        this.refusals.delete(msg.m);
+        throw new MethodError(refusal.code, refusal.msg);
+      }
       const r = this.handle(msg.m, msg.p as never);
       reply = JSON.stringify({ t: 'res', id: msg.id, ok: true, r });
     } catch (error) {
@@ -311,7 +328,10 @@ export class MockServer {
           : { code: 'internal', msg: String(error) };
       reply = JSON.stringify({ t: 'res', id: msg.id, ok: false, err });
     }
-    s.write(`${reply}\n`);
+    const trailer = this.trailers.get(msg.m) ?? [];
+    this.trailers.delete(msg.m);
+    const lines = [reply, ...trailer.map((e) => JSON.stringify({ t: 'evt', ...e }))];
+    s.write(`${lines.join('\n')}\n`);
   }
 
   private announceDemoTimes(): void {

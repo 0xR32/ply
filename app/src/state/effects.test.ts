@@ -17,12 +17,13 @@ afterEach(() => {
   for (const c of cleanups.splice(0).reverse()) c();
 });
 
-async function setup(scenario: 'demo' | 'empty' = 'demo') {
+async function setup(before: (server: MockServer) => void = () => {}) {
   const dir = mkdtempSync(join(tmpdir(), 'ply-fx-'));
   cleanups.push(() => rmSync(dir, { recursive: true, force: true }));
   const socketPath = join(dir, 'run', 'plyd.sock');
-  const server = MockServer.start({ socketPath, home: HOME, scenario, startDelayMs: null });
+  const server = MockServer.start({ socketPath, home: HOME, scenario: 'demo', startDelayMs: null });
   cleanups.push(() => server.stop());
+  before(server);
   const store = createStore(initialState({ home: HOME, shellName: 'zsh', geistAvailable: false }));
   const seen: Action[] = [];
   store.addEffect((a) => seen.push(a));
@@ -61,6 +62,27 @@ describe('effects', () => {
     expect(server.palette?.cursor).toBe(accentAlternatives.blue);
     expect(state().tabs.map((t) => t.pane_ids)).toEqual([[1, 2, 3], [4]]);
     expect(state().reducedMotion).toBe(true);
+  });
+
+  test('an event read together with the pane.list answer is not lost to the load', async () => {
+    const { state, until } = await setup((server) =>
+      server.trailAnswer('pane.list', {
+        e: 'pane.status',
+        p: { pane_id: 1, status: 'waiting_permission', detail: 'Edit a.txt', at: 2 },
+      }),
+    );
+    await until(() => state().panes[1] !== undefined, 'pane 1');
+    expect(state().panes[1]).toMatchObject({ status: 'waiting_permission', detail: 'Edit a.txt' });
+  });
+
+  test('a theme.set that fails leaves the load going and says why', async () => {
+    const { state } = await setup((server) =>
+      server.refuseNext('theme.set', 'internal', 'cannot write config.toml'),
+    );
+    expect(state().tabs.map((t) => t.pane_ids)).toEqual([[1, 2, 3], [4]]);
+    expect(state().notice?.text).toBe(
+      'Setting the terminal colours failed: cannot write config.toml',
+    );
   });
 
   test('a settings change is saved, and an accent change also re-sends the palette', async () => {

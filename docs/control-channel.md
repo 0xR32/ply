@@ -96,7 +96,8 @@ plyd subscribes the connection to the event broadcast *before* it writes
 ```
 
 - `id` is the client's, a u64 it chooses; plyd echoes it. The app numbers from
-  1 per connection. Id 0 is reserved for plyd's answer to a refused `hello`
+  1 when it starts and keeps counting across reconnects, so no id repeats
+  within one run of the app. Id 0 is reserved for plyd's answer to a refused `hello`
   (`HANDSHAKE_ID`).
 - `m` is the method name and `p` its params. `p` is required; methods without
   params take `{}`.
@@ -415,8 +416,12 @@ The app's client adds two codes of its own, never sent by plyd: `disconnected`
   event are both ready, the connection's writer sends the response first (a
   biased select in `write_loop`). So `daemon.shutdown`'s `{}` always precedes
   `daemon.stopping`. `pane.create`'s response and its `pane.added` can arrive
-  in either order: a client must accept either and treat them as one pane (the
-  app upserts).
+  in either order: a client must accept either and treat them as one pane.
+  Events plyd emits after it built a response can also reach the client before
+  that response, so a pane in a response (`pane.create`, `pane.resume`,
+  `pane.list`) may be older than the events already read: the app places a
+  pane a response brings that it does not know yet, and of a pane it knows it
+  takes only `cli` and `title` from a `pane.create` or `pane.resume` answer.
 - **A slow client is dropped, not waited for.** A connection may fall 1 024
   events behind (`EVENT_CAPACITY`); one step further and plyd closes it, so the
   client reconnects and reloads rather than holding a gap.
@@ -448,11 +453,15 @@ module that calls it.
 - **Drops.** Every pending request fails with `disconnected` when the
   connection goes. Events arriving before `welcome` are ignored.
 - **Loading.** On every `connected` the effects run, in order: `settings.get`;
-  `theme.set` with the palette for the stored accent; `workspace.list`, taking
-  the workspace whose path is the home directory, else the most recently opened
-  one, else `workspace.open` of the home directory; then `layout.get` and
-  `pane.list` together. A reconnect runs the same load, so nothing depends on
-  events missed while away.
+  `theme.set` with the palette for the stored accent (a failure is shown and the
+  load goes on); `workspace.list`, taking the workspace whose path is the home
+  directory, else the most recently opened one, else `workspace.open` of the
+  home directory; then `layout.get` and `pane.list` together. A reconnect runs
+  the same load, so nothing depends on events missed while away. Every pane
+  event read from sending `pane.list` until the loaded session is in the store
+  is applied again after it (the reductions are idempotent): one that arrives
+  in the same socket read as the `pane.list` answer is applied before the
+  answer's promise resumes, and the older list would otherwise replace it.
 - **Saving.** Layout changes (tab order, focus, zoom, active tab) are sent with
   `layout.save` 250 ms after the last one; settings changes with `settings.set`
   300 ms after the last one.
@@ -518,4 +527,7 @@ are allowed for those two pairs.
   (`lines_are_capped_and_split_at_newlines`).
 - `app/src/ipc/control-client.test.ts` (handshake, errors, reconnect, starting
   plyd once per outage, incompatibility) and `app/src/state/effects.test.ts`
-  (the load order and the saves) against the mock server.
+  (the load order, an event in the same read as the `pane.list` answer, a
+  failed `theme.set`, the saves) against the mock server, and
+  `app/src/state/reducer.test.ts` (a `pane.create` answer that events
+  overtook).
