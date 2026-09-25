@@ -219,6 +219,7 @@ export const tokens = {
     paletteHeight: 420,
     newPaneWidth: 560,
     newPaneHeight: 580,
+    usageWidth: 440,
   },
   type: {
     wordmark: { fontSize: 15, fontWeight: 600, lineHeight: 20 },

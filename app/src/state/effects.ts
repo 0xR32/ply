@@ -1,10 +1,10 @@
 import { type ControlClient, RequestError } from '../ipc/control-client';
 import { completeDir, type DirSources, type DirVisit, recentDirs, scanRepos } from '../ipc/dirs';
 import { log } from '../ipc/log';
-import { readBuildId, readReducedMotion } from '../ipc/os';
+import { readBuildId, readKeyRepeat, readReducedMotion } from '../ipc/os';
 import type { Layout, PaneCreateParams, Workspace } from '../ipc/proto.gen';
 import { terminalThemeFor } from '../theme/tokens';
-import type { Action, Event, NewPaneRequest } from './actions';
+import type { Action, Event, KeyRepeat, NewPaneRequest } from './actions';
 import type { AppState } from './reducer';
 import {
   FULL_TAB_NOTICE,
@@ -25,6 +25,10 @@ export interface EffectsOptions {
   reducedMotion?: () => Promise<boolean>;
   /** The app's build id (`readBuildId`); `null` when unknown. */
   buildId?: () => Promise<string | null>;
+  /** macOS's key-repeat timing (`readKeyRepeat`) for the ⌘U hold. */
+  keyRepeat?: () => Promise<Partial<KeyRepeat>>;
+  /** How often `usage.get` is asked again while the usage view is shown; 5 s, plyd's own cache time. */
+  usageRefreshMs?: number;
   /** Ends the app after "Quit ply and stop sessions"; defaults to `process.exit(0)`, as GPUIX does when the window closes. */
   quit?: () => void;
   /** Where the new-pane form's folder suggestions come from; defaults to `ipc/dirs.ts`. */
@@ -72,6 +76,7 @@ export function startEffects(store: Store, options: EffectsOptions): () => void 
   const layoutDelay = options.layoutSaveDelayMs ?? 250;
   const settingsDelay = options.settingsSaveDelayMs ?? 300;
   const noticeMs = options.noticeMs ?? 5_000;
+  const usageRefreshMs = options.usageRefreshMs ?? 5_000;
   const timers = new Set<ReturnType<typeof setTimeout>>();
   let loadGeneration = 0;
   let loadEvents: Event[] | null = null;
@@ -82,6 +87,8 @@ export function startEffects(store: Store, options: EffectsOptions): () => void 
   let scanning = false;
   let listing: string | null = null;
   let listGeneration = 0;
+  let usageTimer: ReturnType<typeof setTimeout> | null = null;
+  let usageAsking = false;
 
   const dispatch = (action: Action) => {
     if (!stopped) store.dispatch(action);
@@ -239,6 +246,36 @@ export function startEffects(store: Store, options: EffectsOptions): () => void 
       .catch((error) => failed('Opening the folder picker', error));
   }
 
+  /** Asks plyd for the CLIs' usage now and again every `usageRefreshMs` while the view is shown; one request at a time. */
+  function refreshUsage(): void {
+    usageTimer = null;
+    if (!store.getState().usage.shown) return;
+    usageTimer = later(usageRefreshMs, refreshUsage);
+    if (usageAsking) return;
+    usageAsking = true;
+    client
+      .request('usage.get', {})
+      .then((usage) => dispatch({ type: 'usage/loaded', usage }))
+      .catch((error) => {
+        log('warn', 'usage.get failed', { error: message(error) });
+        const text =
+          error instanceof RequestError && error.code === 'unknown_method'
+            ? 'This plyd predates usage.get: rebuild it, then Restart plyd'
+            : message(error);
+        dispatch({ type: 'usage/failed', message: text });
+      })
+      .finally(() => {
+        usageAsking = false;
+      });
+  }
+
+  function stopUsage(): void {
+    if (!usageTimer) return;
+    clearTimeout(usageTimer);
+    timers.delete(usageTimer);
+    usageTimer = null;
+  }
+
   function closeFocused(prev: AppState): void {
     const pane = selectFocusedPane(prev);
     if (!pane || isAlive(pane)) return;
@@ -318,6 +355,8 @@ export function startEffects(store: Store, options: EffectsOptions): () => void 
       default:
         break;
     }
+    if (next.usage.shown && !prev.usage.shown) refreshUsage();
+    else if (!next.usage.shown && prev.usage.shown) stopUsage();
     if (next.overlay?.kind === 'new-pane') {
       const opened = prev.overlay?.kind !== 'new-pane';
       if (opened) refreshDirs(next);
@@ -362,6 +401,12 @@ export function startEffects(store: Store, options: EffectsOptions): () => void 
   (options.buildId ?? readBuildId)()
     .then((value) => dispatch({ type: 'env/buildId', value }))
     .catch((error) => log('warn', 'reading the build id failed', { error: message(error) }));
+  (options.keyRepeat ?? readKeyRepeat)()
+    .then((value) => {
+      log('info', 'key repeat', value);
+      dispatch({ type: 'env/keyRepeat', value });
+    })
+    .catch((error) => log('warn', 'reading the key repeat failed', { error: message(error) }));
 
   return () => {
     stopped = true;

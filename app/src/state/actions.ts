@@ -2,6 +2,7 @@ import type {
   AccentName,
   Answer,
   Cli,
+  CliUsage,
   Event,
   Layout,
   OptionAsMeta,
@@ -11,6 +12,8 @@ import type {
   Settings,
   Tab,
   TerminalTheme,
+  Usage,
+  UsageWindow,
   Workspace,
 } from '../ipc/proto.gen';
 
@@ -19,6 +22,7 @@ export type {
   AccentName,
   Answer,
   Cli,
+  CliUsage,
   Event,
   Layout,
   OptionAsMeta,
@@ -28,6 +32,8 @@ export type {
   Settings,
   Tab,
   TerminalTheme,
+  Usage,
+  UsageWindow,
   Workspace,
 };
 
@@ -62,7 +68,8 @@ export type CommandId =
   | 'font.up'
   | 'font.down'
   | 'font.reset'
-  | 'settings.open';
+  | 'settings.open'
+  | 'usage.show';
 
 /** The one overlay that may be open; while any is open, global key bindings do nothing (spec 7.4). */
 export type Overlay =
@@ -71,6 +78,12 @@ export type Overlay =
   | { kind: 'settings' }
   | { kind: 'close-confirm'; paneId: number }
   | { kind: 'quit-confirm' };
+
+/** macOS's key-repeat timing in ms (`InitialKeyRepeat`, `KeyRepeat`): how long a held key waits to repeat, then between repeats. */
+export interface KeyRepeat {
+  delayMs: number;
+  intervalMs: number;
+}
 
 /** What the new-pane form asks for; effects turn it into `pane.create` (`cwd` absolute, `worktree` Claude only). */
 export interface NewPaneRequest {
@@ -131,6 +144,14 @@ export type Action =
   | { type: 'settings/change'; settings: Settings }
   | { type: 'notice/show'; text: string }
   | { type: 'notice/clear'; id: number }
+  /** ⌘U was released (Ruling R59): its key-up, ⌘ let go, another key, the window losing focus or the repeats stopping. */
+  | { type: 'usage/hide' }
+  /** plyd's `usage.get` answer while the usage view is shown. */
+  | { type: 'usage/loaded'; usage: Usage }
+  /** `usage.get` failed; the view says why until an answer comes. */
+  | { type: 'usage/failed'; message: string }
+  /** macOS's key-repeat timing, read once at startup (a key never set is left out); the ⌘U hold uses it to notice a release AppKit did not report. */
+  | { type: 'env/keyRepeat'; value: Partial<KeyRepeat> }
   | { type: 'env/reducedMotion'; value: boolean }
   /** The app's own build id (`<version>+<commit>`), compared with `welcome.daemon_version`; `null` when unknown. */
   | { type: 'env/buildId'; value: string | null };

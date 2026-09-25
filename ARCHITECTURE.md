@@ -125,9 +125,9 @@ app/src
 │                    proto.gen.ts (generated) · mock-server.ts (tests only)
 ├── terminal/        frames.ts (C2 codec) · data-client.ts · replica.ts · runs.ts (row → <text> runs) ·
 │                    input.ts · selection.ts · session.ts · host.ts · metrics.ts
-├── keymap/          keymap.ts (every binding, once) · dispatcher.ts · reserved.ts
+├── keymap/          keymap.ts (every binding, once) · dispatcher.ts (the window's keys, the ⌘U hold) · reserved.ts
 ├── features/        panes/ (grid, frame, header, waiting and lost strips, terminal-view, close confirm) · tabs/ ·
-│                    statusbar/ · palette/ · new-pane/ · settings/
+│                    statusbar/ · palette/ · new-pane/ · settings/ · usage/ (the hold-⌘U usage card)
 ├── ui/              presentational primitives: text, kbd, chip, button, segments, switch, overlay card
 └── theme/           tokens.ts (the only palette and type scale) · chrome.ts
 ```

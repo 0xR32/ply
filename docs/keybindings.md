@@ -31,10 +31,43 @@ unless an overlay is open.
 | ⌘⇧W | `pane.close` | Closes the focused pane. A live pane asks first ("Close and stop": ⏎ stops it with `pane.close {kill:true}`, esc cancels); an exited or lost pane closes at once. |
 | ⌘= / ⌘- / ⌘0 | `font.up` / `font.down` / `font.reset` | Text size up or down by 1 pt within 9.5–24.5, or back to 12.5. The chrome and the terminals scale together; the size is stored with `settings.set`. |
 | ⌘, | `settings.open` | Opens Settings. |
+| ⌘U, held | `usage.show` | Shows Claude Code's and Codex's plan usage for as long as it is held, and hides it on release (see **Holding ⌘U**). |
 
 The commands are implemented in `app/src/state/reducer.ts` (`runCommand`) and,
-for the two that talk to plyd (`pane.terminalHere`, `pane.close`), in
-`app/src/state/effects.ts`.
+for the ones that talk to plyd (`pane.terminalHere`, `pane.close`, and
+`usage.show`'s `usage.get`), in `app/src/state/effects.ts`.
+
+## Holding ⌘U
+
+⌘U shows a card with one section per CLI and a row per usage window: its label
+(Claude Code: "Session · 5h", "Week · all models", "Week · Opus", "Week ·
+Sonnet"; Codex: "Session · 5h", "Week", with the models the sessions ran on), a
+bar that turns amber over 80 % and red at 100 %, when the window resets, and
+how old the numbers are ("updated 12 min ago", "as of 14:02"). A CLI without a
+record says "No usage recorded yet". The numbers are the CLIs' own records on
+disk, read by plyd (`usage.get`, `docs/agents.md`, **Plan usage**); the app
+asks when the card opens and every 5 s while it is held. It is not an overlay:
+it takes no keys and does not stop the other bindings.
+
+The card must go the moment ⌘U is let go, but AppKit sends **no key-up for a
+key released while ⌘ is down** (checked on GPUIX 0.10.0 with events posted into
+the app's own queue: ⌘U's key-down and its key repeats, `isHeld`, arrive; the
+key-up of `u` arrives only when ⌘ is let go first; a ⌘ change arrives as
+nothing at all). So `keymap/dispatcher.ts` hides it at the first of:
+
+- the key-up of `u` (⌘ released before `u`);
+- any other key-down, a `u` without ⌘ included (⌘ released while `u` repeats);
+  that key still does what it always does;
+- a blur: when the window loses focus its focused element blurs, which GPUIX
+  reports to the window's `onEvent`;
+- the key repeats stopping. While ⌘U is held macOS repeats it, after
+  `InitialKeyRepeat` and then every `KeyRepeat` (`defaults read -g`, in 15 ms
+  units, read once at startup; 500 ms and 83 ms, macOS's values, when never
+  set). The card hides when no repeat came within that time plus 150 ms, and
+  after 2 s at most, so with key repeat turned off it shows for 2 s. Letting go
+  of `u` first therefore hides it about a quarter of a second later.
+
+While an overlay is open ⌘U does nothing, like every global binding.
 
 ## In a pane
 
@@ -131,7 +164,9 @@ travelling on, so each stage decides for itself:
 3. **The dispatcher** (`app/src/keymap/dispatcher.ts`) is the window-level
    listener. It runs only ⌘ chords, and nothing at all while an overlay is
    open — so a form's own ⌘⏎ cannot also zoom a pane. A chord that is not a
-   global binding, such as ⌘C, does nothing here.
+   global binding, such as ⌘C, does nothing here. It also takes the window's
+   key-ups and its handled events (`onKeyUp`, `onEvent`), for the ⌘U hold
+   only; `windowKeyListeners` hands all three to `render()`.
 
 `onKeyDown` appears in exactly these places: `keymap/dispatcher.ts`,
 `features/panes/terminal-view.tsx`, `features/palette/palette.tsx`,

@@ -119,6 +119,11 @@ reach the app: ⌘W closes the window (sessions keep running). Close pane is
 ⌘⇧W. GPUIX binds neither Tab nor ⇧Tab, so both reach the terminal; JS key
 handlers cannot stop propagation.
 
+**AppKit sends no key-up for a key released while ⌘ is down**, and GPUIX
+reports no modifier change. A binding that must notice a release (the ⌘U hold)
+ends on the key's repeats stopping, any other key, or a blur, as well as the
+key-up (`keymap/dispatcher.ts`, `docs/keybindings.md`).
+
 **GPUIX is not the DOM.** Every `<text>` needs an explicit `color` (text does not
 inherit it); `div` is block until `display: "flex"`; a shrinking flex child needs
 `minWidth: 0`; style values are numbers, not CSS shorthand, and `boxShadow` is an

@@ -2,6 +2,7 @@ import { existsSync, readdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, join } from 'node:path';
 import { version } from '../../package.json';
+import type { KeyRepeat } from '../state/actions';
 import { log } from './log';
 
 const REPO_ROOT = join(import.meta.dir, '..', '..', '..');
@@ -60,4 +61,36 @@ export async function readReducedMotion(): Promise<boolean> {
     log('warn', 'cannot read the reduce-motion setting', { error: String(error) });
     return false;
   }
+}
+
+/** One unit of macOS's `KeyRepeat` and `InitialKeyRepeat` defaults, in ms. */
+export const KEY_REPEAT_UNIT_MS = 15;
+
+/** A `defaults read` answer as a positive number of units, or `null` when the key is unset (non-zero exit) or not a number. */
+export function parseDefaultsNumber(code: number, out: string): number | null {
+  const value = Number.parseFloat(out.trim());
+  return code === 0 && Number.isFinite(value) && value > 0 ? value : null;
+}
+
+async function readGlobalNumber(key: string): Promise<number | null> {
+  try {
+    const child = Bun.spawn(['defaults', 'read', '-g', key], { stdout: 'pipe', stderr: 'ignore' });
+    const [code, out] = await Promise.all([child.exited, new Response(child.stdout).text()]);
+    return parseDefaultsNumber(code, out);
+  } catch (error) {
+    log('warn', 'cannot read a keyboard default', { key, error: String(error) });
+    return null;
+  }
+}
+
+/** macOS's key-repeat timing (`defaults read -g InitialKeyRepeat` and `KeyRepeat`, in 15 ms units); a key never set is left out. */
+export async function readKeyRepeat(): Promise<Partial<KeyRepeat>> {
+  const [initial, repeat] = await Promise.all([
+    readGlobalNumber('InitialKeyRepeat'),
+    readGlobalNumber('KeyRepeat'),
+  ]);
+  return {
+    ...(initial !== null ? { delayMs: initial * KEY_REPEAT_UNIT_MS } : {}),
+    ...(repeat !== null ? { intervalMs: repeat * KEY_REPEAT_UNIT_MS } : {}),
+  };
 }

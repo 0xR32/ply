@@ -533,3 +533,39 @@ describe('⌘← ⌘→ ⌘↑ ⌘↓ (R58)', () => {
     expect(run(two, { type: 'command', id: 'pane.right' }).tabs[0]?.focus_pane_id).toBe(2);
   });
 });
+
+describe('the usage view (R59)', () => {
+  const usage = {
+    claude: {
+      as_of: 1_790_350_000,
+      windows: [{ label: 'Session · 5h', window_minutes: 300, used_percent: 81, models: [] }],
+    },
+  };
+
+  test('⌘U shows it, the release hides it, and the last answer stays for the next hold', () => {
+    const shown = run(makeState([]), { type: 'command', id: 'usage.show' });
+    expect(shown.usage).toEqual({ shown: true, usage: null, error: null });
+    expect(run(shown, { type: 'command', id: 'usage.show' })).toBe(shown);
+    const loaded = run(shown, { type: 'usage/loaded', usage }, { type: 'usage/hide' });
+    expect(loaded.usage).toEqual({ shown: false, usage, error: null });
+    expect(run(loaded, { type: 'usage/hide' })).toBe(loaded);
+  });
+
+  test('a failure keeps the last answer until a new one clears it', () => {
+    const failed = run(
+      makeState([]),
+      { type: 'usage/loaded', usage },
+      { type: 'usage/failed', message: 'timeout' },
+    );
+    expect(failed.usage).toMatchObject({ usage, error: 'timeout' });
+    expect(run(failed, { type: 'usage/loaded', usage: {} }).usage).toMatchObject({
+      usage: {},
+      error: null,
+    });
+  });
+
+  test('the key-repeat timing is kept as far as macOS sets it', () => {
+    const next = run(makeState([]), { type: 'env/keyRepeat', value: { intervalMs: 30 } });
+    expect(next.env.keyRepeat).toEqual({ intervalMs: 30 });
+  });
+});

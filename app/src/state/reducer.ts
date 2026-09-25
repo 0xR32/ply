@@ -4,11 +4,13 @@ import type {
   CommandId,
   ConnectionState,
   Event,
+  KeyRepeat,
   Layout,
   Overlay,
   Pane,
   Settings,
   Tab,
+  Usage,
   Workspace,
 } from './actions';
 import {
@@ -69,6 +71,17 @@ export interface Environment {
   geistAvailable: boolean;
   /** The app's build id, `<version>+<commit>` of the checkout it runs from; absent until read, or when git cannot tell. */
   buildId?: string;
+  /** macOS's key-repeat timing as far as `defaults` sets it; the ⌘U hold assumes macOS's defaults for the rest. */
+  keyRepeat?: Partial<KeyRepeat>;
+}
+
+/** The hold-⌘U usage view (Ruling R59): on screen while ⌘U is held, showing plyd's last `usage.get` answer. */
+export interface UsageView {
+  shown: boolean;
+  /** The last answer, kept between holds so the next one shows it at once; `null` before the first. */
+  usage: Usage | null;
+  /** Why the last `usage.get` failed, until an answer replaces it. */
+  error: string | null;
 }
 
 /** The whole app state; tabs are in bar order with `position` equal to their index. */
@@ -83,6 +96,7 @@ export interface AppState {
   dirs: DirSearch;
   settings: Settings;
   notice: Notice | null;
+  usage: UsageView;
   reducedMotion: boolean;
   env: Environment;
 }
@@ -111,6 +125,7 @@ export function initialState(env: Environment): AppState {
     dirs: { query: '', base: env.home, open: false, recent: [], repos: [], completion: null },
     settings: defaultSettings,
     notice: null,
+    usage: { shown: false, usage: null, error: null },
     reducedMotion: false,
     env,
   };
@@ -413,6 +428,8 @@ function runCommand(state: AppState, id: CommandId): AppState {
       return withFontSize(state, baseFontSize);
     case 'pane.terminalHere':
       return isTabFull(tab) ? showNotice(state, FULL_TAB_NOTICE) : state;
+    case 'usage.show':
+      return state.usage.shown ? state : { ...state, usage: { ...state.usage, shown: true } };
     default: {
       const digit = Number(id.slice('tab.go.'.length));
       const target = state.tabs[digit - 1];
@@ -511,6 +528,14 @@ function reduceAction(state: AppState, action: Action): AppState {
       return showNotice(state, action.text);
     case 'notice/clear':
       return state.notice?.id === action.id ? { ...state, notice: null } : state;
+    case 'usage/hide':
+      return state.usage.shown ? { ...state, usage: { ...state.usage, shown: false } } : state;
+    case 'usage/loaded':
+      return { ...state, usage: { ...state.usage, usage: action.usage, error: null } };
+    case 'usage/failed':
+      return { ...state, usage: { ...state.usage, error: action.message } };
+    case 'env/keyRepeat':
+      return { ...state, env: { ...state.env, keyRepeat: action.value } };
     case 'env/reducedMotion':
       return state.reducedMotion === action.value
         ? state

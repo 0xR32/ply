@@ -22,6 +22,7 @@ import {
   type Session,
   type Settings,
   type TerminalTheme,
+  type Usage,
   type Workspace,
 } from './proto.gen';
 
@@ -78,6 +79,8 @@ export class MockServer {
   palette: TerminalTheme | null = null;
   layout: Layout | null = null;
   settings: Settings = { ...DEFAULT_SETTINGS };
+  /** What `usage.get` answers; tests set it, and `{}` means neither CLI recorded any usage. */
+  usage: Usage = {};
   readonly workspace: Workspace;
   private readonly clients = new Set<Socket<{ buffer: string; welcomed: boolean }>>();
   private readonly timers = new Set<ReturnType<typeof setTimeout>>();
@@ -403,6 +406,8 @@ export class MockServer {
       case 'settings.set':
         this.settings = (p as Methods['settings.set']['params']).settings;
         return {};
+      case 'usage.get':
+        return this.usage;
       case 'daemon.shutdown':
         this.later(0, () => {
           this.emit({ e: 'daemon.stopping', p: p as Methods['daemon.shutdown']['params'] });

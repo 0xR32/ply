@@ -38,6 +38,8 @@ async function setup(before: (server: MockServer) => void = () => {}) {
       noticeMs: 30,
       reducedMotion: async () => true,
       buildId: async () => '0.1.0+0a1b2c3d4e5f',
+      keyRepeat: async () => ({ delayMs: 225, intervalMs: 30 }),
+      usageRefreshMs: 20,
       quit: () => quits.push(Date.now()),
     }),
   );
@@ -242,6 +244,44 @@ describe('effects', () => {
     await until(() => state().connection.kind !== 'connected', 'the drop');
     await until(() => seen.filter((a) => a.type === 'session/loaded').length === 2, 'a reload');
     expect(state().tabs[1]?.pane_ids).toContain(9);
+  });
+});
+
+describe('the usage view’s reads (R59)', () => {
+  test('holding ⌘U asks plyd at once and every refresh while held, and stops when it is released', async () => {
+    const { server, store, state, until } = await setup((s) => {
+      s.usage = {
+        codex: {
+          as_of: 1_790_331_000,
+          windows: [{ label: 'Week', used_percent: 41, resets_at: 1_790_926_095, models: [] }],
+        },
+      };
+    });
+    const asked = () => server.requestsOf('usage.get').length;
+    expect(state().env.keyRepeat).toEqual({ delayMs: 225, intervalMs: 30 });
+    expect(asked()).toBe(0);
+    store.dispatch({ type: 'command', id: 'usage.show' });
+    await until(() => state().usage.usage !== null, 'the first answer');
+    expect(state().usage.usage?.codex?.windows[0]?.used_percent).toBe(41);
+    await until(() => asked() >= 3, 'the refreshes');
+    store.dispatch({ type: 'usage/hide' });
+    const after = asked();
+    await Bun.sleep(80);
+    expect(asked()).toBe(after);
+    expect(state().usage.usage).not.toBeNull();
+  });
+
+  test('a plyd from before usage.get is named, and the next answer clears the error', async () => {
+    const { server, store, state, until } = await setup((s) =>
+      s.refuseNext('usage.get', 'unknown_method', 'unknown method "usage.get"'),
+    );
+    store.dispatch({ type: 'command', id: 'usage.show' });
+    await until(() => state().usage.error !== null, 'the refusal');
+    expect(state().usage.error).toBe('This plyd predates usage.get: rebuild it, then Restart plyd');
+    await until(() => state().usage.usage !== null, 'the next answer');
+    expect(state().usage.error).toBeNull();
+    expect(server.requestsOf('usage.get').length).toBeGreaterThanOrEqual(2);
+    store.dispatch({ type: 'usage/hide' });
   });
 });
 

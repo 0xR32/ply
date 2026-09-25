@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { version } from '../../package.json';
-import { readBuildId } from './os';
+import { parseDefaultsNumber, readBuildId, readKeyRepeat } from './os';
 
 describe('the build id', () => {
   test('is the version and the checkout commit abbreviated to 12, as plyd writes it', async () => {
@@ -19,5 +19,20 @@ describe('the build id', () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe('the key-repeat defaults', () => {
+  test('are positive numbers of 15 ms units, and an unset key is none', () => {
+    expect(parseDefaultsNumber(0, '2\n')).toBe(2);
+    expect(parseDefaultsNumber(0, '1.5\n')).toBe(1.5);
+    expect(parseDefaultsNumber(1, '')).toBeNull();
+    expect(parseDefaultsNumber(0, 'yes\n')).toBeNull();
+    expect(parseDefaultsNumber(0, '0\n')).toBeNull();
+  });
+
+  test('read from this machine are positive milliseconds, or left out when never set', async () => {
+    const timing = await readKeyRepeat();
+    for (const ms of Object.values(timing)) expect(ms).toBeGreaterThan(0);
   });
 });

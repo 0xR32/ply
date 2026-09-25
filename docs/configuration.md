@@ -226,9 +226,11 @@ holds it.
 - The panes' programs run as the user, in the user's `HOME`, and write what they
   always write — Claude Code under `~/.claude/`, Codex under `~/.codex/` — but
   ply never writes the CLIs' configuration files (INV-8, `docs/agents.md`).
-- The app runs `defaults read com.apple.universalaccess reduceMotion` and
-  `git rev-parse --short=12 HEAD` in its checkout (its build id) once at
-  startup, and `pbcopy` or `pbpaste` when you copy or paste in a pane.
+- The app runs `defaults read com.apple.universalaccess reduceMotion`,
+  `defaults read -g InitialKeyRepeat` and `defaults read -g KeyRepeat` (the
+  ⌘U hold's timing, `docs/keybindings.md`) and `git rev-parse --short=12 HEAD`
+  in its checkout (its build id) once at startup, and `pbcopy` or `pbpaste`
+  when you copy or paste in a pane.
 - For the new-pane form's folder suggestions (Ruling R57), each time the form
   opens the app checks which working directories of the workspace's panes and
   stored sessions (`session.list`) still exist, and lists the home directory in

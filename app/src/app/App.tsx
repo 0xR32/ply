@@ -1,6 +1,7 @@
 import { useMemo } from 'react';
 import { PaneGrid } from '../features/panes/pane-grid';
 import { StatusBar } from '../features/statusbar/statusbar';
+import { UsageView } from '../features/usage/usage-view';
 import { type Store, StoreContext, useAppSelector } from '../state/store';
 import { ChromeThemeContext, chromeFonts, createChromeTheme } from '../theme/chrome';
 import { tokens } from '../theme/tokens';
@@ -52,6 +53,7 @@ function Shell() {
         <PaneGrid />
         <StatusBar />
         <Overlays />
+        <UsageView />
       </div>
     </ChromeThemeContext.Provider>
   );
