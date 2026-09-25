@@ -83,11 +83,12 @@ function CursorBlock({
   cellWidth: number;
   cellHeight: number;
 }) {
-  const width = cellWidth * (wide ? 2 : 1);
+  const left = Math.round(cursor.col * cellWidth);
+  const width = Math.round((cursor.col + (wide ? 2 : 1)) * cellWidth) - left;
   const shape = focused ? cursor.shape : 'blockHollow';
   const box = {
     position: 'absolute',
-    left: cursor.col * cellWidth,
+    left,
     top: top * cellHeight,
     pointerEvents: 'none',
   } as const;

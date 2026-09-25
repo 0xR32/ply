@@ -29,7 +29,7 @@ function same(a: TerminalRowProps, b: TerminalRowProps): boolean {
   );
 }
 
-/** One screen row: a flex row of fixed-width `<text>` runs, so a fallback glyph can never shift the columns after it; filled runs let the pointer through to the view. */
+/** One screen row: each `<text>` run placed at its own column, rounded to a whole pixel, so neither a fallback glyph nor layout rounding can shift the columns after it. */
 export const TerminalRow = memo(function TerminalRow({
   row,
   cols,
@@ -41,24 +41,29 @@ export const TerminalRow = memo(function TerminalRow({
 }: TerminalRowProps) {
   const runs = rowRuns(row.row, cols, styleOf, resolver, selection);
   return (
-    <div style={{ display: 'flex', flexDirection: 'row', height: cellHeight, flexShrink: 0 }}>
-      {runs.map((run) => (
-        <text
-          key={run.col}
-          style={{
-            width: run.cells * cellWidth,
-            flexShrink: 0,
-            color: run.style.color,
-            ...(run.style.backgroundColor
-              ? { backgroundColor: run.style.backgroundColor, pointerEvents: 'none' as const }
-              : {}),
-            ...(run.style.bold ? { fontWeight: 600 } : {}),
-            ...(run.style.decoration ? { textDecoration: run.style.decoration } : {}),
-          }}
-        >
-          {run.text}
-        </text>
-      ))}
+    <div style={{ position: 'relative', height: cellHeight, flexShrink: 0 }}>
+      {runs.map((run) => {
+        const left = Math.round(run.col * cellWidth);
+        return (
+          <text
+            key={run.col}
+            style={{
+              position: 'absolute',
+              left,
+              top: 0,
+              width: Math.round((run.col + run.cells) * cellWidth) - left,
+              height: cellHeight,
+              pointerEvents: 'none',
+              color: run.style.color,
+              ...(run.style.backgroundColor ? { backgroundColor: run.style.backgroundColor } : {}),
+              ...(run.style.bold ? { fontWeight: 600 } : {}),
+              ...(run.style.decoration ? { textDecoration: run.style.decoration } : {}),
+            }}
+          >
+            {run.text}
+          </text>
+        );
+      })}
     </div>
   );
 }, same);
