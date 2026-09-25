@@ -23,9 +23,20 @@ jobs:
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
+      # use-cache keeps Zig's global cache, where build.rs has `zig fetch` put libghostty-vt's packages, between runs.
       - uses: mlugg/setup-zig@v2
         with:
           version: ${{ env.ZIG_VERSION }}
+          use-cache: true
+      - name: Pinned ghostty commit
+        id: ghostty
+        run: |
+          echo "commit=$(sed -n 's/^const GHOSTTY_COMMIT: &str = "\([0-9a-f]*\)";$/\1/p' crates/ghostty-sys/build.rs)" >> "$GITHUB_OUTPUT"
+      - name: Cache the ghostty source build.rs downloads
+        uses: actions/cache@v4
+        with:
+          path: ~/Library/Caches/ply/ghostty
+          key: ghostty-src-${{ steps.ghostty.outputs.commit }}
       - name: Install Rust ${{ env.RUST_VERSION }}
         run: rustup toolchain install "$RUST_VERSION" --profile minimal --component rustfmt,clippy
       - uses: Swatinem/rust-cache@v2
@@ -49,8 +60,20 @@ jobs:
 
   ts:
     runs-on: macos-15
+    # input.test.ts reads key/event.h from the ghostty source the rust job downloads and caches.
+    needs: rust
     steps:
       - uses: actions/checkout@v4
+      - name: Pinned ghostty commit
+        id: ghostty
+        run: |
+          echo "commit=$(sed -n 's/^const GHOSTTY_COMMIT: &str = "\([0-9a-f]*\)";$/\1/p' crates/ghostty-sys/build.rs)" >> "$GITHUB_OUTPUT"
+      - name: Restore the ghostty source
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/Library/Caches/ply/ghostty
+          key: ghostty-src-${{ steps.ghostty.outputs.commit }}
+          fail-on-cache-miss: true
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: ${{ env.BUN_VERSION }}

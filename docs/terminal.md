@@ -34,17 +34,21 @@ ply-daemon enables that (INV-17, `checkInv17Ghostty`).
   `build.rs` (`7bd1a8b6…a779`) and refuses a mismatch, and keeps the extracted
   tree in `~/Library/Caches/ply/ghostty/<commit>/`, so the download happens once
   per machine. `PLY_GHOSTTY_SRC=<dir>` builds from an existing ghostty checkout
-  at that commit instead, which is how a build runs offline.
+  at that commit instead, which is how a build runs offline. The download is
+  extracted beside the cache entry and renamed into place whole, so a concurrent
+  or interrupted build never sees half a tree.
 - **Zig** is `$ZIG`, else `zig` on `PATH`, and must be 0.16.0, the
   `minimum_zig_version` of the pin; anything else fails with the version found.
-  The Zig packages the library needs are fetched by the build when Zig's cache
-  lacks them.
+  The Zig packages the library needs are fetched by the build (`zig fetch`,
+  whose package hash must match the one pinned in `build.rs`) when Zig's cache
+  lacks them; `PLY_ZIG_PKG_DIR=<dir>` supplies them extracted by hash instead.
 - **Options.** `zig build -Demit-lib-vt`, with `-Doptimize=` from
   `LIBGHOSTTY_VT_OPTIMIZE` (`Debug`, `ReleaseSafe`, `ReleaseFast` or
   `ReleaseSmall`; default `ReleaseFast`) and `-Dtarget=` mapped from the Rust
   target (`aarch64-apple-darwin` → `aarch64-macos`, `x86_64-apple-darwin` →
-  `x86_64-macos`). The build writes only under cargo's `OUT_DIR` and the cache
-  directory above.
+  `x86_64-macos`). The build writes only under cargo's `OUT_DIR`, the cache
+  directory above and, for a missing package, Zig's global cache; never into the
+  source tree.
 - **Linking.** Zig installs a static archive and a dylib side by side; the
   build links `libghostty-vt.a` statically (`links = "ghostty-vt"`), so plyd
   carries the engine inside its own binary.

@@ -42,7 +42,6 @@ crates/agents                     ply-agents: Claude Code and Codex launch specs
 crates/daemon                     ply-daemon, binary plyd
 crates/hook                       ply-hook, the hook and notify forwarder
 app/                              the React app (src/) and bundled fonts (assets/fonts, SIL OFL)
-vendor/libghostty-vt              ghostty 44f2a44, pristine (vendor.json, patches.md)
 scripts/                          repository gates: check-rules, check-deps, check-pr, gen
 deps.allow.toml                   every admitted dependency with its INV-16 numbers
 docs/                             one document per subject (control channel, screen protocol, agents, terminal, …)
@@ -56,7 +55,8 @@ macOS 13 or later on Apple Silicon, with:
 
 - Rust 1.97.1 (`rust-toolchain.toml` selects it; `rustup` installs it), plus `cargo-nextest` and `cargo-deny` for the
   full gate set
-- Zig 0.16.0 on `PATH` or in `$ZIG` (libghostty-vt builds with it)
+- Zig 0.16.0 on `PATH` or in `$ZIG` (libghostty-vt builds with it; the first build downloads the ghostty source, about
+  40 MB, once)
 - Bun 1.3.10
 - [just](https://github.com/casey/just)
 - `claude` and/or `codex` installed and signed in, for real agent panes

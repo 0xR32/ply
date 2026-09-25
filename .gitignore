@@ -1,7 +1,4 @@
 target/
 node_modules/
-zig-out/
-.zig-cache/
-zig-pkg/
 .superpowers/
 .DS_Store

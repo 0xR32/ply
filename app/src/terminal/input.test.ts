@@ -1,23 +1,32 @@
 import { describe, expect, test } from 'bun:test';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { join } from 'node:path';
 import type { EventPayload } from '@gpuix/react';
 import { MAX_KEY_CODE, Mods } from './frames';
 import { GHOSTTY_KEYS, keyCode, keyFrame, modsOf, mouseButton, mouseFrame } from './input';
 
-const HEADER = join(
-  import.meta.dir,
-  '..',
-  '..',
-  '..',
-  'vendor',
-  'libghostty-vt',
-  'include',
-  'ghostty',
-  'vt',
-  'key',
-  'event.h',
-);
+const BUILD_RS = join(import.meta.dir, '..', '..', '..', 'crates', 'ghostty-sys', 'build.rs');
+
+/** The ghostty source ghostty-sys/build.rs builds from: `PLY_GHOSTTY_SRC`, else the pinned commit in the cache. */
+function ghosttySource(): string {
+  const override = process.env.PLY_GHOSTTY_SRC;
+  if (override) return override;
+  const commit = /const GHOSTTY_COMMIT: &str = "([0-9a-f]{40})";/.exec(
+    readFileSync(BUILD_RS, 'utf8'),
+  )?.[1];
+  if (!commit) throw new Error(`${BUILD_RS} pins no GHOSTTY_COMMIT`);
+  const xdg = process.env.XDG_CACHE_HOME;
+  const cache =
+    process.platform === 'darwin'
+      ? join(homedir(), 'Library', 'Caches')
+      : xdg?.startsWith('/')
+        ? xdg
+        : join(homedir(), '.cache');
+  return join(cache, 'ply', 'ghostty', commit);
+}
+
+const HEADER = join(ghosttySource(), 'include', 'ghostty', 'vt', 'key', 'event.h');
 
 function key(
   k: string,
@@ -39,6 +48,9 @@ const code = (name: string) => GHOSTTY_KEYS.indexOf(name);
 
 describe('GhosttyKey table', () => {
   test('matches libghostty-vt key/event.h name for name and in order', () => {
+    if (!existsSync(HEADER)) {
+      throw new Error(`${HEADER} is missing: build plyd once to download the ghostty source`);
+    }
     const header = readFileSync(HEADER, 'utf8');
     const block = header.slice(header.indexOf('GHOSTTY_KEY_UNIDENTIFIED'));
     const names = [...block.matchAll(/GHOSTTY_KEY_([A-Z0-9_]+)\s*[,=]/g)]

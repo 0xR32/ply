@@ -121,6 +121,7 @@ set them in the file with plyd stopped, or with `settings.set`.
 | `ZIG` | `crates/ghostty-sys/build.rs` | The Zig binary (else `zig` on `PATH`); it must be 0.16.0. |
 | `LIBGHOSTTY_VT_OPTIMIZE` | `build.rs` | Zig's optimize mode for libghostty-vt: `Debug`, `ReleaseSafe`, `ReleaseFast` (default) or `ReleaseSmall`. |
 | `PLY_GHOSTTY_SRC` | `build.rs` | An existing ghostty checkout at commit 44f2a44 to build from, instead of the downloaded and verified archive; the way to build offline. |
+| `PLY_ZIG_PKG_DIR` | `build.rs` | A directory holding libghostty-vt's Zig packages extracted by hash, used instead of Zig's global cache; with `PLY_GHOSTTY_SRC`, a build needs no network. |
 | `PLY_BLESS` | `crates/proto/tests/golden_c2.rs`, `crates/term/tests/replay.rs` | Rewrites the golden C2 frames, or the stored replay screens, instead of comparing. |
 | `PLY_GEN_OUT` | `crates/proto/tests/export_bindings.rs` | Set by `scripts/gen.ts`: where the generated TypeScript goes. |
 | `PLY_AGENT_CORPUS_DIR` | `crates/term/benches/throughput.rs` | The recorded agent captures the bench replays. |

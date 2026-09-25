@@ -9,7 +9,6 @@ import {
   readText,
   run,
 } from './lib/repo';
-import { vendorContentHash } from './lib/vendor-hash';
 
 const ROOT = normalize(join(import.meta.dir, '..'));
 const GPUIX_VERSION = '0.10.0';
@@ -302,7 +301,7 @@ function gitIdentity(root: string): string[] {
   return out;
 }
 
-/** INV-11: no home path of a real user and no committer identity in any repo file outside vendor/. */
+/** INV-11: no home path of a real user and no committer identity in any repo file. */
 export function checkInv11PersonalData(
   root: string,
   files: string[],
@@ -313,7 +312,7 @@ export function checkInv11PersonalData(
   const skipExt = /\.(ttf|otf|png|jpe?g|gif|icns|ico|lock)$/;
   const lowered = identities.map((s) => s.toLowerCase());
   for (const file of files) {
-    if (file.startsWith('vendor/') || skipExt.test(file) || isBinary(root, file)) continue;
+    if (skipExt.test(file) || isBinary(root, file)) continue;
     const text = readText(root, file) ?? '';
     for (const hit of matchLines(text, home)) {
       res.violations.push({
@@ -424,7 +423,25 @@ function cargoTreeInverse(root: string, pkg: string, target: string): string[] |
     .filter((l) => l.length > 0);
 }
 
-/** INV-17: libghostty-vt reaches only plyd (ghostty-sys -> ply-term -> ply-daemon); the vendor tree is pristine. */
+const GHOSTTY_BUILD_RS = 'crates/ghostty-sys/build.rs';
+
+/** INV-17 problems with the pin in `ghostty-sys/build.rs`: a full commit, an archive URL naming it, a SHA-256. */
+export function ghosttyPinProblems(buildRs: string): string[] {
+  const value = (name: string) =>
+    new RegExp(`\\bconst ${name}: &str =\\s*"([^"]*)";`).exec(buildRs)?.[1] ?? '';
+  const commit = value('GHOSTTY_COMMIT');
+  const url = value('GHOSTTY_ARCHIVE_URL');
+  const sha256 = value('GHOSTTY_ARCHIVE_SHA256');
+  const problems: string[] = [];
+  if (!/^[0-9a-f]{40}$/.test(commit)) problems.push('GHOSTTY_COMMIT is not a 40-hex commit');
+  if (commit === '' || !url.includes(commit))
+    problems.push('GHOSTTY_ARCHIVE_URL does not name GHOSTTY_COMMIT');
+  if (!/^[0-9a-f]{64}$/.test(sha256))
+    problems.push('GHOSTTY_ARCHIVE_SHA256 is not a 64-hex SHA-256');
+  return problems;
+}
+
+/** INV-17: libghostty-vt is linked only by plyd, built from the ghostty commit build.rs pins, downloads and SHA-256-verifies. */
 export function checkInv17Ghostty(root: string): CheckResult {
   const res = ok();
   const meta = cargoMetadata(root);
@@ -469,32 +486,11 @@ export function checkInv17Ghostty(root: string): CheckResult {
       });
     }
   }
-  const vendorDir = join(root, 'vendor/libghostty-vt');
-  const vendorJson = readText(root, 'vendor/libghostty-vt/vendor.json');
-  if (!existsSync(vendorDir) || vendorJson === null) {
-    res.violations.push({
-      check: 'INV-17',
-      file: 'vendor/libghostty-vt/vendor.json',
-      message: 'vendor/libghostty-vt or its vendor.json is missing',
-    });
-    return res;
-  }
-  if (readText(root, 'vendor/libghostty-vt/patches.md') === null) {
-    res.violations.push({
-      check: 'INV-17',
-      file: 'vendor/libghostty-vt/patches.md',
-      message: 'patches.md is missing (it lists every local patch, or says none)',
-    });
-  }
-  const want = (JSON.parse(vendorJson) as { content_hash?: { sha256?: string } }).content_hash
-    ?.sha256;
-  const have = vendorContentHash(vendorDir);
-  if (want !== have.sha256) {
-    res.violations.push({
-      check: 'INV-17',
-      file: 'vendor/libghostty-vt',
-      message: `tree hash ${have.sha256} (${have.files} files) differs from vendor.json ${want ?? 'none'}; a stray build output (zig-pkg/, .zig-cache/) or an unlisted patch`,
-    });
+  const buildRs = readText(root, GHOSTTY_BUILD_RS);
+  const problems =
+    buildRs === null ? [`${GHOSTTY_BUILD_RS} is missing`] : ghosttyPinProblems(buildRs);
+  for (const message of problems) {
+    res.violations.push({ check: 'INV-17', file: GHOSTTY_BUILD_RS, message });
   }
   return res;
 }
@@ -782,11 +778,6 @@ export function checkAll(root: string): CheckResult {
 }
 
 function main(): void {
-  if (process.argv.includes('--vendor-hash')) {
-    const h = vendorContentHash(join(ROOT, 'vendor/libghostty-vt'));
-    console.log(JSON.stringify(h));
-    return;
-  }
   const { violations, notices } = checkAll(ROOT);
   for (const n of notices) console.log(`notice: ${n}`);
   for (const v of violations) console.log(formatViolation(v));

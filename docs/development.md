@@ -13,8 +13,12 @@
 After cloning, run `bun install` once. `bunfig.toml` selects Bun's hoisted linker (so `bunx tsc` and `bunx biome`
 resolve from the root) and makes `bun add` write exact versions.
 
-Never run `zig build` by hand inside `vendor/libghostty-vt`: without the flags `ghostty-sys` passes it fetches packages
-into the vendor tree, and `check-rules` then reports the tree as modified.
+The first build of `ghostty-sys` needs the network once: it downloads the ghostty source (about 40 MB) into
+`~/Library/Caches/ply/ghostty/<commit>/`, checks its SHA-256, and runs `zig fetch` for any package Zig's global cache
+lacks; later builds use those caches. To build offline, set `PLY_GHOSTTY_SRC` to an extracted ghostty tree at the
+pinned commit and, when Zig's cache lacks the packages, `PLY_ZIG_PKG_DIR` to a directory holding them extracted by
+hash. Never run `zig build` by hand inside the cached source: without the flags `ghostty-sys` passes it writes
+`zig-out/`, `.zig-cache/` and `zig-pkg/` into the tree every later build reads.
 
 ## just recipes
 
@@ -140,12 +144,12 @@ runs the formatting, lint, rustdoc, rule and type gates; `just test` runs nextes
   INV-1 (no network API in `app/`), INV-2 (no byte fields in C1 types, no pty API in `app/`), INV-3 (no ply crate
   reaches `gpui`), INV-4 (`onKeyDown` only in the keymap dispatcher, the overlay forms and the terminal view), INV-5
   (colour literals only in `app/src/theme/tokens.ts` and fixtures), INV-7 (no `git worktree` call, no worktree column
-  but `worktree_seen`), INV-11 (no real home path or committer identity outside `vendor/`), INV-13 (GPUIX pinned
+  but `worktree_seen`), INV-11 (no real home path or committer identity in any file), INV-13 (GPUIX pinned
   exactly at 0.10.0 from npm, unpatched), INV-17 (`ghostty-sys` reaches only `plyd` through `ply-term`, and
-  `vendor/libghostty-vt` matches the content hash in its `vendor.json`), the dependency layers of spec 8.2 for crates
-  and for `app/src` imports, the unsafe and `anyhow` rules of spec 9.1, exact version pins, and the freshness of
-  `proto.gen.ts`. A check that needs code a later work package writes prints a `notice:` line instead.
-  `bun scripts/check-rules.ts --vendor-hash` prints the vendor tree's current hash.
+  `crates/ghostty-sys/build.rs` pins the ghostty commit, an archive URL naming it and the archive's SHA-256), the
+  dependency layers of spec 8.2 for crates and for `app/src` imports, the unsafe and `anyhow` rules of spec 9.1, exact
+  version pins, and the freshness of `proto.gen.ts`. A check that needs code a later work package writes prints a
+  `notice:` line instead.
 - **`scripts/check-deps.ts`** fails when a direct dependency of any `Cargo.toml` or `package.json` is missing from
   `deps.allow.toml`, or when its recorded numbers fail INV-16.
 - **`scripts/check-pr.ts`** requires a `Spec: x.y.z` line and a `WP: n` line in the pull-request body (`$PR_BODY`, or a

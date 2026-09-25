@@ -8,7 +8,6 @@ members = [
   "crates/daemon",
   "crates/hook",
 ]
-exclude = ["vendor"]
 
 [workspace.package]
 version = "0.1.0"

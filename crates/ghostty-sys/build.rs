@@ -1,21 +1,38 @@
-//! Builds the vendored libghostty-vt with Zig and links it statically (ADR-0005 Decision 1, ADR-0008 Decision 4).
+//! Builds libghostty-vt from the pinned ghostty source with Zig and links it statically (ADR-0005 Decision 1, ADR-0008
+//! Decision 4).
 //!
-//! Every `zig build` here runs offline with `--system <pkgdir>` and keeps its prefix and caches under `OUT_DIR`, so
-//! `vendor/libghostty-vt` is never written to (INV-17): without `--system`, Zig 0.16 fetches packages into
-//! `<build root>/zig-pkg/`. The package directory is `PLY_ZIG_PKG_DIR` when set, otherwise it is assembled in
-//! `OUT_DIR` from the package archives in Zig's global cache.
+//! The source is `PLY_GHOSTTY_SRC` when set (offline builds), otherwise ghostty [`GHOSTTY_COMMIT`] in the user's cache
+//! directory, downloaded once and checked against [`GHOSTTY_ARCHIVE_SHA256`] by `fetch.rs` (INV-17). Every `zig build`
+//! here runs offline with `--system <pkgdir>` and keeps its prefix and caches under `OUT_DIR`, so the source is never
+//! written to: without `--system`, Zig 0.16 fetches packages into `<build root>/zig-pkg/`. The package directory is
+//! `PLY_ZIG_PKG_DIR` when set, otherwise it is assembled in `OUT_DIR` from Zig's global cache, into which `zig fetch`
+//! puts any package it lacks.
+
+mod fetch;
 
 use std::env;
-use std::fmt::Write as _;
 use std::fs;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-/// The Zig release `vendor/libghostty-vt/build.zig.zon` requires (`minimum_zig_version`).
+/// The ghostty commit libghostty-vt is built from.
+const GHOSTTY_COMMIT: &str = "44f2a44df7e8c4a0c6df3f7d872ef3d7ead88e51";
+
+/// GitHub's tarball of [`GHOSTTY_COMMIT`]; its one top directory is `ghostty-<commit>/`.
+const GHOSTTY_ARCHIVE_URL: &str = "https://codeload.github.com/ghostty-org/ghostty/tar.gz/44f2a44df7e8c4a0c6df3f7d872ef3d7ead88e51";
+
+/// The SHA-256 of the archive at [`GHOSTTY_ARCHIVE_URL`]; a download that hashes differently is rejected.
+const GHOSTTY_ARCHIVE_SHA256: &str =
+    "7bd1a8b6ce5c1b3bbab67020a84761139d15f83ceea7738fa6d3ddd1b759a779";
+
+/// `-Dversion-string`: the `VERSION` file ghostty's source release carries at this commit, which the git tree lacks.
+const GHOSTTY_VERSION: &str = "1.3.2-HEAD-+44f2a44df";
+
+/// The Zig release ghostty's `build.zig.zon` requires (`minimum_zig_version`).
 const ZIG_VERSION: &str = "0.16.0";
 
-/// The packages `zig build -Demit-lib-vt` needs at ghostty 44f2a44: name, Zig package hash, source URL.
+/// The packages `zig build -Demit-lib-vt` needs at [`GHOSTTY_COMMIT`]: name, Zig package hash, source URL.
 const PACKAGES: &[(&str, &str, &str)] = &[
     (
         "translate_c",
@@ -84,27 +101,15 @@ fn main() {
 }
 
 fn run() -> Result<(), String> {
-    let manifest_dir = PathBuf::from(env_var("CARGO_MANIFEST_DIR")?);
-    let vendor = manifest_dir.join("../../vendor/libghostty-vt");
     let out_dir = PathBuf::from(env_var("OUT_DIR")?);
     let target = env_var("TARGET")?;
 
     println!("cargo:rerun-if-changed=build.rs");
-    for entry in [
-        "build.zig",
-        "build.zig.zon",
-        "VERSION",
-        "include",
-        "src",
-        "pkg",
-    ] {
-        println!("cargo:rerun-if-changed={}", vendor.join(entry).display());
-    }
     for var in [
+        "PLY_GHOSTTY_SRC",
         "ZIG",
         "LIBGHOSTTY_VT_OPTIMIZE",
         "PLY_ZIG_PKG_DIR",
-        "ZIG_GLOBAL_CACHE_DIR",
     ] {
         println!("cargo:rerun-if-env-changed={var}");
     }
@@ -119,21 +124,23 @@ fn run() -> Result<(), String> {
             OPTIMIZE_MODES.join(", ")
         ));
     }
-    let version = fs::read_to_string(vendor.join("VERSION"))
-        .map_err(|e| format!("cannot read {}: {e}", vendor.join("VERSION").display()))?
-        .trim()
-        .to_owned();
+    let source = ghostty_source(&out_dir)?;
+    // A purged cache makes the next build fetch the source again; input.test.ts reads its headers.
+    println!(
+        "cargo:rerun-if-changed={}",
+        source.join("build.zig").display()
+    );
     let pkg_dir = package_dir(&zig, &out_dir)?;
 
     let prefix = out_dir.join("zig-out");
     let mut cmd = Command::new(&zig);
-    cmd.current_dir(&vendor)
+    cmd.current_dir(&source)
         .arg("build")
         .arg("-Demit-lib-vt")
         .arg(format!("-Doptimize={optimize}"))
         .arg("-Dsimd=true")
         .arg(format!("-Dtarget={zig_target}"))
-        .arg(format!("-Dversion-string={version}"))
+        .arg(format!("-Dversion-string={GHOSTTY_VERSION}"))
         .arg("-Demit-xcframework=false")
         .arg("--system")
         .arg(&pkg_dir);
@@ -185,9 +192,84 @@ fn check_zig_version(zig: &str) -> Result<(), String> {
         Ok(())
     } else {
         Err(format!(
-            "libghostty-vt at ghostty 44f2a44 needs Zig {ZIG_VERSION}, but `{zig} version` printed {found:?}"
+            "libghostty-vt at ghostty {GHOSTTY_COMMIT} needs Zig {ZIG_VERSION}, but `{zig} version` printed {found:?}"
         ))
     }
+}
+
+/// The ghostty source tree: `PLY_GHOSTTY_SRC`, or [`GHOSTTY_COMMIT`] in the cache, downloaded and verified when absent.
+fn ghostty_source(out_dir: &Path) -> Result<PathBuf, String> {
+    if let Some(dir) = env::var_os("PLY_GHOSTTY_SRC") {
+        let dir = PathBuf::from(dir);
+        check_source(&dir).map_err(|e| format!("PLY_GHOSTTY_SRC: {e}"))?;
+        return Ok(dir);
+    }
+    let dest = cache_dir()?.join(GHOSTTY_COMMIT);
+    if !dest.exists() {
+        announce(
+            out_dir,
+            &format!(
+                "downloading the ghostty {GHOSTTY_COMMIT} source (about 40 MB, once) from {GHOSTTY_ARCHIVE_URL}"
+            ),
+        )?;
+        let pin = fetch::Pin {
+            url: GHOSTTY_ARCHIVE_URL,
+            sha256: GHOSTTY_ARCHIVE_SHA256,
+            top_dir: &format!("ghostty-{GHOSTTY_COMMIT}"),
+        };
+        fetch::fetch(&pin, &dest)?;
+        announce(
+            out_dir,
+            &format!(
+                "ghostty source verified (SHA-256 {GHOSTTY_ARCHIVE_SHA256}) and cached in {}",
+                dest.display()
+            ),
+        )?;
+    }
+    check_source(&dest).map_err(|e| format!("{e}; delete it to download it again"))?;
+    Ok(dest)
+}
+
+/// Prints a download notice as a cargo warning, shown by this build only.
+fn announce(out_dir: &Path, message: &str) -> Result<(), String> {
+    println!("cargo:warning={message}");
+    // Cargo replays a fresh build script's warnings on every build; a stamp newer than this run reruns it once, quietly.
+    let stamp = out_dir.join("downloaded.stamp");
+    fs::write(&stamp, "").map_err(|e| format!("cannot write {}: {e}", stamp.display()))?;
+    println!("cargo:rerun-if-changed={}", stamp.display());
+    Ok(())
+}
+
+/// Where downloaded ghostty sources live: `~/Library/Caches/ply/ghostty` on macOS, the XDG cache elsewhere.
+fn cache_dir() -> Result<PathBuf, String> {
+    let home = env::var_os("HOME")
+        .filter(|h| !h.is_empty())
+        .map(PathBuf::from);
+    let base = if cfg!(target_os = "macos") {
+        home.map(|h| h.join("Library/Caches"))
+    } else {
+        env::var_os("XDG_CACHE_HOME")
+            .map(PathBuf::from)
+            .filter(|p| p.is_absolute())
+            .or_else(|| home.map(|h| h.join(".cache")))
+    };
+    base.map(|b| b.join("ply/ghostty")).ok_or_else(|| {
+        "HOME is not set, so there is no cache directory for the ghostty source; set HOME, or PLY_GHOSTTY_SRC to \
+         an extracted ghostty source tree"
+            .to_owned()
+    })
+}
+
+fn check_source(dir: &Path) -> Result<(), String> {
+    for file in ["build.zig", "include/ghostty/vt.h"] {
+        if !dir.join(file).is_file() {
+            return Err(format!(
+                "{} is not a ghostty source tree (it has no {file})",
+                dir.display()
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn zig_target(target: &str) -> Result<&'static str, String> {
@@ -224,16 +306,19 @@ fn package_dir(zig: &str, out_dir: &Path) -> Result<PathBuf, String> {
 
     let pkg_dir = out_dir.join("zig-pkg");
     let cache = global_cache_dir(zig)?.join("p");
-    let mut missing = String::new();
     for (name, hash, url) in PACKAGES {
         if pkg_dir.join(hash).is_dir() {
             continue;
         }
         let archive = cache.join(format!("{hash}.tar.gz"));
-        println!("cargo:rerun-if-changed={}", archive.display());
         if !archive.is_file() {
-            let _ = writeln!(missing, "    {zig} fetch {url}    # {name}");
-            continue;
+            fetch_package(zig, out_dir, name, hash, url)?;
+            if !archive.is_file() {
+                return Err(format!(
+                    "`{zig} fetch {url}` did not put {} into Zig's package cache",
+                    archive.display()
+                ));
+            }
         }
         fs::create_dir_all(&pkg_dir)
             .map_err(|e| format!("cannot create {}: {e}", pkg_dir.display()))?;
@@ -251,14 +336,46 @@ fn package_dir(zig: &str, out_dir: &Path) -> Result<PathBuf, String> {
             ));
         }
     }
-    if missing.is_empty() {
-        Ok(pkg_dir)
+    Ok(pkg_dir)
+}
+
+/// Runs `zig fetch <url>` into Zig's global cache and checks that the package hash it prints is `hash`.
+fn fetch_package(
+    zig: &str,
+    out_dir: &Path,
+    name: &str,
+    hash: &str,
+    url: &str,
+) -> Result<(), String> {
+    announce(
+        out_dir,
+        &format!("fetching the Zig package {name} (once) from {url}"),
+    )?;
+    // zig fetch needs a build root and extracts a copy into its zig-pkg/, so the root is an empty one under OUT_DIR.
+    let root = out_dir.join("zig-fetch");
+    fs::create_dir_all(&root).map_err(|e| format!("cannot create {}: {e}", root.display()))?;
+    fs::write(root.join("build.zig"), "")
+        .map_err(|e| format!("cannot write {}: {e}", root.join("build.zig").display()))?;
+    let output = Command::new(zig)
+        .current_dir(&root)
+        .arg("fetch")
+        .arg(url)
+        .output()
+        .map_err(|e| format!("cannot run `{zig} fetch`: {e}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "`{zig} fetch {url}` failed ({}): {}; without network, set PLY_ZIG_PKG_DIR to a directory holding the \
+             extracted packages by hash",
+            output.status,
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    let fetched = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+    if fetched == hash {
+        Ok(())
     } else {
         Err(format!(
-            "Zig's package cache {} lacks packages the offline build needs. Fetch them once (online), from a \
-             scratch directory holding an empty build.zig (never inside vendor/libghostty-vt), with\n{missing}\
-             or set PLY_ZIG_PKG_DIR to a directory holding the extracted packages by hash",
-            cache.display()
+            "`{zig} fetch {url}` produced the package hash {fetched}, but ghostty {GHOSTTY_COMMIT} pins {name} at {hash}"
         ))
     }
 }

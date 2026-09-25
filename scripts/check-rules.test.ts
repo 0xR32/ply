@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from 'bun:test';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import {
@@ -10,6 +10,7 @@ import {
   checkInv5Palette,
   checkInv7Worktrees,
   checkInv11PersonalData,
+  ghosttyPinProblems,
 } from './check-rules';
 import { listRepoFiles } from './lib/repo';
 
@@ -90,6 +91,29 @@ describe('check-rules', () => {
       'crates/x/tests/fixtures/b.json:1',
       'docs/a.md:2',
     ]);
+  });
+
+  test('INV-17 accepts the committed ghostty pin in ghostty-sys/build.rs', () => {
+    const buildRs = readFileSync(join(import.meta.dir, '../crates/ghostty-sys/build.rs'), 'utf8');
+    expect(ghosttyPinProblems(buildRs)).toEqual([]);
+  });
+
+  test('INV-17 rejects a short commit, a URL for another commit and a hash that is not SHA-256', () => {
+    const commit = 'a'.repeat(40);
+    const pin = (c: string, url: string, sha: string) =>
+      `const GHOSTTY_COMMIT: &str = "${c}";\nconst GHOSTTY_ARCHIVE_URL: &str =\n    "${url}";\nconst GHOSTTY_ARCHIVE_SHA256: &str = "${sha}";\n`;
+    const url = `https://codeload.github.com/ghostty-org/ghostty/tar.gz/${commit}`;
+    expect(ghosttyPinProblems(pin(commit, url, 'f'.repeat(64)))).toEqual([]);
+    expect(ghosttyPinProblems(pin('aaaaaaa', url, 'f'.repeat(64)))).toEqual([
+      'GHOSTTY_COMMIT is not a 40-hex commit',
+    ]);
+    expect(
+      ghosttyPinProblems(pin(commit, url.replace(commit, 'b'.repeat(40)), 'f'.repeat(64))),
+    ).toEqual(['GHOSTTY_ARCHIVE_URL does not name GHOSTTY_COMMIT']);
+    expect(ghosttyPinProblems(pin(commit, url, 'f'.repeat(40)))).toEqual([
+      'GHOSTTY_ARCHIVE_SHA256 is not a 64-hex SHA-256',
+    ]);
+    expect(ghosttyPinProblems('')).toHaveLength(3);
   });
 
   test('layer rules: features never import another feature or ipc; ui imports only theme', () => {

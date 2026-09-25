@@ -23,7 +23,7 @@ map. `docs/` has one document per subject (see the doc map below).
 | the app | `app/` — Bun + React on GPUIX (`@gpuix/react` and `@gpuix/native` 0.10.0 from npm, used as released). `app/src/main.tsx` is the entry, `app/src/theme/tokens.ts` the only palette |
 | the terminal view | `app/src/terminal/` (C2 codec, replica, runs, input, selection) and `app/src/features/panes/terminal-view.tsx` |
 | the daemon | `crates/daemon` (`plyd`): ptys, one libghostty-vt terminal per pane, the C1 and C2 servers, SQLite, the LaunchAgent |
-| the terminal engine | `crates/term` (`ply-term`) over `crates/ghostty-sys`, which builds the pristine `vendor/libghostty-vt` (ghostty 44f2a44) with Zig |
+| the terminal engine | `crates/term` (`ply-term`) over `crates/ghostty-sys`, whose `build.rs` downloads pristine ghostty 44f2a44 (SHA-256-verified) and builds libghostty-vt from it with Zig |
 | the agent adapters | `crates/agents` (`ply-agents`): launch specs, the Claude hooks file, hook/notify/OSC 9/rollout parsing, progress, the version check |
 | the hook helper | `crates/hook` (`ply-hook`): one hook or notify payload → one C3 line to plyd |
 | the wire types | `crates/proto` (`ply-proto`): C1, C2, C3; `app/src/ipc/proto.gen.ts` is generated from it |
@@ -44,8 +44,9 @@ builds (`checkInv13Gpuix`). Solve UI problems with GPUIX's public API; never
 patch or fork a dependency or drop to GPUI in Rust.
 
 **libghostty-vt is plyd's alone and stays pristine.** Only ply-daemon enables
-ply-term's `engine` feature; the vendor tree must hash to `vendor.json`, and any
-local patch is listed in `vendor/libghostty-vt/patches.md` (`checkInv17Ghostty`).
+ply-term's `engine` feature; `crates/ghostty-sys/build.rs` pins the ghostty
+commit, its archive URL and the archive's SHA-256, rejects a download that
+differs, and applies no local patches (`checkInv17Ghostty`).
 
 **ply never decides for a CLI and never writes its config.** `ply-hook` prints
 nothing and exits 0 on every path within 200 ms, with plyd up or down
@@ -95,12 +96,15 @@ starts plyd through `plyd install-agent`, which writes a real
 the real `~/Library/Application Support/ply/`. With `PLY_HOME=<dir>` everything
 lives under that directory and plyd runs in the foreground.
 
-**libghostty-vt needs Zig 0.16.0.** `crates/ghostty-sys/build.rs` runs `zig
-build` offline with a package cache under `OUT_DIR`; set `ZIG` or put `zig` on
-`PATH`. The first build takes about a minute. Never build inside
-`vendor/libghostty-vt` by hand: `zig build` there writes `zig-out/`, `.zig-cache/`
-and `zig-pkg/` into the vendor tree and `checkInv17Ghostty` then reports it as
-modified.
+**libghostty-vt needs Zig 0.16.0 and, once, the network.** Set `ZIG` or put
+`zig` on `PATH`. The first build of `ghostty-sys` downloads the ghostty source
+(about 40 MB) into `~/Library/Caches/ply/ghostty/<commit>/`, plus any Zig
+package Zig's cache lacks, and takes about a minute; later builds reuse the
+caches and `zig build` itself runs offline under `OUT_DIR`. To build offline
+set `PLY_GHOSTTY_SRC` to an extracted ghostty 44f2a44 tree (and
+`PLY_ZIG_PKG_DIR` to the packages). Never build inside the cached source by
+hand: `zig build` there writes `zig-out/`, `.zig-cache/` and `zig-pkg/` into
+the tree every later build uses.
 
 **Never run `codex --version`, `codex --help` or `codex doctor` on this
 machine.** They start Codex's self-updater (it updated an install once). The
@@ -201,7 +205,7 @@ GPUIX's test renderer (`@gpuix/react/testing`) and the mock daemon
 | Unit | May depend on | Must not depend on |
 |---|---|---|
 | ply-proto | serde, serde_json, ts-rs, thiserror | any ply crate |
-| ghostty-sys | nothing at runtime; Zig at build time | any ply crate |
+| ghostty-sys | nothing at runtime; Zig, curl, shasum and tar at build time | any ply crate |
 | ply-term | ply-proto, tracing; ghostty-sys only with `engine` | gpui, tokio, any I/O crate |
 | ply-agents | ply-proto, serde, serde_json, thiserror | ply-term, tokio, gpui |
 | ply-daemon | ply-proto, ply-term (`engine`), ply-agents, rustix, tokio, rusqlite, notify, tracing, libc | gpui |
@@ -226,7 +230,8 @@ GPUIX's test renderer (`@gpuix/react/testing`) and the mock daemon
 ## What lives elsewhere
 
 - GPUIX (React on Zed's GPUI) — npm `@gpuix/react` / `@gpuix/native`, source at remorses/gpuix.
-- libghostty-vt — ghostty-org/ghostty, vendored pristine at 44f2a44.
+- libghostty-vt — ghostty-org/ghostty at 44f2a44, downloaded pristine by `crates/ghostty-sys/build.rs` into
+  `~/Library/Caches/ply/ghostty/`.
 - `claude` and `codex` — the user's own installs, found on the login-shell `PATH`; ply never installs,
   updates or signs them in.
 - The design canvas (visual reference) and the published specification are claude.ai artifacts, not files here.

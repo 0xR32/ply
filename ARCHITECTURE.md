@@ -65,7 +65,7 @@ crates/proto/src
 ├── hook.rs          C3: HookEnvelope
 └── version.rs       PROTOCOL_VERSION, C2_VERSION, HOOK_VERSION and the one comparison
 
-crates/ghostty-sys   build.rs (offline zig build of vendor/libghostty-vt into OUT_DIR) · lib.rs (the only FFI)
+crates/ghostty-sys   build.rs + fetch.rs (verified ghostty 44f2a44 download, zig build into OUT_DIR) · lib.rs (the only FFI)
 
 crates/term/src      (feature `engine` = plyd only)
 ├── engine.rs        Engine: one pane's libghostty-vt terminal behind a safe API; palette replies, idle compression
@@ -154,8 +154,8 @@ serves until `daemon.shutdown`.
   patches, overrides or local builds (`checkInv13Gpuix`).
 - libghostty-vt is linked only by plyd: `ghostty-sys` is reached through
   ply-term's `engine` feature, and only ply-daemon enables it
-  (`checkInv17Ghostty`, which also hashes the vendor tree against
-  `vendor/libghostty-vt/vendor.json`).
+  (`checkInv17Ghostty`, which also checks that `ghostty-sys/build.rs` pins
+  the ghostty commit, an archive URL naming it and the archive's SHA-256).
 - Each crate's dependencies are checked against the table in `CLAUDE.md`
   (`checkCrateLayers`); ply-proto and ply-hook may depend on nothing else, and
   ply-agents does no I/O beyond reading the files it is given.

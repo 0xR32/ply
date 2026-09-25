@@ -1,8 +1,9 @@
 //! Raw bindings to libghostty-vt, Ghostty's terminal engine as a C library (ghostty 44f2a44, spec 2).
 //!
-//! This is the only crate in ply with FFI to libghostty-vt (spec 3.2, INV-17). `build.rs` runs
-//! `zig build -Demit-lib-vt` on `vendor/libghostty-vt` offline (`--system` with a package directory, prefix and caches
-//! under `OUT_DIR`, never writing into the vendor tree; ADR-0005 Decision 1) and links `libghostty-vt.a` statically.
+//! This is the only crate in ply with FFI to libghostty-vt (spec 3.2, INV-17). `build.rs` downloads the pinned ghostty
+//! source once, checks its SHA-256 and caches it (or takes `PLY_GHOSTTY_SRC`), runs `zig build -Demit-lib-vt` on it
+//! offline (`--system` with a package directory, prefix and caches under `OUT_DIR`, never writing into the source;
+//! ADR-0005 Decision 1) and links `libghostty-vt.a` statically.
 //! This file declares, by hand, the part of the C API ply uses from `vt/terminal.h`, `render.h`, `screen.h`,
 //! `style.h`, `modes.h`, `device.h`, `size_report.h`, `snapshot.h`, `key.h`, `mouse.h`, `focus.h`, `paste.h`,
 //! `search.h`, `grid_ref.h`, `point.h`, `sys.h` and `types.h` (spec 12, ADR-0005 spec delta 11), plus the types those

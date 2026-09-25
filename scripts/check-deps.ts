@@ -110,11 +110,11 @@ export function directDependencies(root: string): DirectDep[] {
       }
     }
   }
-  if (readText(root, 'vendor/libghostty-vt/vendor.json') !== null) {
+  if (readText(root, 'crates/ghostty-sys/build.rs')?.includes('GHOSTTY_ARCHIVE_URL')) {
     out.push({
       ecosystem: 'vendor',
       name: 'libghostty-vt',
-      manifest: 'vendor/libghostty-vt/vendor.json',
+      manifest: 'crates/ghostty-sys/build.rs',
     });
   }
   return out;
