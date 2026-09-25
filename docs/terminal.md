@@ -234,7 +234,7 @@ installs no clipboard-read callback.
 
 **Focus.** `CSI I` and `CSI O`, only while the program enabled mode 1004.
 
-**INPUT_RAW** bytes, such as `pane.answer`'s digits, go to the pty unencoded.
+**INPUT_RAW** bytes, and `pane.answer`'s `1` or ESC, go to the pty unencoded.
 
 ## The view
 
@@ -252,6 +252,16 @@ status keeps arriving over C1.
 (`pane-frame.tsx`): a TITLE replaces the pane's name, a BELL marks a pane that
 is not the focused one with a bell until it is, and an EXIT marks the pane
 `exited` with its code at once (C1 `pane.exit` says the same a moment later).
+
+**A narrow header degrades.** The header measures its own width the way the
+view does (every 250 ms) and, in unscaled pixels (its width over the font
+scale, since everything grows with ⌘=), drops the plan's numbers below 480,
+the model below 400, the plan bar below 330, the branch below 290 and the CLI
+label below 240; the title and the branch ellipsize, and the header clips
+rather than letting items overlap (`pane-header.tsx`, `headerFit`). The status
+bar's key hints wrap onto a hidden second line, so hints that do not fit drop
+whole from the right (`large-font.test.tsx` checks both at the largest font
+size).
 
 **Size.** The view measures its box every 250 ms (every 16 ms until the first
 measurement) and sends the whole cells that fit (`gridFor` in

@@ -1,4 +1,5 @@
-import { useEffect, useState } from 'react';
+import { type PublicInstance, useGpuix } from '@gpuix/react';
+import { type RefObject, useEffect, useRef, useState } from 'react';
 import type { PaneState } from '../../state/reducer';
 import { isDone, paneTitle, type StatusTone, statusView } from '../../state/selectors';
 import { useAppSelector } from '../../state/store';
@@ -22,6 +23,66 @@ function useNowSeconds(ticking: boolean): number {
     return () => clearInterval(timer);
   }, [ticking]);
   return now;
+}
+
+/** Which optional header items fit; the least useful goes first as the pane narrows or the text grows. */
+export interface HeaderFit {
+  progressNumbers: boolean;
+  model: boolean;
+  progressBar: boolean;
+  branch: boolean;
+  cli: boolean;
+}
+
+const FULL_FIT: HeaderFit = {
+  progressNumbers: true,
+  model: true,
+  progressBar: true,
+  branch: true,
+  cli: true,
+};
+
+/** The fit of a header `width` px wide at chrome `scale`; thresholds are unscaled px, since every item grows with the font. */
+export function headerFit(width: number | null, scale: number): HeaderFit {
+  if (width === null) return FULL_FIT;
+  const w = width / scale;
+  return {
+    progressNumbers: w >= 480,
+    model: w >= 400,
+    progressBar: w >= 330,
+    branch: w >= 290,
+    cli: w >= 240,
+  };
+}
+
+const MEASURE_MS = 250;
+
+function sameFit(a: HeaderFit, b: HeaderFit): boolean {
+  return (Object.keys(a) as (keyof HeaderFit)[]).every((k) => a[k] === b[k]);
+}
+
+/** The header's fit from its own box, read through the renderer the way the terminal view reads its size. */
+function useHeaderFit(ref: RefObject<PublicInstance | null>, scale: number): HeaderFit {
+  const { renderer } = useGpuix();
+  const [fit, setFit] = useState<HeaderFit>(FULL_FIT);
+  useEffect(() => {
+    if (!renderer?.getElementBounds) return;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const measure = () => {
+      const id = ref.current?.id;
+      const b = id === undefined ? null : renderer.getElementBounds?.(id);
+      if (b) {
+        const next = headerFit(b.width, scale);
+        setFit((old) => (sameFit(old, next) ? old : next));
+      }
+      timer = setTimeout(measure, b ? MEASURE_MS : 16);
+    };
+    measure();
+    return () => {
+      if (timer) clearTimeout(timer);
+    };
+  }, [renderer, ref, scale]);
+  return fit;
 }
 
 function toneColours(tone: StatusTone, c: ChromeTheme): { color: string; background: string } {
@@ -53,10 +114,12 @@ export interface PaneHeaderProps {
   onActivate: () => void;
 }
 
-/** The 42 px pane header: position key, title, a bell mark until the pane is looked at, branch, plan progress, CLI and model, status chip. */
+/** The 42 px pane header: position key, title, a bell mark until the pane is looked at, branch, plan progress, CLI and model, status chip; narrow, it drops the progress numbers, the model, the bar, the branch and the CLI in that order and clips rather than overlaps. */
 export function PaneHeader({ pane, position, focused, onActivate }: PaneHeaderProps) {
   const chrome = useChrome();
   const { z, accent } = chrome;
+  const ref = useRef<PublicInstance>(null);
+  const fit = useHeaderFit(ref, chrome.scale);
   const shellName = useAppSelector((s) => s.env.shellName);
   const ticking = pane.status === 'running' && pane.statusSince !== undefined;
   const view = statusView(pane, shellName, useNowSeconds(ticking));
@@ -70,9 +133,13 @@ export function PaneHeader({ pane, position, focused, onActivate }: PaneHeaderPr
   const barColour = waiting ? tokens.amber : isDone(pane) ? tokens.mint : accent.base;
   return (
     <div
+      ref={ref}
+      testId={`pane-${pane.id}-header`}
       style={{
         height: z(tokens.layout.paneHeaderHeight),
         flexShrink: 0,
+        minWidth: 0,
+        overflow: 'hidden',
         display: 'flex',
         alignItems: 'center',
         gap: z(10),
@@ -87,6 +154,7 @@ export function PaneHeader({ pane, position, focused, onActivate }: PaneHeaderPr
           height: z(tokens.layout.paneHeaderHeight),
           flexGrow: 1,
           minWidth: 0,
+          overflow: 'hidden',
           display: 'flex',
           alignItems: 'center',
           gap: z(10),
@@ -112,11 +180,13 @@ export function PaneHeader({ pane, position, focused, onActivate }: PaneHeaderPr
             <Icon name="bell" size={12} color={tokens.amber} />
           </div>
         ) : null}
-        {branch ? (
+        {branch && fit.branch ? (
           <div
+            testId={`pane-${pane.id}-branch`}
             style={{
               flexShrink: 4,
-              minWidth: z(72),
+              minWidth: 0,
+              overflow: 'hidden',
               display: 'flex',
               alignItems: 'center',
               gap: z(5),
@@ -129,9 +199,10 @@ export function PaneHeader({ pane, position, focused, onActivate }: PaneHeaderPr
           </div>
         ) : null}
       </div>
-      {progress && progress.total > 0 ? (
+      {progress && progress.total > 0 && fit.progressBar ? (
         <>
           <div
+            testId={`pane-${pane.id}-progress-bar`}
             style={{
               width: z(56),
               height: z(4),
@@ -150,13 +221,16 @@ export function PaneHeader({ pane, position, focused, onActivate }: PaneHeaderPr
               }}
             />
           </div>
-          <Text color={tokens.hint} variant="label" mono testId={`pane-${pane.id}-progress`}>
-            {`${progress.done}/${progress.total}`}
-          </Text>
+          {fit.progressNumbers ? (
+            <Text color={tokens.hint} variant="label" mono testId={`pane-${pane.id}-progress`}>
+              {`${progress.done}/${progress.total}`}
+            </Text>
+          ) : null}
         </>
       ) : null}
-      {agent ? (
+      {agent && fit.cli ? (
         <div
+          testId={`pane-${pane.id}-cli`}
           style={{
             height: z(22),
             flexShrink: 0,
@@ -172,7 +246,7 @@ export function PaneHeader({ pane, position, focused, onActivate }: PaneHeaderPr
           <Text color={tokens.text} variant="label" mono>
             {pane.cli}
           </Text>
-          {pane.model_seen ? (
+          {pane.model_seen && fit.model ? (
             <Text color={tokens.text2} variant="label" mono testId={`pane-${pane.id}-model`}>
               {pane.model_seen}
             </Text>

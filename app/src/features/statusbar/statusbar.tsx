@@ -8,6 +8,8 @@ import { Button } from '../../ui/button';
 import { Kbd } from '../../ui/kbd';
 import { Text } from '../../ui/text';
 
+const HINT_HEIGHT = 28;
+
 interface Hint {
   keys: string;
   label: string;
@@ -28,7 +30,7 @@ function hints(zoomed: boolean): Hint[] {
   ];
 }
 
-/** The 36 px footer: clickable key hints on the left, a notice and the per-CLI pane counts on the right. */
+/** The 36 px footer: clickable key hints on the left, a notice and the per-CLI pane counts on the right; hints that do not fit drop from the right. */
 export function StatusBar() {
   const dispatch = useDispatch();
   const { z } = useChrome();
@@ -50,27 +52,42 @@ export function StatusBar() {
         paddingRight: z(12),
       }}
     >
-      {hints(zoomed).map((h) => (
-        <Button
-          key={h.label}
-          testId={`hint-${h.label.toLowerCase().replaceAll(' ', '-')}`}
-          variant="quiet"
-          height={28}
-          paddingLeft={8}
-          paddingRight={8}
-          gap={7}
-          radius={7}
-          onClick={() => {
-            if (h.command) dispatch({ type: 'command', id: h.command });
-          }}
-        >
-          <Kbd label={h.keys} />
-          <Text color={tokens.text3} variant="small" weight={400}>
-            {h.label}
-          </Text>
-        </Button>
-      ))}
-      <div style={{ flexGrow: 1, minWidth: 0 }} />
+      <div
+        testId="statusbar-hints"
+        style={{
+          flexGrow: 1,
+          flexShrink: 1,
+          minWidth: 0,
+          height: z(HINT_HEIGHT),
+          overflow: 'hidden',
+          display: 'flex',
+          flexWrap: 'wrap',
+          alignItems: 'center',
+          gap: z(4),
+        }}
+      >
+        {/* A hint that does not fit wraps onto a second line, which the fixed height hides: whole hints drop. */}
+        {hints(zoomed).map((h) => (
+          <Button
+            key={h.label}
+            testId={`hint-${h.label.toLowerCase().replaceAll(' ', '-')}`}
+            variant="quiet"
+            height={HINT_HEIGHT}
+            paddingLeft={8}
+            paddingRight={8}
+            gap={7}
+            radius={7}
+            onClick={() => {
+              if (h.command) dispatch({ type: 'command', id: h.command });
+            }}
+          >
+            <Kbd label={h.keys} />
+            <Text color={tokens.text3} variant="small" weight={400}>
+              {h.label}
+            </Text>
+          </Button>
+        ))}
+      </div>
       {notice ? (
         <Text color={tokens.amber} variant="small" weight={400} ellipsis testId="notice">
           {notice.text}
