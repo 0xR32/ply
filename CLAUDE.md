@@ -221,7 +221,7 @@ Folder names carry no prefix; Cargo package names are `ply-<folder>` (except `gh
 |---|---|---|
 | ply-proto | serde, serde_json, ts-rs, thiserror | any ply crate |
 | ghostty-sys | nothing at runtime; Zig at build time | any ply crate |
-| ply-term | ply-proto; ghostty-sys only with feature `engine` | gpui, tokio, any I/O crate |
+| ply-term | ply-proto, tracing; ghostty-sys only with feature `engine` | gpui, tokio, any I/O crate |
 | ply-agents | ply-proto, serde_json, toml | ply-term, tokio, gpui |
 | ply-daemon | ply-proto, ply-term (`engine`), ply-agents, rustix, tokio, rusqlite, notify, tracing, libc | gpui |
 | ply-hook | serde_json | everything else, tokio included |
