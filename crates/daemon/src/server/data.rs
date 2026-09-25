@@ -1,7 +1,8 @@
 //! C2 screen data over `run/data.sock` (spec 4.2): one connection per attached pane view.
 //!
-//! The first frame must be ATTACH with [`ply_proto::C2_VERSION`] and the id of an open pane; anything else is
-//! answered with ATTACH_REFUSED (reason and a readable message) and the connection closes. After ATTACH the
+//! The first frame must be ATTACH with [`ply_proto::C2_VERSION`], the id of an open pane and a grid whose Snapshot
+//! fits one frame ([`crate::pty::Geometry::fits_one_frame`]); anything else is answered with ATTACH_REFUSED (reason
+//! and a readable message) and the connection closes. After ATTACH the
 //! connection has two halves: a reader that decodes client frames (length-capped at
 //! [`ply_proto::data::MAX_FRAME_LEN`] before any allocation) and hands them to the pane task, and a writer that
 //! drains the frames the pane task encoded for this client. The pane task decides what is sent and when; a client
@@ -71,6 +72,7 @@ async fn connection(stream: UnixStream, shared: Arc<Shared>) {
             );
             refuse(
                 &mut wr,
+                None,
                 RefuseReason::NotAttached,
                 "the first frame must be ATTACH",
             )
@@ -82,6 +84,7 @@ async fn connection(stream: UnixStream, shared: Arc<Shared>) {
             tracing::warn!(client, error = %e, "invalid first C2 frame");
             refuse(
                 &mut wr,
+                None,
                 RefuseReason::NotAttached,
                 &format!("invalid ATTACH: {e}"),
             )
@@ -92,7 +95,39 @@ async fn connection(stream: UnixStream, shared: Arc<Shared>) {
     let pane_id = attach.pane_id;
     if let Err(e) = ply_proto::version::check_version("C2", ply_proto::C2_VERSION, attach.v) {
         tracing::warn!(client, pane_id, error = %e, "C2 version mismatch");
-        refuse(&mut wr, RefuseReason::VersionMismatch, &e.to_string()).await;
+        refuse(
+            &mut wr,
+            Some(pane_id),
+            RefuseReason::VersionMismatch,
+            &e.to_string(),
+        )
+        .await;
+        return;
+    }
+    let geometry = Geometry {
+        cols: attach.cols,
+        rows: attach.rows,
+        cell_width_px: attach.cell_width_px,
+        cell_height_px: attach.cell_height_px,
+    };
+    if !geometry.fits_one_frame() {
+        tracing::warn!(
+            client,
+            pane_id,
+            cols = geometry.cols,
+            rows = geometry.rows,
+            "ATTACH with a grid whose Snapshot cannot fit one frame"
+        );
+        refuse(
+            &mut wr,
+            Some(pane_id),
+            RefuseReason::NotAttached,
+            &format!(
+                "a {} x {} grid is too large for one screen frame",
+                geometry.cols, geometry.rows
+            ),
+        )
+        .await;
         return;
     }
     let handle = shared
@@ -103,6 +138,7 @@ async fn connection(stream: UnixStream, shared: Arc<Shared>) {
         tracing::info!(client, pane_id, "ATTACH to an unknown pane");
         refuse(
             &mut wr,
+            Some(pane_id),
             RefuseReason::UnknownPane,
             &format!("no pane {pane_id}"),
         )
@@ -110,12 +146,6 @@ async fn connection(stream: UnixStream, shared: Arc<Shared>) {
         return;
     };
     let (out, mut frames) = mpsc::channel(CLIENT_QUEUE);
-    let geometry = Geometry {
-        cols: attach.cols,
-        rows: attach.rows,
-        cell_width_px: attach.cell_width_px,
-        cell_height_px: attach.cell_height_px,
-    };
     if handle
         .send(PaneCmd::Attach {
             client,
@@ -128,6 +158,7 @@ async fn connection(stream: UnixStream, shared: Arc<Shared>) {
         tracing::info!(client, pane_id, "ATTACH to a pane that just closed");
         refuse(
             &mut wr,
+            Some(pane_id),
             RefuseReason::UnknownPane,
             &format!("pane {pane_id} closed"),
         )
@@ -187,21 +218,26 @@ async fn read_loop(
     }
 }
 
-async fn refuse(wr: &mut OwnedWriteHalf, reason: RefuseReason, message: &str) {
+async fn refuse(
+    wr: &mut OwnedWriteHalf,
+    pane_id: Option<PaneId>,
+    reason: RefuseReason,
+    message: &str,
+) {
     let mut bytes = Vec::new();
     let frame = Frame::AttachRefused(AttachRefused {
         reason,
         message: message.to_owned(),
     });
     if let Err(e) = frame.encode(&mut bytes) {
-        tracing::error!(error = %e, "cannot encode ATTACH_REFUSED");
+        tracing::error!(?pane_id, error = %e, "cannot encode ATTACH_REFUSED");
         return;
     }
     if let Err(e) = wr.write_all(&bytes).await {
-        tracing::debug!(error = %e, "cannot send ATTACH_REFUSED");
+        tracing::debug!(?pane_id, error = %e, "cannot send ATTACH_REFUSED");
         return;
     }
     if let Err(e) = wr.shutdown().await {
-        tracing::debug!(error = %e, "cannot shut the C2 connection down");
+        tracing::debug!(?pane_id, error = %e, "cannot shut the C2 connection down");
     }
 }

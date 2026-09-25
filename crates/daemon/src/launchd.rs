@@ -2,7 +2,8 @@
 //!
 //! plyd is the single writer of `~/Library/LaunchAgents/dev.ply.app.plyd.plist`: `plyd install-agent` renders
 //! `packaging/plyd.plist.template` (compiled in) with the path of the plyd binary it runs as, rewrites the file only
-//! when it changed (booting the old definition out first), then runs `launchctl bootstrap gui/<uid> <plist>`
+//! when it changed (booting the old definition out first, unless a plyd holds the instance lock: booting it out would
+//! kill every session, so it reports and leaves the agent as is), then runs `launchctl bootstrap gui/<uid> <plist>`
 //! (an already loaded agent is fine) and `launchctl kickstart gui/<uid>/dev.ply.app.plyd`. The agent does not run at
 //! login (`RunAtLoad` false; the app starts it on demand), launchd restarts it only after a crash (`KeepAlive`
 //! with `SuccessfulExit` false), and `ProcessType` is `Standard` because `Background` throttles every pane's I/O.
@@ -15,7 +16,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use crate::error::{Error, Result, io};
-use crate::paths::ENV_PLY_HOME;
+use crate::paths::{ENV_PLY_HOME, Paths};
 
 /// The LaunchAgent label, the bundle id plus `.plyd` (Ruling R3).
 pub const LABEL: &str = "dev.ply.app.plyd";
@@ -120,6 +121,20 @@ pub fn install_agent(dry_run: bool) -> Result<String> {
         Err(e) => return Err(io("cannot read", &plan.plist)(e)),
     };
     if current.as_deref() != Some(plan.contents.as_str()) {
+        let lock = Paths::resolve(None, Some(home.as_os_str()), None)?.lock();
+        if current.is_some()
+            && let Some(pid) = crate::lock::running(&lock)?
+        {
+            let pid = pid.map_or_else(|| "?".to_owned(), |p| p.to_string());
+            tracing::warn!(pid, plist = %plan.plist.display(), "plyd is running; not replacing its LaunchAgent");
+            let _ = writeln!(
+                report,
+                "plyd (pid {pid}) is running; {} was left unchanged so its sessions keep running. Stop it with \"Quit ply and stop sessions\" and run install-agent again to switch to {}",
+                plan.plist.display(),
+                plyd.display()
+            );
+            return Ok(report);
+        }
         if current.is_some() {
             let (code, stderr) = launchctl(&bootout)?;
             if code != 0 {

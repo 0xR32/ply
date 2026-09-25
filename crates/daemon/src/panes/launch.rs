@@ -21,7 +21,7 @@ use ply_term::{Engine, Palette};
 
 use crate::daemon::{Shared, unix_now};
 use crate::panes::pane::{PaneCmd, PaneSeed, Started, fallback_palette, spawn_task};
-use crate::panes::registry::{MethodResult, NewPane, internal, refuse};
+use crate::panes::registry::{MethodResult, NewPane, internal_for, refuse};
 use crate::paths::create_private_dir;
 use crate::pty::{Geometry, SpawnSpec, spawn_pane};
 
@@ -84,7 +84,7 @@ pub async fn create(shared: &Arc<Shared>, p: PaneCreateParams) -> MethodResult<P
         Ok(parts) => parts,
         Err(e) => {
             shared.registry().discard_pane(pane.id);
-            remove_pane_dir(&shared.paths.pane_dir(pane.id));
+            remove_pane_dir(pane.id, &shared.paths.pane_dir(pane.id));
             return Err(e);
         }
     };
@@ -115,17 +115,33 @@ pub async fn resume(shared: &Arc<Shared>, pane_id: PaneId) -> MethodResult<Pane>
     if shared.is_stopping() {
         return Err(refuse(ErrorCode::ShuttingDown, "plyd is shutting down"));
     }
-    let (pane, handle) = {
+    let handle = {
         let reg = shared.registry();
         let entry = reg.require(pane_id)?;
-        if entry.pane.status != PaneStatus::Lost {
-            return Err(refuse(ErrorCode::InvalidState, "the pane is not lost"));
-        }
-        (entry.pane.clone(), entry.handle.clone())
+        entry.handle.clone()
     };
     let Some(handle) = handle else {
         return Err(refuse(ErrorCode::InvalidState, "the pane has no task"));
     };
+    let pane = shared
+        .registry()
+        .begin_resume(pane_id, PaneStatus::Starting, unix_now())?;
+    let resumed = relaunch(shared, &pane, &handle).await;
+    shared
+        .registry()
+        .end_resume(pane_id, resumed.is_ok(), unix_now());
+    shared.update_power();
+    resumed?;
+    let reg = shared.registry();
+    Ok(reg.entry(pane_id).map_or(pane, |e| e.pane.clone()))
+}
+
+async fn relaunch(
+    shared: &Arc<Shared>,
+    pane: &Pane,
+    handle: &tokio::sync::mpsc::Sender<PaneCmd>,
+) -> MethodResult<()> {
+    let pane_id = pane.id;
     let dir = shared.paths.pane_dir(pane_id);
     let stored = std::fs::read(dir.join(LAUNCH_FILE))
         .map_err(|e| e.to_string())
@@ -157,6 +173,7 @@ pub async fn resume(shared: &Arc<Shared>, pane_id: PaneId) -> MethodResult<Pane>
         build_launch(shared, pane_id, stored.cli, &options)?
     };
     let started = spawn(shared, pane_id, &spec, shared.geometry())?;
+    shared.set_status(pane_id, initial_status(spec.cli), None);
     if handle
         .send(PaneCmd::Start(Box::new(started)))
         .await
@@ -165,9 +182,7 @@ pub async fn resume(shared: &Arc<Shared>, pane_id: PaneId) -> MethodResult<Pane>
         tracing::error!(pane_id, "the pane task is gone; cannot resume");
         return Err(refuse(ErrorCode::Internal, "the pane task is gone"));
     }
-    shared.set_status(pane_id, initial_status(spec.cli), None);
-    let reg = shared.registry();
-    Ok(reg.entry(pane_id).map_or(pane, |e| e.pane.clone()))
+    Ok(())
 }
 
 /// Gives every pane loaded from the database (all `lost` or `exited`) a task with an empty terminal, so a client
@@ -210,12 +225,12 @@ pub fn restore(shared: &Arc<Shared>) {
 }
 
 /// Deletes `run/panes/<id>/` of a closed pane; a failure is only logged.
-pub fn remove_pane_dir(dir: &Path) {
+pub fn remove_pane_dir(pane_id: PaneId, dir: &Path) {
     match std::fs::remove_dir_all(dir) {
         Ok(()) => {}
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
         Err(e) => {
-            tracing::warn!(dir = %dir.display(), error = %e, "cannot remove the pane's run directory")
+            tracing::warn!(pane_id, dir = %dir.display(), error = %e, "cannot remove the pane's run directory")
         }
     }
 }
@@ -307,7 +322,8 @@ fn build_launch(
     o: &LaunchOptions<'_>,
 ) -> MethodResult<LaunchSpec> {
     let dir = shared.paths.pane_dir(pane_id);
-    create_private_dir(&dir).map_err(|e| internal("cannot create the pane directory", &e))?;
+    create_private_dir(&dir)
+        .map_err(|e| internal_for(pane_id, "cannot create the pane directory", &e))?;
     let (spec, files) = match agent_cli(cli) {
         None => (
             LaunchSpec {
@@ -351,16 +367,20 @@ fn build_launch(
         }
     };
     for file in &files {
-        write_private(&file.path, file.contents.as_bytes())?;
+        write_private(pane_id, &file.path, file.contents.as_bytes())?;
     }
-    let json = spec
-        .to_json()
-        .map_err(|e| internal("cannot serialise launch.json", &crate::Error::Agents(e)))?;
-    write_private(&dir.join(LAUNCH_FILE), json.as_bytes())?;
+    let json = spec.to_json().map_err(|e| {
+        internal_for(
+            pane_id,
+            "cannot serialise launch.json",
+            &crate::Error::Agents(e),
+        )
+    })?;
+    write_private(pane_id, &dir.join(LAUNCH_FILE), json.as_bytes())?;
     Ok(spec)
 }
 
-fn write_private(path: &Path, bytes: &[u8]) -> MethodResult<()> {
+fn write_private(pane_id: PaneId, path: &Path, bytes: &[u8]) -> MethodResult<()> {
     std::fs::OpenOptions::new()
         .write(true)
         .create(true)
@@ -369,7 +389,8 @@ fn write_private(path: &Path, bytes: &[u8]) -> MethodResult<()> {
         .open(path)
         .and_then(|mut f| f.write_all(bytes))
         .map_err(|source| {
-            internal(
+            internal_for(
+                pane_id,
                 "cannot write a pane file",
                 &crate::Error::Io {
                     what: "cannot write",
@@ -387,10 +408,10 @@ fn new_engine(
     settings: &Settings,
 ) -> MethodResult<Engine> {
     let mut engine = Engine::new(pane_id, g.cols, g.rows, settings.scrollback_lines, palette)
-        .map_err(|e| internal("cannot create the terminal", &e.into()))?;
+        .map_err(|e| internal_for(pane_id, "cannot create the terminal", &e.into()))?;
     engine
         .resize(g.cols, g.rows, g.cell_width_px, g.cell_height_px)
-        .map_err(|e| internal("cannot size the terminal", &e.into()))?;
+        .map_err(|e| internal_for(pane_id, "cannot size the terminal", &e.into()))?;
     engine.set_option_as_meta(settings.option_as_meta);
     Ok(engine)
 }

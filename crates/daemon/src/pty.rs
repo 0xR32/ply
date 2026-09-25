@@ -44,6 +44,18 @@ pub const READ_CHUNK: usize = 64 * 1024;
 /// Exit code reported when the child could not be waited for.
 pub const EXIT_UNKNOWN: i32 = -1;
 
+/// Bytes of a Snapshot besides its rows: sequence, size, cursor, modes, scrollback count and row count.
+const SNAPSHOT_HEAD_BYTES: usize = 26;
+
+/// Bytes kept free in a Snapshot frame for the style table and grapheme clusters.
+const SNAPSHOT_STYLE_RESERVE: usize = 64 * 1024;
+
+/// Bytes of one row besides its cells: index, wrapped flag, cell count.
+const ROW_HEAD_BYTES: usize = 7;
+
+/// Bytes of one cell without grapheme extras: codepoint, style, flags.
+const CELL_BYTES: usize = 7;
+
 /// A grid size with the pixel size of one cell (C2 ATTACH/RESIZE semantics).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Geometry {
@@ -58,6 +70,15 @@ pub struct Geometry {
 }
 
 impl Geometry {
+    /// Whether a Snapshot of this grid (plain cells, a 64 KiB style reserve) fits one C2 frame; plyd refuses larger grids.
+    pub fn fits_one_frame(self) -> bool {
+        let (cols, rows) = (usize::from(self.cols), usize::from(self.rows));
+        let bytes = SNAPSHOT_HEAD_BYTES
+            + SNAPSHOT_STYLE_RESERVE
+            + rows * (ROW_HEAD_BYTES + cols * CELL_BYTES);
+        cols > 0 && rows > 0 && bytes <= ply_proto::data::MAX_FRAME_LEN
+    }
+
     /// The kernel window size: rows, columns and the whole grid's pixel size (saturating).
     pub fn winsize(self) -> Winsize {
         Winsize {
@@ -124,6 +145,11 @@ impl PaneProcess {
             source: e.into(),
         })
     }
+}
+
+/// Whether `e` is the ESRCH of a signal sent to a process or group that no longer exists.
+pub fn is_no_such_process(e: &Error) -> bool {
+    matches!(e, Error::Pty { what: "kill", source } if source.raw_os_error() == Some(Errno::SRCH.raw_os_error()))
 }
 
 /// Starts `spec` on a new pty (see the module docs) and returns the process with its channels; blocks only for fork/exec.
@@ -384,6 +410,48 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(100)).await;
         process.signal_group(Signal::KILL).unwrap();
         assert_eq!(ch.exit.await.unwrap(), 128 + 9);
+    }
+
+    #[test]
+    fn only_grids_whose_snapshot_fits_one_frame_are_accepted() {
+        let g = |cols, rows| Geometry {
+            cols,
+            rows,
+            cell_width_px: 8,
+            cell_height_px: 16,
+        };
+        assert!(g(80, 24).fits_one_frame());
+        assert!(
+            g(640, 180).fits_one_frame(),
+            "a full 5K screen at 8 x 16 px"
+        );
+        assert!(!g(u16::MAX, u16::MAX).fits_one_frame());
+        assert!(!g(2, u16::MAX).fits_one_frame());
+        assert!(!g(u16::MAX, 3).fits_one_frame());
+        assert!(!g(0, 24).fits_one_frame());
+        assert!(!g(80, 0).fits_one_frame());
+    }
+
+    #[tokio::test]
+    async fn signalling_a_vanished_group_reports_no_such_process() {
+        let argv: Vec<String> = ["/bin/sh", "-c", "exit 0"].map(str::to_owned).into();
+        let env = env();
+        let spec = SpawnSpec {
+            pane_id: 4,
+            argv: &argv,
+            env: &env,
+            cwd: Path::new("/"),
+            geometry: Geometry {
+                cols: 80,
+                rows: 24,
+                cell_width_px: 0,
+                cell_height_px: 0,
+            },
+        };
+        let (process, ch) = spawn_pane(&spec).unwrap();
+        assert_eq!(ch.exit.await.unwrap(), 0);
+        let err = process.signal_group(Signal::KILL).unwrap_err();
+        assert!(is_no_such_process(&err), "{err}");
     }
 
     #[test]

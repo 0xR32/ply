@@ -66,6 +66,31 @@ impl InstanceLock {
     }
 }
 
+/// Whether a plyd holds the lock at `path` now, with the pid it recorded when readable; `None` when none does.
+/// Opens the file read-only and never creates it; fails with [`Error::Io`] only when an existing file cannot be read.
+pub fn running(path: &Path) -> Result<Option<Option<u32>>> {
+    let mut file = match File::open(path) {
+        Ok(file) => file,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(io("cannot open", path)(e)),
+    };
+    match flock(&file, FlockOperation::NonBlockingLockShared) {
+        Ok(()) => Ok(None),
+        Err(Errno::WOULDBLOCK) => {
+            let mut text = String::new();
+            let pid = match file.read_to_string(&mut text) {
+                Ok(_) => text.trim().parse().ok(),
+                Err(e) => {
+                    tracing::warn!(path = %path.display(), error = %e, "cannot read the running plyd's pid");
+                    None
+                }
+            };
+            Ok(Some(pid))
+        }
+        Err(e) => Err(io("cannot lock", path)(e.into())),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -87,6 +112,24 @@ mod tests {
         let again = InstanceLock::acquire(&path).unwrap();
         assert_eq!(again.path(), path);
         drop(again);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn running_reports_the_holder_without_taking_or_creating_the_lock() {
+        let dir = std::env::temp_dir().join(format!("ply-lock-run-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("plyd.lock");
+        assert_eq!(running(&path).unwrap(), None, "no file, no plyd");
+        assert!(!path.exists(), "the check never creates the file");
+        let held = InstanceLock::acquire(&path).unwrap();
+        assert_eq!(running(&path).unwrap(), Some(Some(std::process::id())));
+        assert!(
+            InstanceLock::acquire(&path).is_err(),
+            "the check did not take it"
+        );
+        drop(held);
+        assert_eq!(running(&path).unwrap(), None);
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }

@@ -94,7 +94,7 @@ pub const MAX_PENDING_INPUT: usize = 16 * 1024 * 1024;
 /// Time budget of one idle-compression slice before the task yields to other work.
 const COMPRESS_SLICE: Duration = Duration::from_millis(5);
 
-/// Minimum interval between two `last_activity_at` writes of one pane.
+/// Minimum interval between two row writes (`last_activity_at`, title) caused by output of one pane.
 const ACTIVITY_WRITE_INTERVAL: Duration = Duration::from_secs(5);
 
 /// Everything a pane task starts from.
@@ -163,6 +163,8 @@ pub fn spawn_task(shared: Arc<Shared>, seed: PaneSeed) -> mpsc::Sender<PaneCmd> 
         pending_title: false,
         pending_bell: false,
         last_activity_write: None,
+        persist_at: None,
+        closing: false,
         stop: false,
     };
     if let Some(started) = seed.started {
@@ -246,6 +248,8 @@ struct PaneTask {
     pending_title: bool,
     pending_bell: bool,
     last_activity_write: Option<Instant>,
+    persist_at: Option<Instant>,
+    closing: bool,
     stop: bool,
 }
 
@@ -285,7 +289,7 @@ impl PaneTask {
             let writable = !self.writes.is_empty() && self.input.is_some();
             tokio::select! {
                 biased;
-                cmd = cmds.recv() => match cmd {
+                cmd = cmds.recv(), if !self.closing => match cmd {
                     Some(PaneCmd::Stop) | None => break,
                     Some(cmd) => self.on_command(cmd),
                 },
@@ -312,6 +316,9 @@ impl PaneTask {
                 () = sleep_until(deadline), if deadline.is_some() => {}
             }
             self.on_tick(Instant::now());
+        }
+        if self.kill_at.take().is_some() {
+            self.kill_group();
         }
         tracing::debug!(pane_id = self.id, "pane task stopped");
     }
@@ -374,6 +381,29 @@ impl PaneTask {
         self.kill_at = Some(now + KILL_GRACE);
     }
 
+    /// SIGKILL to the whole process group, even after its leader exited: a member that ignored SIGHUP keeps the pty open.
+    fn kill_group(&self) {
+        let Some(process) = &self.process else {
+            return;
+        };
+        match process.signal_group(Signal::KILL) {
+            Ok(()) => tracing::info!(
+                pane_id = self.id,
+                leader_exited = self.exit_code.is_some(),
+                "SIGHUP grace over; sent SIGKILL to the pane's process group"
+            ),
+            Err(e) if crate::pty::is_no_such_process(&e) => {
+                tracing::debug!(
+                    pane_id = self.id,
+                    "no process of the pane's group was left to kill"
+                );
+            }
+            Err(e) => {
+                tracing::warn!(pane_id = self.id, error = %e, "cannot send SIGKILL to the pane's processes");
+            }
+        }
+    }
+
     fn write(&mut self, bytes: Vec<u8>) {
         if self.input.is_none() {
             tracing::debug!(
@@ -416,6 +446,15 @@ impl PaneTask {
 
     fn apply_geometry(&mut self, geometry: Geometry, now: Instant) {
         if geometry == self.geometry {
+            return;
+        }
+        if !geometry.fits_one_frame() {
+            tracing::warn!(
+                pane_id = self.id,
+                cols = geometry.cols,
+                rows = geometry.rows,
+                "RESIZE to a grid whose Snapshot cannot fit one C2 frame ignored"
+            );
             return;
         }
         match self.engine.resize(
@@ -528,13 +567,19 @@ impl PaneTask {
             self.on_effects(out);
         }
         self.after_change(now);
-        if self
-            .last_activity_write
-            .is_none_or(|t| now.duration_since(t) >= ACTIVITY_WRITE_INTERVAL)
-        {
-            self.last_activity_write = Some(now);
-            self.shared.registry().touch(self.id, unix_now());
+        match self.last_activity_write {
+            Some(t) if now.duration_since(t) < ACTIVITY_WRITE_INTERVAL => {
+                self.persist_at.get_or_insert(t + ACTIVITY_WRITE_INTERVAL);
+            }
+            _ => self.persist(now),
         }
+    }
+
+    /// Stores the pane's row (activity time and title) now; output between two writes is stored at most every 5 s.
+    fn persist(&mut self, now: Instant) {
+        self.persist_at = None;
+        self.last_activity_write = Some(now);
+        self.shared.registry().touch(self.id, unix_now());
     }
 
     fn on_effects(&mut self, out: EngineOutput) {
@@ -670,7 +715,6 @@ impl PaneTask {
             }
         };
         self.exit_code = Some(code);
-        self.kill_at = None;
         if self.output.is_none() {
             self.finish_exit(Instant::now());
         } else {
@@ -715,8 +759,9 @@ impl PaneTask {
             let closed = self.shared.registry().close_pane(self.id, unix_now());
             match closed {
                 Ok(_) => {
-                    super::launch::remove_pane_dir(&self.shared.paths.pane_dir(self.id));
-                    self.stop = true;
+                    super::launch::remove_pane_dir(self.id, &self.shared.paths.pane_dir(self.id));
+                    self.closing = true;
+                    self.stop = self.kill_at.is_none();
                 }
                 Err(e) => {
                     tracing::warn!(pane_id = self.id, error = %e.msg, "cannot close the pane after its exit");
@@ -734,6 +779,7 @@ impl PaneTask {
             self.publish_at,
             self.exit_grace,
             self.kill_at,
+            self.persist_at,
             self.idle.due(),
         ]
         .into_iter()
@@ -746,16 +792,14 @@ impl PaneTask {
         if self.exit_grace.is_some_and(|t| t <= now) {
             self.finish_exit(now);
         }
+        if self.persist_at.is_some_and(|t| t <= now) {
+            self.persist(now);
+        }
         if self.kill_at.is_some_and(|t| t <= now) {
             self.kill_at = None;
-            if let (Some(process), None) = (&self.process, self.exit_code) {
-                tracing::info!(
-                    pane_id = self.id,
-                    "the pane ignored SIGHUP; sending SIGKILL"
-                );
-                if let Err(e) = process.signal_group(Signal::KILL) {
-                    tracing::warn!(pane_id = self.id, error = %e, "cannot send SIGKILL to the pane's processes");
-                }
+            self.kill_group();
+            if self.closing {
+                self.stop = true;
             }
         }
         for client in &mut self.clients {
@@ -834,6 +878,11 @@ fn send(pane_id: PaneId, client: &mut Client, frame: &Frame) -> bool {
             false
         }
         Err(mpsc::error::TrySendError::Closed(_)) => {
+            tracing::debug!(
+                pane_id,
+                client = client.id,
+                "the client's connection closed; dropping it"
+            );
             client.closed = true;
             false
         }

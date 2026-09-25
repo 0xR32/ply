@@ -52,6 +52,8 @@ impl Db {
     pub fn open(path: &Path) -> Result<Self> {
         let conn = Connection::open(path)?;
         conn.pragma_update(None, "journal_mode", "WAL")?;
+        // In WAL mode NORMAL syncs at checkpoints, not per commit; a crash can lose the last commits, never corrupt.
+        conn.pragma_update(None, "synchronous", "NORMAL")?;
         Self::init(conn)
     }
 

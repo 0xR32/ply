@@ -42,6 +42,12 @@ pub fn internal(context: &str, e: &crate::Error) -> ErrorBody {
     refuse(ErrorCode::Internal, format!("{context}: {e}"))
 }
 
+/// [`internal`] for a failure of one pane, logged with its `pane_id`.
+pub fn internal_for(pane_id: PaneId, context: &str, e: &crate::Error) -> ErrorBody {
+    tracing::error!(pane_id, error = %e, "{context}");
+    refuse(ErrorCode::Internal, format!("{context}: {e}"))
+}
+
 /// Whether a pane in `status` has (or should have) a process.
 pub fn is_live(status: PaneStatus) -> bool {
     !matches!(status, PaneStatus::Exited | PaneStatus::Lost)
@@ -56,6 +62,10 @@ pub struct PaneEntry {
     pub handle: Option<mpsc::Sender<PaneCmd>>,
     /// `pane.close {kill:true}` asked for the pane to close once its process has exited.
     pub close_on_exit: bool,
+    /// Clients know the pane: it was announced with `pane.added` or restored at startup; `pane.list` shows only these.
+    pub announced: bool,
+    /// A `pane.resume` is relaunching the pane's process; a second one is refused.
+    pub resuming: bool,
 }
 
 /// What `pane.create` asks the registry to record.
@@ -174,6 +184,8 @@ impl Registry {
                     pane,
                     handle: None,
                     close_on_exit: false,
+                    announced: true,
+                    resuming: false,
                 },
             );
         }
@@ -271,7 +283,7 @@ impl Registry {
         Ok(self
             .panes
             .values()
-            .filter(|e| e.pane.workspace_id == workspace_id)
+            .filter(|e| e.announced && e.pane.workspace_id == workspace_id)
             .map(|e| e.pane.clone())
             .collect())
     }
@@ -411,6 +423,8 @@ impl Registry {
                 pane: pane.clone(),
                 handle: None,
                 close_on_exit: false,
+                announced: false,
+                resuming: false,
             },
         );
         Ok(pane)
@@ -435,6 +449,7 @@ impl Registry {
             return;
         };
         entry.handle = Some(handle);
+        entry.announced = true;
         let pane = entry.pane.clone();
         self.emit(Event::PaneAdded(Box::new(pane)));
     }
@@ -443,6 +458,43 @@ impl Registry {
     pub fn set_handle(&mut self, id: PaneId, handle: mpsc::Sender<PaneCmd>) {
         if let Some(entry) = self.panes.get_mut(&id) {
             entry.handle = Some(handle);
+        }
+    }
+
+    /// Starts a `pane.resume` of the `lost` pane `id`: moves it to `status` (`pane.status`) and marks it resuming.
+    /// Fails with `not_found`, or `invalid_state` when the pane is not lost or another resume runs.
+    pub fn begin_resume(
+        &mut self,
+        id: PaneId,
+        status: PaneStatus,
+        now: UnixSeconds,
+    ) -> MethodResult<Pane> {
+        let entry = self.require(id)?;
+        if entry.resuming {
+            return Err(refuse(
+                ErrorCode::InvalidState,
+                "the pane is already resuming",
+            ));
+        }
+        if entry.pane.status != PaneStatus::Lost {
+            return Err(refuse(ErrorCode::InvalidState, "the pane is not lost"));
+        }
+        self.set_status(id, status, None, now);
+        let entry = self
+            .panes
+            .get_mut(&id)
+            .ok_or_else(|| refuse(ErrorCode::NotFound, format!("no pane {id}")))?;
+        entry.resuming = true;
+        Ok(entry.pane.clone())
+    }
+
+    /// Ends a `pane.resume`; a failed one puts the pane back to `lost`.
+    pub fn end_resume(&mut self, id: PaneId, started: bool, now: UnixSeconds) {
+        if let Some(entry) = self.panes.get_mut(&id) {
+            entry.resuming = false;
+        }
+        if !started {
+            self.set_status(id, PaneStatus::Lost, None, now);
         }
     }
 
@@ -510,18 +562,15 @@ impl Registry {
         close
     }
 
-    /// Sets the title shown in the pane header; an empty terminal title falls back to `fallback`. No event (C2 TITLE carries it).
+    /// Sets the header title in memory (an empty one falls back to `fallback`); the next row write stores it. No event.
     pub fn set_title(&mut self, id: PaneId, title: &str, fallback: &str) {
         let Some(entry) = self.panes.get_mut(&id) else {
             return;
         };
         let title = if title.is_empty() { fallback } else { title };
-        if entry.pane.title == title {
-            return;
+        if entry.pane.title != title {
+            entry.pane.title = title.to_owned();
         }
-        entry.pane.title = title.to_owned();
-        let pane = entry.pane.clone();
-        self.store(&pane);
     }
 
     /// Records a reported working directory and broadcasts `pane.meta`.
@@ -544,7 +593,7 @@ impl Registry {
         }));
     }
 
-    /// Records pty activity at `now` (the caller throttles it).
+    /// Records pty activity at `now` and stores the row, title included (the caller throttles it).
     pub fn touch(&mut self, id: PaneId, now: UnixSeconds) {
         let Some(entry) = self.panes.get_mut(&id) else {
             return;
@@ -909,6 +958,56 @@ mod tests {
             reg.save_layout(1, &bad).unwrap_err().code,
             ErrorCode::BadRequest
         );
+    }
+
+    #[test]
+    fn a_pane_is_listed_only_once_announced() {
+        let (mut reg, _) = registry();
+        let a = shell(&mut reg, None, "/Users/example");
+        assert!(reg.panes_of(1).unwrap().is_empty(), "not yet announced");
+        assert!(reg.entry(a.id).is_some(), "but known to plyd itself");
+        let (tx, _rx) = mpsc::channel(1);
+        reg.announce(a.id, tx);
+        assert_eq!(reg.panes_of(1).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn a_second_concurrent_resume_is_refused_and_a_failed_one_is_lost_again() {
+        let (mut reg, _) = registry();
+        let a = shell(&mut reg, None, "/Users/example");
+        assert_eq!(
+            reg.begin_resume(a.id, PaneStatus::Starting, 5)
+                .unwrap_err()
+                .code,
+            ErrorCode::InvalidState,
+            "a live pane is not resumed"
+        );
+        reg.set_status(a.id, PaneStatus::Lost, None, 6);
+        let resuming = reg.begin_resume(a.id, PaneStatus::Starting, 7).unwrap();
+        assert_eq!(resuming.status, PaneStatus::Starting);
+        reg.set_status(a.id, PaneStatus::Lost, None, 8);
+        assert_eq!(
+            reg.begin_resume(a.id, PaneStatus::Starting, 9)
+                .unwrap_err()
+                .code,
+            ErrorCode::InvalidState,
+            "one resume at a time"
+        );
+        reg.end_resume(a.id, false, 10);
+        assert_eq!(reg.entry(a.id).unwrap().pane.status, PaneStatus::Lost);
+        assert!(reg.begin_resume(a.id, PaneStatus::Idle, 11).is_ok());
+    }
+
+    #[test]
+    fn titles_stay_in_memory_until_the_next_row_write() {
+        let (mut reg, _) = registry();
+        let a = shell(&mut reg, None, "/Users/example");
+        reg.set_title(a.id, "vim notes.txt", "zsh");
+        assert_eq!(reg.entry(a.id).unwrap().pane.title, "vim notes.txt");
+        let stored = |reg: &Registry| reg.db.open_panes().unwrap()[0].title.clone();
+        assert_eq!(stored(&reg), "zsh", "a title change alone writes nothing");
+        reg.touch(a.id, 20);
+        assert_eq!(stored(&reg), "vim notes.txt");
     }
 
     #[test]

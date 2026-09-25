@@ -64,11 +64,12 @@ short: the socket paths below it must stay under 104 bytes.
 | `--foreground` | also log to stderr (launchd starts plyd without it; both modes serve the same way) |
 | `--run-dir <dir>` | put the sockets and `panes/` in another absolute directory |
 | `PLY_LOG` | log level: `error`, `warn`, `info` (default), `debug`, `trace` |
-| `plyd install-agent [--dry-run]` | write `~/Library/LaunchAgents/dev.ply.app.plyd.plist` for this plyd binary and `launchctl bootstrap` + `kickstart` it; `--dry-run` prints the plist and the commands instead. Refused while `PLY_HOME` is set |
+| `plyd install-agent [--dry-run]` | write `~/Library/LaunchAgents/dev.ply.app.plyd.plist` for this plyd binary and `launchctl bootstrap` + `kickstart` it; while a plyd runs (it holds the instance lock) a changed plist is left alone, since booting the old agent out would kill every session. `--dry-run` prints the plist and the commands instead. Refused while `PLY_HOME` is set |
 
 plyd refuses to start a second time for the same data directory (it prints the running pid and exits 0), refuses a
-database written by a newer plyd, and has no idle exit: it stops only on `daemon.shutdown`, SIGTERM, SIGINT or
-SIGHUP. Panes whose process ran when plyd stopped come back as `lost` and can be relaunched with `pane.resume`.
+database written by a newer plyd (also with status 0, so launchd does not restart it in a loop), and has no idle
+exit: it stops only on `daemon.shutdown`, SIGTERM, SIGINT or SIGHUP. Panes whose process ran when plyd stopped come
+back as `lost` and can be relaunched with `pane.resume`.
 
 How the app finds plyd (`app/src/ipc/daemon-launcher.ts`): it uses the cargo-built plyd — `$PLY_PLYD`, else
 `target/debug/plyd`, else `target/release/plyd`. With `PLY_HOME` set it spawns that binary as `plyd --foreground`,

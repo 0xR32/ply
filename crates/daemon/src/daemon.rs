@@ -109,13 +109,12 @@ impl Shared {
         self.next_client.fetch_add(1, Ordering::Relaxed)
     }
 
-    /// Holds the power assertion while any pane is `running` and the setting is on.
+    /// Holds the power assertion while any pane is `running` and the setting is on; never call it with the registry locked.
     pub fn update_power(&self) {
-        let (running, enabled) = {
+        self.power.set_with(|| {
             let reg = self.registry();
-            (reg.running_count(), reg.settings().keep_awake_while_running)
-        };
-        self.power.set(enabled && running > 0);
+            reg.settings().keep_awake_while_running && reg.running_count() > 0
+        });
     }
 
     /// Changes a pane's state (`pane.status`), then re-evaluates the power assertion; the state machine's entry point.

@@ -328,7 +328,7 @@ async fn close(shared: &Shared, p: PaneCloseParams) -> Result<Value, ErrorBody> 
         tracing::debug!(pane_id = p.pane_id, "the pane task had already stopped");
     }
     if !killing {
-        launch::remove_pane_dir(&shared.paths.pane_dir(p.pane_id));
+        launch::remove_pane_dir(p.pane_id, &shared.paths.pane_dir(p.pane_id));
     }
     ok(&Empty {})
 }

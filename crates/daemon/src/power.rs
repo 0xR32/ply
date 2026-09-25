@@ -40,6 +40,11 @@ impl KeepAwake {
 
     /// Holds the assertion when `wanted`, releases it otherwise; idempotent, and restarts a holder that died.
     pub fn set(&self, wanted: bool) {
+        self.set_with(|| wanted);
+    }
+
+    /// [`KeepAwake::set`] with the wish evaluated while this holder's lock is held, so concurrent callers apply in order.
+    pub fn set_with(&self, wanted: impl FnOnce() -> bool) {
         let mut slot = match self.child.lock() {
             Ok(slot) => slot,
             Err(poisoned) => {
@@ -60,7 +65,7 @@ impl KeepAwake {
                 }
             }
         }
-        match (wanted, slot.is_some()) {
+        match (wanted(), slot.is_some()) {
             (true, false) => *slot = self.start(),
             (false, true) => {
                 if let Some(child) = slot.take() {

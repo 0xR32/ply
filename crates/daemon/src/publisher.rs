@@ -99,16 +99,18 @@ impl ClientWindow {
         self.waiting_since.get_or_insert(now);
     }
 
-    /// Applies `Ack {seq}` received at `now`; any progress restarts the Ack timeout.
+    /// Applies `Ack {seq}` received at `now`; only progress (`seq` above the last Ack) restarts the Ack timeout.
     pub fn ack(&mut self, seq: u64, now: Instant) -> AckOutcome {
         if seq > self.last_sent || seq < self.acked {
             return AckOutcome::Ignored;
         }
-        self.acked = seq;
-        while self.deltas.front().is_some_and(|&d| d <= seq) {
-            self.deltas.pop_front();
+        if seq > self.acked {
+            self.acked = seq;
+            while self.deltas.front().is_some_and(|&d| d <= seq) {
+                self.deltas.pop_front();
+            }
+            self.waiting_since = (seq < self.last_sent).then_some(now);
         }
-        self.waiting_since = (seq < self.last_sent).then_some(now);
         if self.can_send_delta() {
             self.blocked_since = None;
         }
@@ -265,6 +267,25 @@ mod tests {
         assert_eq!(w.ack(2, t0), AckOutcome::Applied);
         assert_eq!(w.ack(1, t0), AckOutcome::Ignored);
         assert_eq!(w.acked(), 2);
+    }
+
+    #[test]
+    fn a_repeated_ack_does_not_restart_the_ack_timeout() {
+        let t0 = Instant::now();
+        let mut w = ClientWindow::default();
+        w.snapshot_sent(1, t0);
+        w.delta_sent(2, t0);
+        w.delta_sent(3, t0);
+        let t1 = t0 + Duration::from_secs(1);
+        assert_eq!(w.ack(2, t1), AckOutcome::Applied);
+        assert_eq!(w.ack_deadline(), Some(t1 + ACK_TIMEOUT));
+        let t2 = t0 + Duration::from_secs(20);
+        assert_eq!(w.ack(2, t2), AckOutcome::Applied);
+        assert_eq!(
+            w.ack_deadline(),
+            Some(t1 + ACK_TIMEOUT),
+            "Delta 3 is still unacknowledged since t1"
+        );
     }
 
     #[test]

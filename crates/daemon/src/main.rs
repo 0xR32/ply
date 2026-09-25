@@ -5,9 +5,9 @@
 //! (tests). `plyd install-agent [--dry-run]` installs and starts the LaunchAgent (Ruling R38). Logs go to
 //! `plyd.YYYY-MM-DD.log` in the log directory, kept 14 days, at the level in `PLY_LOG` (default `info`).
 //!
-//! A second plyd for the same data directory prints why it refuses and exits with status 0, so launchd's
-//! restart-on-failure never loops on it. Any other startup failure (a newer database schema, an unbindable socket)
-//! exits with status 1. plyd never renders and never links gpui (spec 3.2).
+//! A second plyd for the same data directory, or one that finds a database from a newer plyd, prints why it refuses
+//! and exits with status 0, so launchd's restart-on-failure never loops on it. Any other startup failure (an
+//! unbindable socket) exits with status 1. plyd never renders and never links gpui (spec 3.2).
 
 #![forbid(unsafe_code)]
 
@@ -142,6 +142,11 @@ fn main() -> ExitCode {
                 Some(already @ Error::AlreadyRunning { .. }) => {
                     eprintln!("plyd: {already}; not starting a second one");
                     tracing::warn!(error = %already, "refused to start a second plyd");
+                    ExitCode::SUCCESS
+                }
+                Some(too_new @ Error::SchemaTooNew { .. }) => {
+                    eprintln!("plyd: {too_new}");
+                    tracing::error!(error = %too_new, "refused a database from a newer plyd");
                     ExitCode::SUCCESS
                 }
                 _ => {

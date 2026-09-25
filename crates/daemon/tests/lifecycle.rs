@@ -435,3 +435,122 @@ fn an_agent_pane_runs_the_cli_from_the_login_path_with_its_launch_spec() {
         .is_some()
     );
 }
+
+fn close_and_wait_exit(c: &mut Control, pane: u64) -> (i32, Duration) {
+    let closed = Instant::now();
+    c.call("pane.close", json!({"pane_id": pane, "kill": true}))
+        .unwrap();
+    let Some(Event::PaneExit(exit)) = c.wait_event(
+        WAIT,
+        |e| matches!(e, Event::PaneExit(x) if x.pane_id == pane),
+    ) else {
+        panic!("no pane.exit");
+    };
+    (exit.code, closed.elapsed())
+}
+
+fn alive(pid: i32) -> bool {
+    rustix::process::Pid::from_raw(pid)
+        .is_some_and(|p| rustix::process::test_kill_process(p).is_ok())
+}
+
+#[test]
+fn a_shell_that_ignores_sighup_is_killed_after_the_grace() {
+    let sb = Sandbox::new("hupsh");
+    let _plyd = sb.start();
+    let (mut c, ws) = sb.control();
+    let pane = sb.shell(&mut c, ws);
+    let mut d = sb.attach_ready(pane);
+    d.input(b"trap '' HUP; echo trapped\r").unwrap();
+    assert!(d.pump_until(WAIT, |d| d.shows("trapped")).unwrap());
+    let (code, took) = close_and_wait_exit(&mut c, pane);
+    assert_eq!(code, 128 + 9, "SIGKILL");
+    assert!(
+        took >= Duration::from_millis(1900),
+        "after the 2 s grace: {took:?}"
+    );
+}
+
+#[test]
+fn a_group_member_that_ignores_sighup_is_killed_after_its_leader_exits() {
+    let sb = Sandbox::new("hupbg");
+    let _plyd = sb.start();
+    let (mut c, ws) = sb.control();
+    let pane = sb.shell(&mut c, ws);
+    let mut d = sb.attach_ready(pane);
+    d.input(b"set +m; (trap '' HUP; exec sleep 60) & echo $! > \"$HOME/bg.pid\"\r")
+        .unwrap();
+    let pid: i32 = read_when_ready(&sb.home.join("bg.pid"), WAIT)
+        .expect("bg.pid")
+        .trim()
+        .parse()
+        .unwrap();
+    assert!(alive(pid));
+    let (code, _) = close_and_wait_exit(&mut c, pane);
+    assert_eq!(code, 128 + 1, "the shell itself dies of SIGHUP");
+    assert!(
+        c.wait_event(
+            WAIT,
+            |e| matches!(e, Event::PaneRemoved(r) if r.pane_id == pane)
+        )
+        .is_some()
+    );
+    assert!(
+        eventually(Duration::from_secs(6), || !alive(pid)),
+        "the SIGHUP-ignoring member got SIGKILL"
+    );
+}
+
+#[test]
+fn grids_too_large_for_one_frame_are_refused_and_never_recorded() {
+    let sb = Sandbox::new("grid");
+    let _plyd = sb.start();
+    let (mut c, ws) = sb.control();
+    let pane = sb.shell(&mut c, ws);
+    let (_, refused) = Data::attach(&sb.data_socket(), pane, u16::MAX, u16::MAX).unwrap();
+    assert!(
+        matches!(&refused, Frame::AttachRefused(r) if r.reason == RefuseReason::NotAttached && r.message.contains("too large")),
+        "{refused:?}"
+    );
+    let mut d = sb.attach_ready(pane);
+    d.send(&Frame::Resize(ply_proto::data::Resize {
+        cols: 4000,
+        rows: 4000,
+        cell_width_px: 8,
+        cell_height_px: 16,
+    }))
+    .unwrap();
+    let mut size = None;
+    let deadline = Instant::now() + WAIT;
+    while size.is_none() && Instant::now() < deadline {
+        if let Some(Frame::Snapshot(s)) = d.recv(Duration::from_millis(200)).unwrap() {
+            size = Some((s.cols, s.rows));
+        }
+    }
+    assert_eq!(size, Some((80, 24)), "the RESIZE was ignored");
+    let other = sb.shell(&mut c, ws);
+    let mut o = sb.attach_ready(other);
+    o.input(b"stty size\r").unwrap();
+    assert!(
+        o.pump_until(WAIT, |d| d.shows("24 80")).unwrap(),
+        "{:?}",
+        o.screen()
+    );
+}
+
+#[test]
+fn a_database_from_a_newer_plyd_is_refused_with_status_0() {
+    let sb = Sandbox::new("schema");
+    std::fs::create_dir_all(&sb.ply_home).unwrap();
+    let db = rusqlite::Connection::open(sb.ply_home.join("ply.db")).unwrap();
+    db.execute_batch("CREATE TABLE schema_version (version INTEGER NOT NULL); INSERT INTO schema_version VALUES (99);")
+        .unwrap();
+    drop(db);
+    let out = sb.plyd(&["--foreground"]).output().unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        out.status.success(),
+        "status 0 keeps launchd from restarting it: {stderr}"
+    );
+    assert!(stderr.contains("schema version 99"), "{stderr}");
+}
