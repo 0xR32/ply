@@ -736,6 +736,11 @@ describe('task queue (R60)', () => {
     expect(queueStripView(state, 1)).toBeNull();
     state = run(state, evt({ e: 'queue.changed', p: { pane_id: 1, blocked: 'typing' } }));
     expect(queueStripView(state, 1)).toMatchObject({ kind: 'typing', next: { id: 2 } });
+    state = run(state, evt({ e: 'queue.changed', p: { pane_id: 1, blocked: 'startup' } }));
+    expect(queueStripView(state, 1)).toMatchObject({ kind: 'startup', next: { id: 2 } });
+    expect(
+      taskView(state.tasks.tasks[2] as Task, pane1, { pane_id: 1, blocked: 'startup' }).label,
+    ).toBe("waits for the CLI's prompt");
   });
 
   test('matchSkills finds a query in the invocation, name or description, ignoring case', () => {

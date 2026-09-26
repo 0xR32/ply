@@ -458,6 +458,37 @@ describe.if(hasNativeTestRenderer)('PaneGrid', () => {
     }
   });
 
+  test('a pane whose CLI has not shown its prompt says so and offers only to hold its queue', () => {
+    const base = demo();
+    const panes = {
+      ...base.panes,
+      1: { ...(base.panes[1] as PaneState), cli: 'codex' as const, status: 'idle' as const },
+    };
+    const state = reduce(
+      { ...base, panes },
+      {
+        type: 'tasks/loaded',
+        list: {
+          tasks: [makeTask({ id: 1, pane_id: 1, text: '$review-pr' })],
+          queues: [{ pane_id: 1, blocked: 'startup' }],
+        },
+      },
+    );
+    const { store, renderer, unmount } = mountWithStore(grid, state);
+    const seen: Action[] = [];
+    store.addEffect((a) => seen.push(a));
+    try {
+      expect(textOf(renderer, 'pane-1-queued')).toContain('$review-pr');
+      expect(textOf(renderer, 'pane-1-queued')).toContain('waits for its first prompt');
+      expect(renderer.findByTestId('queue-send-1')).toBeUndefined();
+      const hold = bounds(renderer, 'queue-hold-1');
+      renderer.nativeSimulateClick(hold.x + hold.width / 2, hold.y + hold.height / 2);
+      expect(seen).toEqual([{ type: 'queue/pause', paneId: 1, paused: true }]);
+    } finally {
+      unmount();
+    }
+  });
+
   test('a lost pane shows the resume strip, whose button resumes it through pane.resume', () => {
     const state = demo();
     const panes = {

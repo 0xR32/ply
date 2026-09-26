@@ -12,7 +12,7 @@ function plural(n: number): string {
   return n === 1 ? '1 task' : `${n} tasks`;
 }
 
-/** The strip under a pane whose next queued task cannot go by itself (Ruling R60): the user's typing, a pause, a restart or a failure. */
+/** The strip under a pane whose next queued task cannot go by itself (Ruling R60): the user's typing, a CLI not at its prompt yet, a pause, a restart or a failure. */
 export function QueuedStrip({ paneId }: { paneId: number }) {
   const strip = useAppSelector((s: AppState) => queueStripView(s, paneId), shallowEqual);
   if (!strip) return null;
@@ -90,6 +90,17 @@ function StripBody({ paneId, strip }: { paneId: number; strip: QueueStrip }) {
             'Send now',
             () => dispatch({ type: 'task/send', taskId: strip.next.id }),
             true,
+          )}
+        </>
+      ) : strip.kind === 'startup' ? (
+        <>
+          <Icon name="queue" size={13} color={tokens.text2} />
+          {note('Next')}
+          {text(strip.next.text)}
+          <div style={{ flexGrow: 1 }} />
+          {note('waits for its first prompt')}
+          {button(`queue-hold-${paneId}`, 'Hold', () =>
+            dispatch({ type: 'queue/pause', paneId, paused: true }),
           )}
         </>
       ) : strip.kind === 'failed' ? (

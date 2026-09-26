@@ -493,6 +493,8 @@ pub enum PauseReason {
 pub enum BlockReason {
     /// The user typed into the pane since its last prompt, so its input may hold unsent text; `task.send` overrides.
     Typing,
+    /// The pane's CLI has not shown its prompt in this process yet (Codex until its first turn, Claude Code until SessionStart), so a startup screen may be up; nothing overrides it.
+    Startup,
 }
 
 /// The state of one pane's queue beyond its tasks; `queue.changed` carries it, and a queue with neither field is running.

@@ -364,8 +364,9 @@ and never changes its text.
 
 Every pane has a queue; tasks leave it in `position` order. A workspace also has
 pools, one per CLI and directory: a pool task waits until an idle pane of that
-CLI, in that directory or below it, with an empty and running queue of its own
-and no unsent typing, takes it (the oldest pool task first). The pane takes it
+CLI, in that directory or below it, with an empty and running queue of its own,
+a process at its prompt and no unsent typing, takes it (the oldest pool task
+first). The pane takes it
 onto its own queue (`task.changed` with its `pane_id`) at the moment it would
 type it, so two free panes never take the same task. plyd resolves a pool's
 directory through symlinks when the task is added, as the CLIs report their
@@ -412,8 +413,10 @@ announced with `task.changed`. `invalid_state` for a task that is not queued.
 **`task.send`** types a queued task of a pane now, ahead of its queue: the one
 way past the typing block (see **Records**, `QueueState`). The pane must be
 `idle` with nothing else sent or running and its CLI must have reported a
-session, and the task must be on a pane's queue, else `invalid_state`. A pause does not stop it either: `task.send` is
-the user's own instruction for that one task.
+session, and the task must be on a pane's queue, else `invalid_state`. A pause
+does not stop it either: `task.send` is the user's own instruction for that one
+task. The startup block does: a process that has not shown its prompt yet gets
+the task once it has.
 
 **`queue.pause`** pauses (`paused: true`, reason `user`) or resumes
 (`paused: false`, whatever the reason) a pane's queue and announces it with
@@ -549,9 +552,12 @@ records none), and the windows, never empty, shortest first.
 (`queue.pause`), `restored` (plyd restarted with the task queued) or `failed`
 (the queue's last task failed); nothing is typed from a paused queue.
 `blocked` is `typing`: the user typed into the pane since its last prompt, so
-its input may hold text the task would be appended to; the task waits until a
-prompt is submitted or the input is cleared (Ctrl+C, Ctrl+U), or `task.send`.
-A queue with neither field runs.
+its input may hold text the task would be appended to; the task waits until the
+CLI takes a prompt or the input is cleared (Ctrl+C, Ctrl+U), or `task.send`.
+Or it is `startup`: the pane's process has not shown its prompt yet (Codex
+until its first turn, Claude Code until SessionStart), so a startup screen may
+be up; the task waits for it and nothing overrides it. A queue with neither
+field runs.
 
 **`TaskList`** — `{tasks, queues}`: see `task.list`.
 

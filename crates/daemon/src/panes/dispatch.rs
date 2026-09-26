@@ -1,18 +1,24 @@
 //! When plyd types a queued task into its pane (Ruling R60), as a small clocked state machine per agent process.
 //!
 //! The machine owns no queue: the registry holds the tasks, and the machine asks for the queue's head when typing may
-//! be possible ([`Action::Check`]), claims it ([`Action::Take`]; the registry marks it `sent` if it is still the head)
-//! and follows it. It types only into a pane that has been `idle` for [`SETTLE`] and whose input holds nothing the
-//! user typed since their last prompt: any key, raw input or paste of theirs marks the input as typed, and Enter,
-//! Ctrl+C, Ctrl+U or the CLI reporting a prompt or a new session clears it. While typed, the head waits and the queue
-//! is blocked ([`BlockReason::Typing`]) until the input clears or the user sends the task anyway (`task.send`).
+//! be possible ([`Action::Check`]: when the process starts, whenever the pane turns `idle`, when the process first shows
+//! its prompt, when the user's input clears, and on a nudge), claims it ([`Action::Take`]; the registry marks it `sent`
+//! if it is still the head) and follows it. It types only into a process that has shown its prompt
+//! ([`Sense::shows_prompt`]: a startup screen must never get a queued Enter, [`BlockReason::Startup`]), into a pane
+//! that has been `idle` for [`SETTLE`], and whose input holds nothing the user typed since their last prompt: any key,
+//! raw input or paste of theirs marks the input as typed, except a bare Enter and keys that answer the CLI's dialog or
+//! question. Only Ctrl+C, Ctrl+U, the CLI acknowledging a prompt ([`Sense::acknowledges`]) or starting a new session
+//! clears it; the user's Enter does not, since it may add a line to a draft or open a local command's picker. While
+//! typed, the head waits and the queue is blocked ([`BlockReason::Typing`]) until the input clears or the user sends
+//! the task anyway (`task.send`).
 //!
 //! A task is written as one paste (bracketed when the CLI enabled it) and, [`ENTER_DELAY`] later, one Enter, so an
-//! autocomplete pop-over the paste opens has settled. The CLI's acknowledgement makes the task `running`: Claude
-//! Code's UserPromptSubmit, Codex's rollout `task_started` (the adapter names it). The turn ending (Stop, notify,
-//! `task_complete`, or the quiet timeout) makes it `ended`; a Codex Enter that started no turn, no acknowledgement
-//! within [`ACK_WAIT`], or the process exiting makes it `failed`. The machine never answers a dialog: a task whose
-//! pane waits for the user stays `running`.
+//! autocomplete pop-over the paste opens has settled; the Enter is left out when the pane stopped being `idle` or the
+//! user typed since the paste. The CLI's acknowledgement makes the task `running`: Claude Code's UserPromptSubmit,
+//! Codex's rollout `task_started` (the adapter names it). The turn ending (Stop, notify, `task_complete`, or the quiet
+//! timeout) makes it `ended`; a Codex Enter that started no turn, no acknowledgement within [`ACK_WAIT`], or the process
+//! exiting makes it `failed`, and a task that failed unsubmitted leaves its text in the input, which then counts as
+//! typed. The machine never answers a dialog: a task whose pane waits for the user stays `running`.
 
 use std::time::{Duration, Instant};
 
@@ -62,6 +68,15 @@ pub enum Action {
     Block(Option<BlockReason>),
 }
 
+/// What the pane's adapter makes of a status signal, for [`Dispatch::on_signal`].
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Sense {
+    /// The CLI confirmed it took a prompt (`Adapter::acknowledges_prompt`).
+    pub acknowledges: bool,
+    /// The process is past its startup screens at its prompt (`Adapter::shows_prompt`).
+    pub shows_prompt: bool,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Phase {
     Waiting,
@@ -82,8 +97,10 @@ pub struct Dispatch {
     idle_since: Option<Instant>,
     quiet_until: Option<Instant>,
     check: bool,
+    live: bool,
     typed: bool,
-    blocked: bool,
+    interrupted: bool,
+    blocked: Option<BlockReason>,
     force: Option<TaskId>,
 }
 
@@ -95,24 +112,36 @@ fn clears_input(bytes: &[u8]) -> bool {
         || bytes.starts_with(b"\x1b[117;5u")
 }
 
+/// Whether the bytes are Enter alone, which puts no text into an empty input.
+fn bare_enter(bytes: &[u8]) -> bool {
+    bytes == b"\r" || bytes == b"\x1b[13u"
+}
+
 impl Dispatch {
-    /// A machine for a process in `status`; it looks at the queue once the pane has settled.
+    /// A machine for a new process in `status`; it looks at the queue once the pane has settled.
     pub fn new(status: PaneStatus, now: Instant) -> Self {
         Self {
             phase: Phase::Waiting,
             status,
             idle_since: (status == PaneStatus::Idle).then_some(now),
             quiet_until: None,
-            check: false,
+            check: true,
+            live: false,
             typed: false,
-            blocked: false,
+            interrupted: false,
+            blocked: None,
             force: None,
         }
     }
 
-    /// Whether the user typed into the pane since their last prompt; a pane with unsent typing takes no pool task.
+    /// Whether the user typed into the pane since their last prompt.
     pub fn typed(&self) -> bool {
         self.typed
+    }
+
+    /// Whether the pane may take a pool task: its process showed its prompt and its input holds no typing.
+    pub fn may_claim(&self) -> bool {
+        self.live && !self.typed()
     }
 
     /// The pane's queue changed: look at it again once the pane is settled.
@@ -121,21 +150,16 @@ impl Dispatch {
         self.poll(now)
     }
 
-    /// `task.send`: type `task` at the pane's next settled moment, even over the user's unsent typing.
+    /// `task.send`: type `task` at the pane's next settled moment, even over the user's unsent typing; never before
+    /// the process has shown its prompt.
     pub fn send_now(&mut self, task: TaskId, now: Instant) -> Vec<Action> {
         self.force = Some(task);
         self.poll(now)
     }
 
-    /// The pane's status changed.
+    /// The pane's status changed without a signal (the process exited).
     pub fn on_status(&mut self, status: PaneStatus, now: Instant) -> Vec<Action> {
-        let was = self.status;
-        self.status = status;
-        if status != PaneStatus::Idle {
-            self.idle_since = None;
-        } else if was != PaneStatus::Idle || self.idle_since.is_none() {
-            self.idle_since = Some(now);
-        }
+        self.set_status(status, now);
         if matches!(status, PaneStatus::Exited | PaneStatus::Lost)
             && let Some(task) = self.in_flight()
         {
@@ -145,22 +169,26 @@ impl Dispatch {
         self.poll(now)
     }
 
-    /// A status signal the machine applied; `acknowledges` when the adapter counts it as the CLI taking a prompt.
+    /// A status signal of the process, as the adapter reads it, and the pane's status after the machine applied it.
     pub fn on_signal(
         &mut self,
         signal: &StatusSignal,
-        acknowledges: bool,
+        sense: Sense,
+        status: PaneStatus,
         now: Instant,
     ) -> Vec<Action> {
-        if matches!(
-            signal,
-            StatusSignal::PromptSubmitted | StatusSignal::TurnStarted | StatusSignal::Ready
-        ) {
+        self.set_status(status, now);
+        if sense.shows_prompt && !self.live {
+            self.live = true;
+            self.check = true;
+        }
+        if sense.acknowledges || matches!(signal, StatusSignal::Ready) {
             self.clear_typed();
         }
         let mut out = Vec::new();
         match (self.phase, signal) {
-            (Phase::Pasted { task, .. } | Phase::Sent { task, .. }, _) if acknowledges => {
+            (Phase::Pasted { task, .. } | Phase::Sent { task, .. }, _) if sense.acknowledges => {
+                self.interrupted = false;
                 self.phase = Phase::Running { task };
                 out.push(Action::Report {
                     task,
@@ -169,7 +197,7 @@ impl Dispatch {
                 });
             }
             (Phase::Sent { task, .. }, StatusSignal::NoTurnStarted) => {
-                self.finish(now);
+                self.not_submitted(now);
                 out.push(failed(task, NOT_SUBMITTED));
             }
             (Phase::Running { task }, StatusSignal::TurnComplete | StatusSignal::QuietTimeout) => {
@@ -188,23 +216,27 @@ impl Dispatch {
 
     /// Bytes the user's own key or raw input wrote to the pty.
     pub fn on_user_input(&mut self, bytes: &[u8], now: Instant) -> Vec<Action> {
-        if crate::osc::is_enter(bytes) {
+        self.interrupt();
+        if clears_input(bytes) {
             self.clear_typed();
-            self.quiet(now + SETTLE_AFTER_ENTER);
-        } else {
-            if clears_input(bytes) {
-                self.clear_typed();
-            } else {
-                self.typed = true;
-            }
-            self.quiet(now + SETTLE);
+        } else if !self.answering() && !bare_enter(bytes) {
+            self.typed = true;
         }
+        let quiet = if crate::osc::is_enter(bytes) {
+            SETTLE_AFTER_ENTER
+        } else {
+            SETTLE
+        };
+        self.quiet(now + quiet);
         self.poll(now)
     }
 
     /// The user pasted into the pane.
     pub fn on_user_paste(&mut self, now: Instant) -> Vec<Action> {
-        self.typed = true;
+        self.interrupt();
+        if !self.answering() {
+            self.typed = true;
+        }
         self.quiet(now + SETTLE);
         self.poll(now)
     }
@@ -216,17 +248,11 @@ impl Dispatch {
             return Vec::new();
         }
         match head {
-            None => self.unblock(),
-            Some(_) if self.typed => {
-                if self.blocked {
-                    Vec::new()
-                } else {
-                    self.blocked = true;
-                    vec![Action::Block(Some(BlockReason::Typing))]
-                }
-            }
+            None => self.block(None),
+            Some(_) if !self.live => self.block(Some(BlockReason::Startup)),
+            Some(_) if self.typed => self.block(Some(BlockReason::Typing)),
             Some(task) => {
-                let mut out = self.unblock();
+                let mut out = self.block(None);
                 self.phase = Phase::Taking { task };
                 out.push(Action::Take(task));
                 out
@@ -241,6 +267,7 @@ impl Dispatch {
         }
         match text {
             Some(text) => {
+                self.interrupted = false;
                 self.phase = Phase::Pasted {
                     task,
                     enter_at: now + ENTER_DELAY,
@@ -272,7 +299,9 @@ impl Dispatch {
     /// The next moment [`Dispatch::tick`] has work, if any.
     pub fn deadline(&self) -> Option<Instant> {
         match self.phase {
-            Phase::Waiting if self.check || self.force.is_some() => self.settled_at(),
+            Phase::Waiting if self.check || (self.live && self.force.is_some()) => {
+                self.settled_at()
+            }
             Phase::Pasted { enter_at, .. } => Some(enter_at),
             Phase::Sent { deadline, .. } => Some(deadline),
             Phase::Waiting | Phase::Taking { .. } | Phase::Running { .. } => None,
@@ -285,9 +314,11 @@ impl Dispatch {
                 if !self.settled_at().is_some_and(|at| at <= now) {
                     return Vec::new();
                 }
-                if let Some(task) = self.force.take() {
+                if self.live
+                    && let Some(task) = self.force.take()
+                {
                     self.check = false;
-                    let mut out = self.unblock();
+                    let mut out = self.block(None);
                     self.phase = Phase::Taking { task };
                     out.push(Action::Take(task));
                     return out;
@@ -302,10 +333,13 @@ impl Dispatch {
                     task,
                     deadline: now + ACK_WAIT,
                 };
+                if std::mem::take(&mut self.interrupted) || self.status != PaneStatus::Idle {
+                    return Vec::new();
+                }
                 vec![Action::Enter]
             }
             Phase::Sent { task, deadline } if deadline <= now => {
-                self.finish(now);
+                self.not_submitted(now);
                 vec![failed(task, NOT_SUBMITTED)]
             }
             _ => Vec::new(),
@@ -321,6 +355,32 @@ impl Dispatch {
         Some(self.quiet_until.map_or(settled, |q| q.max(settled)))
     }
 
+    fn set_status(&mut self, status: PaneStatus, now: Instant) {
+        let was = self.status;
+        self.status = status;
+        if status != PaneStatus::Idle {
+            self.idle_since = None;
+        } else if was != PaneStatus::Idle || self.idle_since.is_none() {
+            self.idle_since = Some(now);
+            self.check = true;
+        }
+    }
+
+    /// Keys of the user's that go to the CLI's dialog or question, not into its prompt's input.
+    fn answering(&self) -> bool {
+        matches!(
+            self.status,
+            PaneStatus::WaitingPermission | PaneStatus::WaitingInput
+        )
+    }
+
+    /// The user wrote to the pane between a task's paste and its Enter, which is then left out.
+    fn interrupt(&mut self) {
+        if matches!(self.phase, Phase::Pasted { .. }) {
+            self.interrupted = true;
+        }
+    }
+
     /// A typed task is over: look at the queue again once the pane has settled anew.
     fn finish(&mut self, now: Instant) {
         self.phase = Phase::Waiting;
@@ -328,22 +388,28 @@ impl Dispatch {
         self.quiet(now + SETTLE);
     }
 
+    /// A typed task failed unsubmitted: its text may still be in the CLI's input.
+    fn not_submitted(&mut self, now: Instant) {
+        self.finish(now);
+        self.typed = true;
+    }
+
     fn quiet(&mut self, until: Instant) {
         self.quiet_until = Some(self.quiet_until.map_or(until, |q| q.max(until)));
     }
 
     fn clear_typed(&mut self) {
-        if std::mem::take(&mut self.typed) && self.blocked {
+        if std::mem::take(&mut self.typed) {
             self.check = true;
         }
     }
 
-    fn unblock(&mut self) -> Vec<Action> {
-        if std::mem::take(&mut self.blocked) {
-            vec![Action::Block(None)]
-        } else {
-            Vec::new()
+    fn block(&mut self, reason: Option<BlockReason>) -> Vec<Action> {
+        if self.blocked == reason {
+            return Vec::new();
         }
+        self.blocked = reason;
+        vec![Action::Block(reason)]
     }
 
     fn in_flight(&self) -> Option<TaskId> {
@@ -373,11 +439,35 @@ mod tests {
         t0 + Duration::from_millis(ms)
     }
 
+    fn none() -> Sense {
+        Sense::default()
+    }
+
+    fn ack() -> Sense {
+        Sense {
+            acknowledges: true,
+            shows_prompt: false,
+        }
+    }
+
+    fn shows() -> Sense {
+        Sense {
+            acknowledges: false,
+            shows_prompt: true,
+        }
+    }
+
+    /// A machine whose process has shown its prompt and turned idle at `t0`.
+    fn live(t0: Instant) -> Dispatch {
+        let mut d = Dispatch::new(PaneStatus::Starting, t0);
+        d.on_signal(&StatusSignal::Ready, shows(), PaneStatus::Idle, t0);
+        d
+    }
+
     /// A machine for an idle pane that has settled and been nudged, answered with head `task`.
     fn ready(task: TaskId) -> (Dispatch, Instant) {
         let t0 = Instant::now();
-        let mut d = Dispatch::new(PaneStatus::Starting, t0);
-        d.on_status(PaneStatus::Idle, t0);
+        let mut d = live(t0);
         d.nudge(t0);
         let t = at(t0, 1000);
         assert_eq!(d.tick(t), [Action::Check]);
@@ -398,7 +488,10 @@ mod tests {
         let t0 = Instant::now();
         let mut d = Dispatch::new(PaneStatus::Starting, t0);
         assert!(d.nudge(t0).is_empty(), "a starting pane is not ready");
-        assert!(d.on_status(PaneStatus::Idle, at(t0, 100)).is_empty());
+        assert!(
+            d.on_signal(&StatusSignal::Ready, shows(), PaneStatus::Idle, at(t0, 100))
+                .is_empty()
+        );
         assert_eq!(d.deadline(), Some(at(t0, 1100)));
         assert!(d.tick(at(t0, 1099)).is_empty());
         assert_eq!(d.tick(at(t0, 1100)), [Action::Check]);
@@ -416,9 +509,43 @@ mod tests {
     }
 
     #[test]
-    fn a_running_pane_is_never_typed_into() {
+    fn no_task_goes_before_the_process_shows_its_prompt() {
         let t0 = Instant::now();
         let mut d = Dispatch::new(PaneStatus::Idle, t0);
+        let t = at(t0, 1000);
+        assert_eq!(d.tick(t), [Action::Check]);
+        assert_eq!(
+            d.offer(Some(7), t),
+            [Action::Block(Some(BlockReason::Startup))],
+            "Codex is idle from its first byte, which a trust, hooks or update screen prints too"
+        );
+        assert!(!d.may_claim(), "no pool task either");
+        assert!(d.send_now(7, t).is_empty(), "not even one sent by hand");
+        assert_eq!(d.deadline(), None, "and no busy wait for it");
+        d.on_signal(
+            &StatusSignal::TurnStarted,
+            shows(),
+            PaneStatus::Running,
+            at(t0, 2000),
+        );
+        d.on_signal(
+            &StatusSignal::TurnComplete,
+            shows(),
+            PaneStatus::Idle,
+            at(t0, 3000),
+        );
+        assert!(d.may_claim());
+        assert_eq!(
+            d.tick(at(t0, 4000)),
+            [Action::Block(None), Action::Take(7)],
+            "the task sent by hand goes first"
+        );
+    }
+
+    #[test]
+    fn a_running_pane_is_never_typed_into() {
+        let t0 = Instant::now();
+        let mut d = live(t0);
         d.on_status(PaneStatus::Running, t0);
         d.nudge(t0);
         for status in [
@@ -447,12 +574,17 @@ mod tests {
         assert_eq!(d.tick(t + ENTER_DELAY), [Action::Enter]);
         assert_eq!(d.deadline(), Some(t + ENTER_DELAY + ACK_WAIT));
         assert!(
-            d.on_signal(&StatusSignal::PromptSubmitted, false, t)
-                .is_empty(),
+            d.on_signal(
+                &StatusSignal::PromptSubmitted,
+                none(),
+                PaneStatus::Running,
+                t
+            )
+            .is_empty(),
             "Codex's Enter guess is no acknowledgement"
         );
         assert_eq!(
-            d.on_signal(&StatusSignal::TurnStarted, true, t),
+            d.on_signal(&StatusSignal::TurnStarted, ack(), PaneStatus::Running, t),
             [report(7, TaskState::Running, None)]
         );
         assert_eq!(d.deadline(), None, "a running task has no deadline");
@@ -463,8 +595,12 @@ mod tests {
         let (mut d, t) = ready(7);
         d.taken(7, Some("x".into()), t);
         d.tick(t + ENTER_DELAY);
-        d.on_signal(&StatusSignal::PromptSubmitted, true, t);
-        d.on_status(PaneStatus::Running, t);
+        d.on_signal(
+            &StatusSignal::PromptSubmitted,
+            ack(),
+            PaneStatus::Running,
+            t,
+        );
         assert!(
             d.on_status(PaneStatus::WaitingPermission, t).is_empty(),
             "waiting for the user keeps it running"
@@ -472,10 +608,9 @@ mod tests {
         d.on_status(PaneStatus::Running, t);
         let end = at(t, 30_000);
         assert_eq!(
-            d.on_signal(&StatusSignal::TurnComplete, false, end),
+            d.on_signal(&StatusSignal::TurnComplete, none(), PaneStatus::Idle, end),
             [report(7, TaskState::Ended, None)]
         );
-        d.on_status(PaneStatus::Idle, end);
         assert!(d.tick(at(end, 999)).is_empty());
         assert_eq!(d.tick(at(end, 1000)), [Action::Check]);
     }
@@ -485,9 +620,14 @@ mod tests {
         let (mut d, t) = ready(7);
         d.taken(7, Some("x".into()), t);
         d.tick(t + ENTER_DELAY);
-        d.on_signal(&StatusSignal::PromptSubmitted, true, t);
+        d.on_signal(
+            &StatusSignal::PromptSubmitted,
+            ack(),
+            PaneStatus::Running,
+            t,
+        );
         assert_eq!(
-            d.on_signal(&StatusSignal::QuietTimeout, false, t),
+            d.on_signal(&StatusSignal::QuietTimeout, none(), PaneStatus::Idle, t),
             [report(7, TaskState::Ended, None)]
         );
     }
@@ -506,7 +646,7 @@ mod tests {
         d.taken(8, Some("x".into()), t);
         d.tick(t + ENTER_DELAY);
         assert_eq!(
-            d.on_signal(&StatusSignal::NoTurnStarted, false, t),
+            d.on_signal(&StatusSignal::NoTurnStarted, none(), PaneStatus::Idle, t),
             [report(8, TaskState::Failed, Some(NOT_SUBMITTED))]
         );
     }
@@ -516,7 +656,12 @@ mod tests {
         let (mut d, t) = ready(7);
         d.taken(7, Some("x".into()), t);
         d.tick(t + ENTER_DELAY);
-        d.on_signal(&StatusSignal::PromptSubmitted, true, t);
+        d.on_signal(
+            &StatusSignal::PromptSubmitted,
+            ack(),
+            PaneStatus::Running,
+            t,
+        );
         assert_eq!(
             d.on_status(PaneStatus::Exited, t),
             [report(7, TaskState::Failed, Some(PROCESS_EXITED))]
@@ -528,7 +673,12 @@ mod tests {
         let (mut d, t) = ready(7);
         d.taken(7, Some("x".into()), t);
         assert_eq!(
-            d.on_signal(&StatusSignal::PromptSubmitted, true, t),
+            d.on_signal(
+                &StatusSignal::PromptSubmitted,
+                ack(),
+                PaneStatus::Running,
+                t
+            ),
             [report(7, TaskState::Running, None)]
         );
         assert!(d.tick(t + ENTER_DELAY).is_empty(), "no second Enter");
@@ -557,10 +707,9 @@ mod tests {
     }
 
     #[test]
-    fn unsent_typing_blocks_the_queue_until_enter_or_ctrl_c_clears_it() {
+    fn unsent_typing_blocks_the_queue_until_ctrl_c_ctrl_u_or_the_cli_taking_a_prompt_clears_it() {
         let t0 = Instant::now();
-        let mut d = Dispatch::new(PaneStatus::Idle, t0);
-        d.on_status(PaneStatus::Idle, t0);
+        let mut d = live(t0);
         d.on_user_input(b"half a thought", t0);
         d.nudge(t0);
         let t = at(t0, 1000);
@@ -570,9 +719,18 @@ mod tests {
             [Action::Block(Some(BlockReason::Typing))]
         );
         assert!(d.tick(at(t, 5000)).is_empty(), "blocked: no polling");
-        assert!(
-            d.on_user_input(b"\r", t).is_empty(),
-            "Enter submits the user's prompt, which the CLI takes first"
+        d.on_user_input(b"\r", t);
+        d.on_signal(
+            &StatusSignal::PromptSubmitted,
+            ack(),
+            PaneStatus::Running,
+            at(t, 100),
+        );
+        d.on_signal(
+            &StatusSignal::TurnComplete,
+            none(),
+            PaneStatus::Idle,
+            at(t, 2000),
         );
         assert!(d.tick(at(t, 2999)).is_empty());
         assert_eq!(d.tick(at(t, 3000)), [Action::Check]);
@@ -580,15 +738,8 @@ mod tests {
             d.offer(Some(7), at(t, 3000)),
             [Action::Block(None), Action::Take(7)]
         );
-        for clear in [
-            &b"\x03"[..],
-            b"\x15",
-            b"\x1b[99;5u",
-            b"\x1b[117;5u",
-            b"\x1b[13u",
-        ] {
-            let mut d = Dispatch::new(PaneStatus::Idle, t0);
-            d.on_status(PaneStatus::Idle, t0);
+        for clear in [&b"\x03"[..], b"\x15", b"\x1b[99;5u", b"\x1b[117;5u"] {
+            let mut d = live(t0);
             d.on_user_input(b"x", t0);
             d.on_user_input(clear, t0);
             d.nudge(t0);
@@ -599,8 +750,7 @@ mod tests {
                 "{clear:?} clears the input"
             );
         }
-        let mut d = Dispatch::new(PaneStatus::Idle, t0);
-        d.on_status(PaneStatus::Idle, t0);
+        let mut d = live(t0);
         d.on_user_input(b"\x1b", t0);
         d.nudge(t0);
         d.tick(t);
@@ -614,14 +764,12 @@ mod tests {
     #[test]
     fn the_users_own_keys_restart_the_settle_time() {
         let t0 = Instant::now();
-        let mut d = Dispatch::new(PaneStatus::Idle, t0);
-        d.on_status(PaneStatus::Idle, t0);
+        let mut d = live(t0);
         d.nudge(t0);
         d.on_user_input(b"\x03", at(t0, 900));
         assert!(d.tick(at(t0, 1000)).is_empty());
         assert_eq!(d.tick(at(t0, 1900)), [Action::Check]);
-        let mut d = Dispatch::new(PaneStatus::Idle, t0);
-        d.on_status(PaneStatus::Idle, t0);
+        let mut d = live(t0);
         d.nudge(t0);
         d.on_user_paste(at(t0, 500));
         d.tick(at(t0, 1500));
@@ -635,15 +783,14 @@ mod tests {
     #[test]
     fn the_cli_taking_a_prompt_or_starting_a_session_clears_the_input() {
         let t0 = Instant::now();
-        for signal in [
-            StatusSignal::PromptSubmitted,
-            StatusSignal::TurnStarted,
-            StatusSignal::Ready,
+        for (signal, sense) in [
+            (StatusSignal::PromptSubmitted, ack()),
+            (StatusSignal::TurnStarted, ack()),
+            (StatusSignal::Ready, shows()),
         ] {
-            let mut d = Dispatch::new(PaneStatus::Idle, t0);
-            d.on_status(PaneStatus::Idle, t0);
+            let mut d = live(t0);
             d.on_user_input(b"x", t0);
-            d.on_signal(&signal, false, t0);
+            d.on_signal(&signal, sense, PaneStatus::Idle, t0);
             d.nudge(t0);
             d.tick(at(t0, 1000));
             assert_eq!(
@@ -657,8 +804,7 @@ mod tests {
     #[test]
     fn send_now_types_the_task_over_unsent_typing() {
         let t0 = Instant::now();
-        let mut d = Dispatch::new(PaneStatus::Idle, t0);
-        d.on_status(PaneStatus::Idle, t0);
+        let mut d = live(t0);
         d.on_user_input(b"x", t0);
         d.nudge(t0);
         d.tick(at(t0, 1000));
@@ -668,5 +814,137 @@ mod tests {
             [Action::Block(None), Action::Take(9)],
             "the user's choice, even a task behind the head"
         );
+    }
+
+    #[test]
+    fn a_users_enter_never_clears_their_typing() {
+        let t0 = Instant::now();
+        let t = at(t0, 5000);
+        for draft in [
+            &[&b"first line\\"[..], b"\r"][..],
+            &[b"first line", b"\x1b\r"],
+            &[b"/model", b"\r"],
+            &[b"/model", b"\x1b[13u"],
+        ] {
+            let mut d = live(t0);
+            for keys in draft {
+                d.on_user_input(keys, t0);
+            }
+            d.on_signal(
+                &StatusSignal::PromptSubmitted,
+                none(),
+                PaneStatus::Running,
+                t0,
+            );
+            d.on_signal(&StatusSignal::NoTurnStarted, none(), PaneStatus::Idle, t0);
+            d.nudge(t0);
+            d.tick(t);
+            assert_eq!(
+                d.offer(Some(7), t),
+                [Action::Block(Some(BlockReason::Typing))],
+                "{draft:?}: a newline in a draft or a picker a local command opened"
+            );
+        }
+        let mut d = live(t0);
+        d.on_user_input(b"\r", t0);
+        d.nudge(t0);
+        d.tick(t);
+        assert_eq!(
+            d.offer(Some(7), t),
+            [Action::Take(7)],
+            "Enter alone puts nothing into an empty input"
+        );
+    }
+
+    #[test]
+    fn keys_that_answer_a_dialog_are_not_typing() {
+        let t0 = Instant::now();
+        let mut d = live(t0);
+        for status in [PaneStatus::WaitingPermission, PaneStatus::WaitingInput] {
+            d.on_status(status, t0);
+            d.on_user_input(b"1", t0);
+            d.on_user_input(b"\r", t0);
+        }
+        d.on_status(PaneStatus::Running, t0);
+        d.on_status(PaneStatus::Idle, t0);
+        d.nudge(t0);
+        let t = at(t0, 5000);
+        d.tick(t);
+        assert_eq!(d.offer(Some(7), t), [Action::Take(7)]);
+    }
+
+    #[test]
+    fn the_machine_looks_at_the_queue_when_it_starts_whenever_the_pane_turns_idle_and_when_typing_clears()
+     {
+        let t0 = Instant::now();
+        let mut d = Dispatch::new(PaneStatus::Idle, t0);
+        assert_eq!(
+            d.tick(at(t0, 1000)),
+            [Action::Check],
+            "a new process, or one resumed"
+        );
+        d.offer(None, at(t0, 1000));
+        d.on_status(PaneStatus::Running, at(t0, 2000));
+        d.on_status(PaneStatus::Idle, at(t0, 3000));
+        assert_eq!(
+            d.tick(at(t0, 4000)),
+            [Action::Check],
+            "a pool task may wait for this pane"
+        );
+        d.offer(None, at(t0, 4000));
+        d.on_user_input(b"x", at(t0, 5000));
+        d.on_user_input(b"\x15", at(t0, 5000));
+        assert_eq!(d.tick(at(t0, 6000)), [Action::Check]);
+    }
+
+    #[test]
+    fn no_enter_once_the_pane_left_idle_or_the_user_typed_after_the_paste() {
+        let (mut d, t) = ready(7);
+        d.taken(7, Some("x".into()), t);
+        d.on_status(PaneStatus::WaitingPermission, t);
+        assert!(
+            d.tick(t + ENTER_DELAY).is_empty(),
+            "an Enter would answer the dialog"
+        );
+        assert_eq!(
+            d.tick(t + ENTER_DELAY + ACK_WAIT),
+            [report(7, TaskState::Failed, Some(NOT_SUBMITTED))]
+        );
+        let (mut d, t) = ready(8);
+        d.taken(8, Some("x".into()), t);
+        d.on_user_input(b"y", t);
+        assert!(
+            d.tick(t + ENTER_DELAY).is_empty(),
+            "the user's keys would be submitted with the task"
+        );
+    }
+
+    #[test]
+    fn a_signal_at_the_settle_deadline_is_judged_by_the_status_it_leads_to() {
+        let t0 = Instant::now();
+        let mut d = live(t0);
+        d.nudge(t0);
+        let signal = StatusSignal::PermissionRequested {
+            call: None,
+            detail: None,
+        };
+        assert!(
+            d.on_signal(&signal, none(), PaneStatus::WaitingPermission, at(t0, 1000))
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn a_task_that_was_not_submitted_leaves_its_text_in_the_input() {
+        let (mut d, t) = ready(7);
+        d.taken(7, Some("x".into()), t);
+        d.tick(t + ENTER_DELAY);
+        d.tick(t + ENTER_DELAY + ACK_WAIT);
+        assert!(d.typed(), "the paste is still in the CLI's input");
+        let (mut d, t) = ready(8);
+        d.taken(8, Some("x".into()), t);
+        d.tick(t + ENTER_DELAY);
+        d.on_signal(&StatusSignal::NoTurnStarted, none(), PaneStatus::Idle, t);
+        assert!(d.typed());
     }
 }

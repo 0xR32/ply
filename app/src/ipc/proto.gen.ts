@@ -509,7 +509,7 @@ export type PauseReason = 'user' | 'restored' | 'failed';
 /**
  * Why the next task of an unpaused queue cannot be typed right now.
  */
-export type BlockReason = 'typing';
+export type BlockReason = 'typing' | 'startup';
 
 /**
  * The state of one pane's queue beyond its tasks; `queue.changed` carries it, and a queue with neither field is running.

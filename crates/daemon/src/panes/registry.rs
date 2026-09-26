@@ -886,14 +886,12 @@ impl Registry {
         Ok(())
     }
 
-    /// The task `pane`'s queue offers now: its head while the queue runs and no task is typed there; none for a shell,
-    /// or for a pane whose CLI has not reported a session yet (a startup screen must never get a queued Enter).
+    /// The task `pane`'s queue offers now: its head while the queue runs and no task is typed there; none for a shell.
+    /// The pane's dispatch holds the head until its process shows its prompt, and [`Registry::take_task`] refuses a pane
+    /// whose CLI has reported no session.
     pub fn queue_head(&self, pane: PaneId) -> Option<TaskId> {
         let entry = self.panes.get(&pane)?;
-        if entry.pane.cli == Cli::Shell
-            || entry.pane.session_ref.is_none()
-            || self.queues.active(pane).is_some()
-        {
+        if entry.pane.cli == Cli::Shell || self.queues.active(pane).is_some() {
             return None;
         }
         self.queues.head(pane).map(|t| t.id)
@@ -1636,17 +1634,18 @@ mod tests {
         let task = reg.add_task(&add(pane.id, "not yet"), 20).unwrap();
         assert_eq!(
             reg.queue_head(pane.id),
+            Some(task.id),
+            "offered, so the pane's dispatch can say why it waits"
+        );
+        assert_eq!(
+            reg.take_task(pane.id, task.id, true, 21),
             None,
             "a startup screen must never get a queued Enter"
         );
-        assert_eq!(reg.next_task(pane.id, true), None);
-        assert_eq!(reg.take_task(pane.id, task.id, true, 21), None);
         assert_eq!(
             reg.sendable(task.id).unwrap_err().code,
             ErrorCode::InvalidState
         );
-        reg.panes.get_mut(&pane.id).unwrap().pane.session_ref = Some("thread".into());
-        assert_eq!(reg.queue_head(pane.id), Some(task.id));
     }
 
     fn add(pane: PaneId, text: &str) -> TaskAddParams {

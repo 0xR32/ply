@@ -194,38 +194,6 @@ fn two_tasks_are_typed_into_a_claude_pane_one_per_turn() {
 }
 
 #[test]
-fn a_codex_task_runs_once_its_rollout_starts_a_turn() {
-    let sb = Sandbox::new("typed-codex");
-    install(&sb);
-    hook_program();
-    let _plyd = sb.start();
-    let (mut c, ws) = sb.control();
-    let pane = c
-        .call(
-            "pane.create",
-            json!({"workspace_id": ws, "cli": "codex", "cwd": sb.home}),
-        )
-        .unwrap()["id"]
-        .as_u64()
-        .unwrap();
-    let fake = Fake::ready(&sb, pane);
-    wait_status(&mut c, pane, PaneStatus::Idle, WAIT);
-    fake.send("session");
-    fake.send("submit 1");
-    let task = add(&mut c, ws, pane, "$review-pr");
-    changed(&mut c, task.id, TaskState::Sent);
-    changed(&mut c, task.id, TaskState::Running);
-    assert!(
-        c.wait_event(
-            TURN,
-            |e| matches!(e, Event::TaskChanged(t) if t.id == task.id && t.state == TaskState::Ended)
-        )
-        .is_some()
-    );
-    assert_eq!(typed(&sb, "codex"), ["$review-pr"]);
-}
-
-#[test]
 fn unsent_typing_blocks_the_queue_until_the_user_sends_the_task() {
     let sb = Sandbox::new("typed-block");
     install(&sb);
@@ -367,4 +335,136 @@ fn a_pool_task_goes_to_the_free_pane_of_its_cli_in_its_folder() {
     );
     assert_eq!(typed(&sb, "claude"), ["/triage"], "typed once");
     assert!(typed(&sb, "codex").is_empty());
+}
+
+fn codex_pane(c: &mut Control, sb: &Sandbox, ws: u64) -> u64 {
+    c.call(
+        "pane.create",
+        json!({"workspace_id": ws, "cli": "codex", "cwd": sb.home}),
+    )
+    .unwrap()["id"]
+        .as_u64()
+        .unwrap()
+}
+
+fn queues(c: &mut Control, ws: u64) -> Value {
+    c.call("task.list", json!({"workspace_id": ws})).unwrap()["queues"].clone()
+}
+
+fn ended(c: &mut Control, id: u64) {
+    assert!(
+        c.wait_event(
+            TURN,
+            |e| matches!(e, Event::TaskChanged(t) if t.id == id && t.state == TaskState::Ended)
+        )
+        .is_some(),
+        "task {id} did not end"
+    );
+}
+
+#[test]
+fn a_resumed_codex_pane_takes_no_task_before_its_prompt() {
+    let sb = Sandbox::new("typed-resumed");
+    install(&sb);
+    hook_program();
+    let mut plyd = sb.start();
+    let (mut c, ws) = sb.control();
+    let pane = codex_pane(&mut c, &sb, ws);
+    let fake = Fake::ready(&sb, pane);
+    wait_status(&mut c, pane, PaneStatus::Idle, WAIT);
+    fake.send("session");
+    fake.send("turn task_started u1");
+    fake.send("turn task_complete u1");
+    for status in [PaneStatus::Running, PaneStatus::Idle] {
+        wait_status(&mut c, pane, status, WAIT);
+    }
+    drop(c);
+    plyd.child.kill().unwrap();
+    plyd.child.wait().unwrap();
+
+    let _plyd = sb.start();
+    let mut c = Control::connect(&sb.control_socket()).unwrap();
+    assert!(eventually(WAIT, || {
+        c.call("pane.list", json!({"workspace_id": ws})).unwrap()[0]["status"] == "idle"
+    }));
+    let fake = Fake::ready(&sb, pane);
+    fake.send("submit 1");
+    let task = add(&mut c, ws, pane, "not into a startup screen");
+    std::thread::sleep(Duration::from_secs(3));
+    assert!(
+        typed(&sb, "codex").is_empty(),
+        "the resumed Codex may still show a trust, hooks or update screen"
+    );
+    assert_eq!(
+        queues(&mut c, ws),
+        json!([{"pane_id": pane, "blocked": "startup"}])
+    );
+
+    fake.send("turn task_started u2");
+    fake.send("turn task_complete u2");
+    changed(&mut c, task.id, TaskState::Running);
+    ended(&mut c, task.id);
+    assert_eq!(typed(&sb, "codex"), ["not into a startup screen"]);
+}
+
+#[test]
+fn a_codex_task_queued_before_its_first_turn_goes_after_it_and_runs_once_its_rollout_starts_a_turn()
+{
+    let sb = Sandbox::new("typed-first-turn");
+    install(&sb);
+    hook_program();
+    let _plyd = sb.start();
+    let (mut c, ws) = sb.control();
+    let pane = codex_pane(&mut c, &sb, ws);
+    let fake = Fake::ready(&sb, pane);
+    wait_status(&mut c, pane, PaneStatus::Idle, WAIT);
+    let task = add(&mut c, ws, pane, "$review-pr");
+    std::thread::sleep(Duration::from_secs(2));
+    assert!(typed(&sb, "codex").is_empty());
+    assert_eq!(
+        queues(&mut c, ws),
+        json!([{"pane_id": pane, "blocked": "startup"}])
+    );
+
+    fake.send("session");
+    fake.send("submit 1");
+    fake.send("turn task_started u1");
+    fake.send("turn task_complete u1");
+    changed(&mut c, task.id, TaskState::Sent);
+    changed(&mut c, task.id, TaskState::Running);
+    ended(&mut c, task.id);
+    assert_eq!(typed(&sb, "codex"), ["$review-pr"]);
+}
+
+#[test]
+fn a_pool_task_goes_to_a_pane_opened_after_it() {
+    let sb = Sandbox::new("typed-pool-later");
+    install(&sb);
+    hook_program();
+    let project = sb.home.join("project");
+    std::fs::create_dir_all(&project).unwrap();
+    let _plyd = sb.start();
+    let (mut c, ws) = sb.control();
+    let task = task_of(
+        c.call(
+            "task.add",
+            json!({"workspace_id": ws, "target": {"pool": {"cli": "claude", "cwd": project}}, "text": "/triage"}),
+        )
+        .unwrap(),
+    );
+    let pane = c
+        .call(
+            "pane.create",
+            json!({"workspace_id": ws, "cli": "claude", "cwd": project}),
+        )
+        .unwrap()["id"]
+        .as_u64()
+        .unwrap();
+    let fake = Fake::ready(&sb, pane);
+    wait_status(&mut c, pane, PaneStatus::Idle, WAIT);
+    fake.send("submit 1");
+    let running = changed(&mut c, task.id, TaskState::Running);
+    assert_eq!(running.pane_id, Some(pane));
+    ended(&mut c, task.id);
+    assert_eq!(typed(&sb, "claude"), ["/triage"]);
 }

@@ -26,7 +26,7 @@ use tokio::sync::mpsc;
 
 use crate::branch;
 use crate::daemon::{Shared, unix_now};
-use crate::panes::dispatch::{Action, Dispatch};
+use crate::panes::dispatch::{Action, Dispatch, Sense};
 use crate::panes::state::{ProgressGate, StatusMachine, Step};
 use crate::tail::{TailMsg, TailOptions, Tailer};
 
@@ -243,10 +243,11 @@ impl Agent {
         self.run_dispatch(shared, actions, now);
     }
 
-    /// The process ended: a typed task fails, the machine stops, the tailer stops, and what the session skipped is logged.
+    /// The process ended: a typed task fails, its queue's block ends with it, the machine stops, the tailer stops, and what the session skipped is logged.
     pub fn exit(&mut self, shared: &Arc<Shared>, now: Instant) {
         let actions = self.dispatch.on_status(PaneStatus::Exited, now);
         self.run_dispatch(shared, actions, now);
+        shared.registry().block_queue(self.pane_id, None);
         self.writes.clear();
         self.machine.exit();
         self.turn_wait = None;
@@ -314,7 +315,7 @@ impl Agent {
         while let Some(action) = queue.pop_front() {
             match action {
                 Action::Check => {
-                    let claim_pool = !self.dispatch.typed();
+                    let claim_pool = self.dispatch.may_claim();
                     let head = shared.registry().next_task(self.pane_id, claim_pool);
                     queue.extend(self.dispatch.offer(head, now));
                 }
@@ -357,9 +358,10 @@ impl Agent {
     }
 
     fn step(&mut self, shared: &Arc<Shared>, signal: &StatusSignal, now: Instant) {
-        let acknowledges = self.adapter.acknowledges_prompt(signal);
-        let actions = self.dispatch.on_signal(signal, acknowledges, now);
-        self.run_dispatch(shared, actions, now);
+        let sense = Sense {
+            acknowledges: self.adapter.acknowledges_prompt(signal),
+            shows_prompt: self.adapter.shows_prompt(signal),
+        };
         let before = self.machine.status();
         match self.machine.apply(signal) {
             Step::To { status, detail } => {
@@ -378,8 +380,6 @@ impl Agent {
                     }
                 }
                 shared.set_status(self.pane_id, status, detail);
-                let actions = self.dispatch.on_status(status, now);
-                self.run_dispatch(shared, actions, now);
             }
             Step::SessionEnded => {
                 let reason = match signal {
@@ -397,6 +397,10 @@ impl Agent {
                 tracing::trace!(pane_id = self.pane_id, ?signal, status = ?before, ignored = self.machine.ignored(), "no transition for this signal");
             }
         }
+        let actions = self
+            .dispatch
+            .on_signal(signal, sense, self.machine.status(), now);
+        self.run_dispatch(shared, actions, now);
     }
 }
 

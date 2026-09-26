@@ -279,6 +279,9 @@ pub trait Adapter: Send + Sync {
     /// Whether `signal` is the CLI confirming it took a prompt typed into it (Ruling R60): a queued task is then `running`.
     fn acknowledges_prompt(&self, signal: &StatusSignal) -> bool;
 
+    /// Whether `signal`, raised by the running process, shows the CLI past its startup screens at its prompt; plyd types no queued task into a process before one (Ruling R60).
+    fn shows_prompt(&self, signal: &StatusSignal) -> bool;
+
     /// Passes when `found` is at least [`Adapter::min_version`]; else [`Error::CliTooOld`].
     fn check_version(&self, found: &CliVersion) -> Result<()> {
         let min = self.min_version();

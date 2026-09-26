@@ -61,10 +61,12 @@ user's own) and the optional theme, never WorktreeCreate or WorktreeRemove; Code
 written (INV-8).
 
 **ply types only a task the user wrote, and never answers for the CLI.** A queued
-task is pasted, text unchanged, into an idle Claude or Codex pane whose CLI has
-started a session, never into a shell, a pane the user is typing in or one showing
-a dialog; failure pauses the pane's queue (`crates/daemon/src/panes/dispatch.rs`,
-`crates/daemon/tests/dispatch.rs`). `skill.list` only reads the CLIs' skill folders.
+task is pasted, text unchanged, into an idle Claude or Codex pane whose running
+process has shown its prompt (`Adapter::shows_prompt`; a stored session id does not
+count), never into a shell, a pane whose input holds the user's unsent text (their
+Enter does not clear it) or one showing a dialog; failure pauses the pane's queue
+(`crates/daemon/src/panes/dispatch.rs`, `crates/daemon/tests/dispatch.rs`).
+`skill.list` only reads the CLIs' skill folders.
 
 **ply never manages worktrees.** The CLI creates and removes them; ply passes
 `claude --worktree <name>` and shows what the CLI reports. The only worktree

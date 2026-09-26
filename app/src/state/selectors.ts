@@ -424,6 +424,9 @@ export function taskView(
       if (queue?.blocked === 'typing' && task.position === 0) {
         return { tone: 'typing', label: 'waits · you typed here' };
       }
+      if (queue?.blocked === 'startup' && task.position === 0) {
+        return { tone: 'held', label: "waits for the CLI's prompt" };
+      }
       return { tone: 'queued', label: ordinal(task.position + 1) };
     case 'sent':
       return { tone: 'sending', label: 'sending' };
@@ -445,7 +448,7 @@ export function taskView(
 
 /** Why a pane's next task cannot go by itself, for the strip under the pane; `null` when it can or there is none. */
 export interface QueueStrip {
-  kind: 'typing' | 'restored' | 'failed' | 'paused';
+  kind: 'typing' | 'startup' | 'restored' | 'failed' | 'paused';
   count: number;
   next: Task;
   /** The task whose failure paused the queue, for `failed`. */
@@ -468,6 +471,7 @@ export function queueStripView(state: AppState, paneId: number): QueueStrip | nu
   if (q?.paused === 'restored') return { kind: 'restored', count, next };
   if (q?.paused === 'user') return { kind: 'paused', count, next };
   if (q?.blocked === 'typing') return { kind: 'typing', count, next };
+  if (q?.blocked === 'startup') return { kind: 'startup', count, next };
   return null;
 }
 

@@ -130,6 +130,13 @@ impl Adapter for ClaudeAdapter {
     fn acknowledges_prompt(&self, signal: &StatusSignal) -> bool {
         matches!(signal, StatusSignal::PromptSubmitted)
     }
+
+    fn shows_prompt(&self, signal: &StatusSignal) -> bool {
+        matches!(
+            signal,
+            StatusSignal::Ready | StatusSignal::PromptSubmitted | StatusSignal::TurnComplete
+        )
+    }
 }
 
 const NPM_PACKAGE: &str = "@anthropic-ai/claude-code";

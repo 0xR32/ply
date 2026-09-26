@@ -489,3 +489,36 @@ fn a_prompt_is_acknowledged_by_userpromptsubmit_in_claude_and_task_started_in_co
         assert!(!claude.acknowledges_prompt(&other) && !codex.acknowledges_prompt(&other));
     }
 }
+
+#[test]
+fn only_a_signal_of_the_running_process_at_its_prompt_opens_the_task_queue() {
+    use ply_agents::StatusSignal;
+    use ply_proto::pane::AgentCli;
+    let claude = adapter(AgentCli::Claude);
+    let codex = adapter(AgentCli::Codex);
+    for signal in [
+        StatusSignal::Ready,
+        StatusSignal::PromptSubmitted,
+        StatusSignal::TurnComplete,
+    ] {
+        assert!(claude.shows_prompt(&signal), "{signal:?}");
+    }
+    for signal in [StatusSignal::TurnStarted, StatusSignal::TurnComplete] {
+        assert!(codex.shows_prompt(&signal), "{signal:?}");
+    }
+    assert!(
+        !codex.shows_prompt(&StatusSignal::Ready),
+        "Codex is ready from its first byte, which a trust, hooks or update screen prints too"
+    );
+    assert!(
+        !codex.shows_prompt(&StatusSignal::PromptSubmitted),
+        "an Enter is only a guess (R48)"
+    );
+    for other in [
+        StatusSignal::KeyTyped,
+        StatusSignal::NoTurnStarted,
+        StatusSignal::QuietTimeout,
+    ] {
+        assert!(!claude.shows_prompt(&other) && !codex.shows_prompt(&other));
+    }
+}

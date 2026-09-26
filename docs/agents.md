@@ -622,20 +622,35 @@ else: it never answers a dialog, passes an option or changes a prompt. Each
 agent process's `Agent` owns a small clocked machine for it
 (`crates/daemon/src/panes/dispatch.rs`); the registry holds the queue.
 
-**When a task is typed.** Only into an agent pane whose CLI has reported a
-session (`session_ref`: Claude Code's SessionStart, Codex's bound rollout),
-that has been `idle` for 1 s (`SETTLE`), has no other task typed, and whose
-queue is not paused, and only the queue's first task. The session rule keeps a
-queued Enter away from a CLI's startup screens: a Codex pane counts as `idle`
-from its first output byte, which may be its folder-trust or update prompt, so
-a fresh Codex pane takes tasks once its first turn has bound its rollout (open
-it with a first prompt, or type one). The user's own input comes first:
+**When a task is typed.** Only into an agent pane whose running process has
+shown its prompt, that has been `idle` for 1 s (`SETTLE`), has no other task
+typed, and whose queue is not paused, and only the queue's first task. The
+prompt rule keeps a queued Enter away from a CLI's startup screens (trust,
+hooks review, update), which wait for as long as nobody answers: a Codex pane
+counts as `idle` from its first output byte, which such a screen prints too.
+`Adapter::shows_prompt` names the signals that count, raised by the process
+itself: for Claude Code SessionStart (`Ready`; its hooks run only once the
+folder is trusted), UserPromptSubmit or Stop; for Codex a turn starting
+(`task_started` read live from the rollout, not the thread's past) or ending.
+Codex's first byte and its Enter guess do not count, and neither does a stored
+session id: a resumed process starts over. So a Codex pane, fresh or resumed,
+takes tasks after its first turn (open it with a first prompt, or type one);
+meanwhile its queue is `blocked: startup` and nothing, not even `task.send`,
+types into it. Every new process, every change to `idle`, the process first
+showing its prompt and the input clearing make the machine look at its queue
+again, so a task added while the pane was busy, lost or starting still goes.
+The user's own input comes first:
 
 - any key, raw input or paste of the user's marks the pane's input as typed,
-  since the CLI may be holding text the task would be appended to; Enter,
-  Ctrl+C, Ctrl+U (in either key encoding) or the CLI reporting a prompt
-  (`PromptSubmitted`, `TurnStarted`) or a new session (`Ready`) clear it. Esc
-  counts as typing: Claude Code puts an interrupted prompt back into its input;
+  since the CLI may be holding text the task would be appended to. Only Ctrl+C,
+  Ctrl+U (in either key encoding), the CLI acknowledging a prompt
+  (`Adapter::acknowledges_prompt`) or starting a new session (`Ready`) clear
+  it. The user's Enter does not: it may add a line to a draft (`\` then Enter,
+  ⌥⏎) or open a local command's picker (`/model`, `/resume`), and a task typed
+  there would join the draft or pick an entry. Enter alone on an empty input
+  marks nothing, and neither do keys typed while the pane waits for permission
+  or input, which answer the CLI's dialog or question. Esc counts as typing:
+  Claude Code puts an interrupted prompt back into its input;
 - while the input is typed, the queue is `blocked: typing` and waits; the user
   submits or clears their text, or sends the task anyway with `task.send`;
 - every key the user types restarts the 1 s, and an Enter of theirs holds the
@@ -643,8 +658,9 @@ it with a first prompt, or type one). The user's own input comes first:
   before a task can.
 
 **A pool task** (sent to "the next free pane") goes to the first pane that
-asks for its next task with its own queue empty and running, no unsent typing,
-the pool's CLI, and a directory at or below the pool's. The pane takes it at the
+asks for its next task with its own queue empty and running, a process that
+has shown its prompt, no unsent typing, the pool's CLI, and a directory at or
+below the pool's. The pane takes it at the
 moment it would type it, under the registry's lock, so one task is never typed
 twice; a new pool task nudges every live pane of its CLI in the workspace.
 
@@ -654,9 +670,12 @@ text; the pane task writes it as one paste encoded against the pane's modes
 (`ENTER_DELAY`, so a slash or `$` pop-over the text opened has settled) one
 Enter, a real key press and release encoded like a typed one (so a CLI in the
 kitty keyboard protocol gets `CSI 13 u`). The Enter counts as a key typed for
-the status machine, like any other. A paste the terminal refuses (text with
-line breaks for a CLI without bracketed paste, Ruling R21) fails the task and
-no Enter follows.
+the status machine, like any other. It is left out when, by then, the pane is
+no longer `idle` (a dialog opened) or the user wrote to it after the paste; the
+task then waits for an acknowledgement like any other and fails as not
+submitted without one. A paste the terminal refuses (text with line breaks for
+a CLI without bracketed paste, Ruling R21) fails the task and no Enter
+follows.
 
 **How it is followed**, from the signals the status machine already uses:
 
@@ -670,7 +689,9 @@ no Enter follows.
 A task whose pane waits for permission or input stays `running`: the user
 answers the CLI as always. `ended` means the turn the task started ended,
 which ply cannot tell from the user interrupting it. After a task ends or
-fails, the next waits for the pane to settle again. Every step is logged at
+fails, the next waits for the pane to settle again; a task that failed as not
+submitted may have left its text in the CLI's input, so the input counts as
+typed until the user clears or submits it. Every step is logged at
 `info` with the pane and task ids.
 
 A task's text is typed as is, so a leading `!` or `#` does in the CLI what it
@@ -798,10 +819,12 @@ terminal and the CLI repaints it.
   times, the typing block, acknowledgements, failures),
   `crates/daemon/src/panes/queue.rs` (order, positions, restart, history) and
   `crates/daemon/tests/dispatch.rs`: a real plyd typing two tasks into a
-  fake Claude Code one per turn, a Codex task confirmed by its rollout, the
-  typing block and `task.send`, a task never acknowledged failing and pausing
-  its queue, a pool task going to the one free Claude Code pane in its folder,
-  and the queue over C1 and across a restart. The fakes' `submit`
+  fake Claude Code one per turn, a Codex task queued before its first turn
+  going after it and confirmed by its rollout, a Codex pane resumed after a
+  restart typed into only after its first turn, the typing block and
+  `task.send`, a task never acknowledged failing and pausing its queue, pool
+  tasks going to the one free Claude Code pane in their folder and to a pane
+  opened after them, and the queue over C1 and across a restart. The fakes' `submit`
   command reads what the pane submits (`crates/daemon/tests/common/fake.rs`).
 - `crates/agents/tests/skills.rs`: front matter (plain, quoted, folded,
   nested, CRLF), names and invocations, opting out, the plugin registry;

@@ -129,6 +129,13 @@ impl Adapter for CodexAdapter {
     fn acknowledges_prompt(&self, signal: &StatusSignal) -> bool {
         matches!(signal, StatusSignal::TurnStarted)
     }
+
+    fn shows_prompt(&self, signal: &StatusSignal) -> bool {
+        matches!(
+            signal,
+            StatusSignal::TurnStarted | StatusSignal::TurnComplete
+        )
+    }
 }
 
 const NPM_PACKAGE: &str = "@openai/codex";
