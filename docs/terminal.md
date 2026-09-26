@@ -300,10 +300,15 @@ ids). Scrollback rows it fetched are kept by absolute line number
 the scrollback cap starts dropping lines, and a Delta whose base moved on drops
 the lines plyd no longer keeps.
 
-**Rendering.** Every pane's changes are flushed by one shared timer, at most
-once per 16 ms and at once for the first change after an idle frame, so all
-panes re-render in one React batch (`app/src/terminal/session.ts`, `schedule`):
-plyd publishes up to 120 Hz, and the view draws at most 60. A row is one `TerminalRow`
+**Rendering.** Every pane's changes are flushed by one shared timer
+(`app/src/terminal/frame-scheduler.ts`), at once for a pane's first change
+after an idle stretch and then at most once per 16 ms for the focused pane and
+once per 50 ms for the others, which ride in the focused pane's batch (up to a
+frame early) rather than cost a redraw of their own; all due panes re-render in
+one React batch. plyd publishes up to 120 Hz, so the view draws at most 60. A
+timer that fires 8 ms late or more means the main thread is busy drawing, and it
+doubles the interval, up to 100 ms (10 Hz), so keys and scrolling still get a
+turn; each timer on time takes 4 ms back off. A row is one `TerminalRow`
 (`terminal-row.tsx`), memoized: it re-renders only when its cells, the selection
 columns, the style epoch, the resolver or the cell size changed. Rows are keyed
 by content hash, so a scroll moves the rows it kept instead of re-rendering every
@@ -316,8 +321,10 @@ A row draws as the fewest `<text>` runs (`rowRuns` in `app/src/terminal/runs.ts`
   at exactly one cell (`isNarrowGlyph`, a table taken from the font) get a run
   of their own, one or two cells wide, so a fallback glyph cannot push the
   columns after it;
-- spacer cells are skipped and trailing default blanks dropped (a blank that
-  paints a background, or a selected one, stays).
+- spacer cells are skipped, and trailing default blanks and any run of blanks
+  that paints nothing are dropped: runs sit at absolute columns, so an
+  invisible run holds no place (a blank that paints a background or a line, or
+  a selected one, stays).
 
 Each run is positioned absolutely at `round(col × cell width)` with the width to
 the next rounded edge, so layout rounding cannot drift columns across a row.

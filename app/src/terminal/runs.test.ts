@@ -83,6 +83,27 @@ describe('rowRuns', () => {
     ]);
   });
 
+  test('drops a run of blanks that paints nothing, keeping blanks with a background or a line', () => {
+    const r = row([
+      ...text('a', 1),
+      ...text('   '),
+      ...text('b', 5),
+      ...text('  ', 3),
+      ...text(' ', 8),
+      ...text('c'),
+      ...text('  ', 1),
+      ...text('d'),
+    ]);
+    expect(shape(runs(r))).toEqual([
+      ['a', 0, 1],
+      ['b', 4, 1],
+      ['  ', 5, 2],
+      [' ', 7, 1],
+      ['c', 8, 1],
+      ['d', 11, 1],
+    ]);
+  });
+
   test('styles that look the same merge even with different ids (italic and blink are not drawn)', () => {
     expect(shape(runs(row([...text('x', 1), ...text('y', 2)])))).toEqual([['xy', 0, 2]]);
   });

@@ -1,4 +1,5 @@
 import type { DataConnection, DataConnectionState, DecodeStats, GridSize } from './data-client';
+import { FlushScheduler } from './frame-scheduler';
 import {
   CellFlags,
   type ClientFrame,
@@ -43,24 +44,11 @@ export function terminalStats(): TerminalStats[] {
   return [...live.values()].map((s) => s.stats());
 }
 
-const pending = new Set<TerminalSession>();
-let flushTimer: ReturnType<typeof setTimeout> | null = null;
-let lastFlush = Number.NEGATIVE_INFINITY;
-const FRAME_MS = 16;
-
-// One timer for every pane, at most once per 60 Hz frame (P1, Ruling R30; plyd sends up to 120 Hz), all panes in one React batch.
-function schedule(session: TerminalSession): void {
-  pending.add(session);
-  if (flushTimer) return;
-  const wait = Math.max(0, lastFlush + FRAME_MS - performance.now());
-  flushTimer = setTimeout(() => {
-    flushTimer = null;
-    lastFlush = performance.now();
-    const due = [...pending];
-    pending.clear();
-    for (const s of due) s.notify();
-  }, wait);
-}
+const frames = new FlushScheduler({
+  now: () => performance.now(),
+  setTimer: (run, ms) => setTimeout(run, ms),
+  clearTimer: (timer) => clearTimeout(timer as ReturnType<typeof setTimeout>),
+});
 
 const HISTORY_WAIT_MS = 5_000;
 
@@ -145,7 +133,7 @@ export class TerminalSession {
   dispose(): void {
     this.disposed = true;
     if (live.get(this.paneId) === this) live.delete(this.paneId);
-    pending.delete(this);
+    frames.cancel(this);
     this.conn?.close();
     this.conn = null;
     for (const w of this.waiters) w.done();
@@ -187,7 +175,7 @@ export class TerminalSession {
 
   private changed(): void {
     this.version++;
-    if (!this.disposed) schedule(this);
+    if (!this.disposed) frames.schedule(this);
   }
 
   private onState(state: DataConnectionState): void {

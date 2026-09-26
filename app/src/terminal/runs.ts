@@ -169,11 +169,14 @@ function cellText(row: Row, c: number, cp: number): string {
 function finish(runs: Run[], open: Run | null, parts: string[]): void {
   if (!open) return;
   open.text = parts.join('');
-  runs.push(open);
+  const invisible =
+    open.style.backgroundColor === null && open.style.decoration === null && !open.text.trim();
+  // Runs sit at absolute columns, so an invisible one holds no place and would only cost a host node every frame.
+  if (!invisible) runs.push(open);
 }
 
 /**
- * The fewest runs that draw `row`: cells of one resolved style merge, wide characters, grapheme clusters and glyphs the font may not draw at one cell (`isNarrowGlyph`) stand alone, spacers are skipped and trailing default blanks dropped (selected blanks stay).
+ * The fewest runs that draw `row`: cells of one resolved style merge, wide characters, grapheme clusters and glyphs the font may not draw at one cell (`isNarrowGlyph`) stand alone, spacers are skipped, and trailing default blanks and any run of blanks that paints nothing (no background, no line) are dropped (selected blanks stay).
  */
 export function rowRuns(
   row: Row,
