@@ -10,21 +10,6 @@ import { Icon } from '../../ui/icons';
 import { Kbd } from '../../ui/kbd';
 import { Text } from '../../ui/text';
 
-function nowSeconds(): number {
-  return Math.floor(Date.now() / 1000);
-}
-
-function useNowSeconds(ticking: boolean): number {
-  const [now, setNow] = useState(nowSeconds);
-  useEffect(() => {
-    if (!ticking) return;
-    setNow(nowSeconds());
-    const timer = setInterval(() => setNow(nowSeconds()), 1000);
-    return () => clearInterval(timer);
-  }, [ticking]);
-  return now;
-}
-
 /** Which optional header items fit; the least useful goes first as the pane narrows or the text grows. */
 export interface HeaderFit {
   progressNumbers: boolean;
@@ -126,8 +111,7 @@ export function PaneHeader({ pane, position, focused, onActivate }: PaneHeaderPr
   const ref = useRef<PublicInstance>(null);
   const fit = useHeaderFit(ref, chrome.scale);
   const shellName = useAppSelector((s) => s.env.shellName);
-  const ticking = pane.status === 'running' && pane.statusSince !== undefined;
-  const view = statusView(pane, shellName, useNowSeconds(ticking));
+  const view = statusView(pane, shellName);
   const waiting = view.tone === 'waiting';
   const agent = pane.cli !== 'shell';
   const progress = agent ? pane.progress : undefined;

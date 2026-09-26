@@ -33,7 +33,7 @@ const state = (waiting = true) =>
 
 describe('palette commands', () => {
   test('with no query it lists the commands of the canvas first, with their keys and hints', () => {
-    const items = paletteItems(state(), '', 0);
+    const items = paletteItems(state(), '');
     expect(items.slice(0, 6).map((i) => [i.label, i.keys])).toEqual([
       ['New pane', '⌘N'],
       ['New tab', '⌘T'],
@@ -45,7 +45,7 @@ describe('palette commands', () => {
     expect(items[2]?.hint).toBe('tab 1 · pane 2 · permission');
     expect(items[3]?.hint).toBe('pane 1 in ~/code/ply');
     expect(items.every((i) => i.section === 'Commands')).toBe(true);
-    expect(paletteItems(state(false), '', 0).some((i) => i.id === 'pane.nextWaiting')).toBe(false);
+    expect(paletteItems(state(false), '').some((i) => i.id === 'pane.nextWaiting')).toBe(false);
   });
 
   test('every lost pane gets a resume command saying how it resumes', () => {
@@ -54,7 +54,7 @@ describe('palette commands', () => {
       ...lost.panes,
       3: { ...(lost.panes[3] as PaneState), status: 'lost' as const, session_ref: 'example' },
     };
-    const items = paletteItems({ ...lost, panes }, '', 0).filter((i) =>
+    const items = paletteItems({ ...lost, panes }, '').filter((i) =>
       i.id.startsWith('pane-resume'),
     );
     expect(items.map((i) => [i.label, i.hint])).toEqual([
@@ -64,17 +64,17 @@ describe('palette commands', () => {
       { type: 'overlay/close' },
       { type: 'pane/resume', paneId: 3 },
     ]);
-    expect(paletteItems(lost, 'resume', 0)).toEqual([]);
+    expect(paletteItems(lost, 'resume')).toEqual([]);
   });
 
   test('plyd can be restarted, or stopped with every session after a confirmation (R53)', () => {
     const find = (s: ReturnType<typeof state>, id: string) =>
-      paletteItems(s, 'plyd', 0).find((i) => i.id === id);
+      paletteItems(s, 'plyd').find((i) => i.id === id);
     const restart = find(state(), 'daemon-restart');
     expect(restart?.label).toBe('Restart plyd');
     expect(restart?.actions).toEqual([{ type: 'overlay/close' }, { type: 'daemon/restart' }]);
     expect(restart?.hint).not.toContain('another build');
-    const quit = paletteItems(state(), 'quit', 0);
+    const quit = paletteItems(state(), 'quit');
     expect(quit.map((i) => i.label)).toEqual(['Quit ply and stop sessions']);
     expect(quit[0]?.actions).toEqual([{ type: 'overlay/open', overlay: { kind: 'quit-confirm' } }]);
     const base = state();
@@ -92,7 +92,7 @@ describe('palette commands', () => {
       [{ id: 1, name: 'ply' }],
       { overlay: { kind: 'palette' } },
     );
-    const items = paletteItems(four, '', 0);
+    const items = paletteItems(four, '');
     for (const id of ['pane.new', 'pane.terminalHere'] as const) {
       const item = items.find((i) => i.id === id);
       expect(item).toMatchObject({ unavailable: true, dot: 'dim' });
@@ -100,16 +100,16 @@ describe('palette commands', () => {
       expect(item?.actions).toEqual([{ type: 'overlay/close' }, { type: 'command', id }]);
     }
     expect(items.find((i) => i.id === 'tab.new')?.unavailable).toBeUndefined();
-    expect(paletteItems(base, '', 0).find((i) => i.id === 'pane.new')?.unavailable).toBeUndefined();
+    expect(paletteItems(base, '').find((i) => i.id === 'pane.new')?.unavailable).toBeUndefined();
   });
 
   test('a query filters commands, tabs and panes by every word', () => {
-    const items = paletteItems(state(), 'notes', 0);
+    const items = paletteItems(state(), 'notes');
     expect(items.map((i) => [i.section, i.label])).toEqual([
       ['Tabs', 'notes'],
       ['Panes', 'Merges'],
     ]);
-    expect(paletteItems(state(), 'next pane', 0).map((i) => i.id)).toEqual(['pane.next']);
+    expect(paletteItems(state(), 'next pane').map((i) => i.id)).toEqual(['pane.next']);
     const tab = items[0];
     expect(tab && matches(tab, 'NOTES tab 2')).toBe(true);
     expect(tab && matches(tab, 'notes tab 3')).toBe(false);
@@ -185,7 +185,7 @@ describe.if(hasNativeTestRenderer)('Palette', () => {
           .find((el) => el.testId?.startsWith('palette-item-') && el.style.borderWidth === 1);
         return on ? renderer.getElementBounds(on.id) : null;
       };
-      const rows = paletteItems(state(), '', 0).length;
+      const rows = paletteItems(state(), '').length;
       for (let step = 0; step < rows + 2; step++) {
         renderer.simulateKeystrokes(step < rows ? 'down' : 'up');
         renderer.flush();

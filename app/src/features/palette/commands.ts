@@ -179,12 +179,12 @@ function tabItems(state: AppState): PaletteItem[] {
   });
 }
 
-function paneItems(state: AppState, nowSeconds: number): PaletteItem[] {
+function paneItems(state: AppState): PaletteItem[] {
   return state.tabs.flatMap((t) =>
     t.pane_ids.flatMap((id): PaletteItem[] => {
       const pane = state.panes[id];
       if (!pane) return [];
-      const view = statusView(pane, state.env.shellName, nowSeconds);
+      const view = statusView(pane, state.env.shellName);
       const dot: ItemDot =
         view.tone === 'waiting'
           ? 'amber'
@@ -219,9 +219,9 @@ export function matches(item: PaletteItem, query: string): boolean {
 }
 
 /** The palette rows for `query` (spec 7.4): commands only while empty; commands, tabs and panes when filtering. */
-export function paletteItems(state: AppState, query: string, nowSeconds: number): PaletteItem[] {
+export function paletteItems(state: AppState, query: string): PaletteItem[] {
   if (query.trim() === '') return commands(state);
-  return [...commands(state), ...tabItems(state), ...paneItems(state, nowSeconds)].filter((item) =>
+  return [...commands(state), ...tabItems(state), ...paneItems(state)].filter((item) =>
     matches(item, query),
   );
 }

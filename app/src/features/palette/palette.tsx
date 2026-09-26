@@ -34,10 +34,7 @@ export function Palette() {
   const state = useAppSelector(selectAll);
   const [query, setQuery] = useState('');
   const [highlight, setHighlight] = useState(0);
-  const items = useMemo(
-    () => paletteItems(state, query, Math.floor(Date.now() / 1000)),
-    [state, query],
-  );
+  const items = useMemo(() => paletteItems(state, query), [state, query]);
   const hi = items.length === 0 ? -1 : Math.min(highlight, items.length - 1);
   const hiRef = useRef<PublicInstance>(null);
   const listRef = useRef<PublicInstance>(null);

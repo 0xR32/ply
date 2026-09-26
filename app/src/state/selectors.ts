@@ -49,17 +49,8 @@ export function isDone(pane: Pick<Pane, 'status' | 'progress'>): boolean {
   return pane.status === 'idle' && p !== undefined && p.total > 0 && p.done >= p.total;
 }
 
-/** `mm:ss` below an hour, `h:mm:ss` from there; negative spans read as zero. */
-export function formatElapsed(seconds: number): string {
-  const s = Math.max(0, Math.floor(seconds));
-  const two = (n: number) => String(n).padStart(2, '0');
-  const h = Math.floor(s / 3600);
-  const m = Math.floor((s % 3600) / 60);
-  return h > 0 ? `${h}:${two(m)}:${two(s % 60)}` : `${two(m)}:${two(s % 60)}`;
-}
-
-/** The chip for a pane at `nowSeconds`; the running label carries the time since the status began when known. */
-export function statusView(pane: PaneState, shellName: string, nowSeconds: number): StatusView {
+/** The chip for a pane; the running label carries no clock, so nothing re-renders the header every second. */
+export function statusView(pane: PaneState, shellName: string): StatusView {
   if (pane.status === 'exited') {
     const code = pane.exit_code ?? 0;
     return { tone: code === 0 ? 'exited' : 'failed', label: `Exited ${code}` };
@@ -69,12 +60,8 @@ export function statusView(pane: PaneState, shellName: string, nowSeconds: numbe
   switch (pane.status) {
     case 'starting':
       return { tone: 'starting', label: 'Starting' };
-    case 'running': {
-      const since = pane.statusSince;
-      const label =
-        since === undefined ? 'Running' : `Running ${formatElapsed(nowSeconds - since)}`;
-      return { tone: 'running', label };
-    }
+    case 'running':
+      return { tone: 'running', label: 'Running' };
     case 'waiting_permission':
     case 'waiting_input':
       return { tone: 'waiting', label: 'Needs you' };

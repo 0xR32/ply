@@ -3,7 +3,6 @@ import type { Action, Event } from './actions';
 import { type AppState, reduce } from './reducer';
 import {
   FULL_TAB_NOTICE,
-  formatElapsed,
   gridShape,
   isLost,
   isTabFull,
@@ -444,28 +443,22 @@ describe('notices and settings', () => {
 
 describe('selectors', () => {
   test('status presentation follows spec 6.3', () => {
-    const now = 1_000;
-    expect(
-      statusView(makePane({ id: 1, status: 'running', statusSince: 748 }), 'zsh', now),
-    ).toEqual({
+    expect(statusView(makePane({ id: 1, status: 'running', statusSince: 748 }), 'zsh')).toEqual({
       tone: 'running',
-      label: 'Running 04:12',
+      label: 'Running',
     });
-    expect(statusView(makePane({ id: 1, status: 'running' }), 'zsh', now).label).toBe('Running');
-    expect(statusView(makePane({ id: 1, status: 'waiting_input' }), 'zsh', now).label).toBe(
-      'Needs you',
-    );
-    expect(statusView(makePane({ id: 1, progress: { done: 2, total: 2 } }), 'zsh', now).label).toBe(
+    expect(statusView(makePane({ id: 1, status: 'running' }), 'zsh').label).toBe('Running');
+    expect(statusView(makePane({ id: 1, status: 'waiting_input' }), 'zsh').label).toBe('Needs you');
+    expect(statusView(makePane({ id: 1, progress: { done: 2, total: 2 } }), 'zsh').label).toBe(
       'Done',
     );
-    expect(statusView(makePane({ id: 1, progress: { done: 1, total: 2 } }), 'zsh', now).label).toBe(
+    expect(statusView(makePane({ id: 1, progress: { done: 1, total: 2 } }), 'zsh').label).toBe(
       'Your turn',
     );
-    expect(statusView(makePane({ id: 1, cli: 'shell' }), 'zsh', now).label).toBe('zsh');
-    expect(statusView(makePane({ id: 1, status: 'exited', exit_code: 1 }), 'zsh', now).tone).toBe(
+    expect(statusView(makePane({ id: 1, cli: 'shell' }), 'zsh').label).toBe('zsh');
+    expect(statusView(makePane({ id: 1, status: 'exited', exit_code: 1 }), 'zsh').tone).toBe(
       'failed',
     );
-    expect(formatElapsed(3_725)).toBe('1:02:05');
   });
 
   test('tab dots, counts and the waiting order', () => {
