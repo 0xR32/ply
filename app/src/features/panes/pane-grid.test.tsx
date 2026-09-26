@@ -88,8 +88,9 @@ const demo = () =>
   );
 
 describe.if(hasNativeTestRenderer)('PaneGrid', () => {
-  const W = 1440;
-  const H = 812;
+  // On the CI runner a 1440 px test window came out 1024 px wide, its display's width; 996 fits and divides by 6.
+  const W = 996;
+  const H = 700;
   const PAD = { x: 14, top: 2, bottom: 10 };
   const GAP = 10;
   const inner = { width: W - 2 * PAD.x, height: H - PAD.top - PAD.bottom };
@@ -235,11 +236,11 @@ describe.if(hasNativeTestRenderer)('PaneGrid', () => {
       ...state,
       tabs: state.tabs.map((t) => (t.id === 1 ? { ...t, zoomed: true, focus_pane_id: 2 } : t)),
     };
-    const { renderer, unmount } = mountWithStore(grid, zoomed, { width: 1200, height: 800 });
+    const { renderer, unmount } = mountWithStore(grid, zoomed, { width: W, height: H });
     try {
       expect(renderer.findByTestId('terminal-2')).toBeDefined();
       for (const id of [1, 3, 4]) expect(renderer.findByTestId(`terminal-${id}`)).toBeUndefined();
-      expect(frame(renderer, 'pane-2').width).toBe(1200 - 28);
+      expect(frame(renderer, 'pane-2').width).toBe(W - 28);
     } finally {
       unmount();
     }
