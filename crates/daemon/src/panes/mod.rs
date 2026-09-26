@@ -4,5 +4,6 @@
 pub mod agent;
 pub mod launch;
 pub mod pane;
+pub mod queue;
 pub mod registry;
 pub mod state;

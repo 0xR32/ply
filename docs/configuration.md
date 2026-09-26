@@ -32,6 +32,15 @@ directory to `0700` even when they existed, and writes `config.toml`,
 `plyd.lock` and the pane files as `0600`. A pane's directory is removed when the
 pane is closed.
 
+**The database only moves forward.** `ply.db` is at schema v2 since the task
+queue (Ruling R60) added its `tasks` table; plyd migrates an older database
+when it opens it, and a plyd from before refuses a newer one
+(`Error::SchemaTooNew`) rather than downgrade it. To run an older build, give it
+its own `PLY_HOME`. To take a database back to v1 by hand, with plyd stopped:
+`sqlite3 ply.db "DROP TABLE tasks; UPDATE schema_version SET version = 1;"`,
+which loses the queue and its history and nothing else. The database keeps every
+task, with the 200 most recent finished ones per workspace.
+
 **Socket paths must stay under 104 bytes**, the macOS limit for a Unix socket
 path; plyd refuses to start when one would not (103 bytes plus the NUL). Keep
 `PLY_HOME` short.

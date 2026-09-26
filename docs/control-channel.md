@@ -388,8 +388,13 @@ In order, plyd refuses with `shutting_down` once a shutdown was requested;
 pool directory that is not absolute, and a pane that runs a shell; `not_found`
 for an unknown workspace or a pane outside it; `invalid_state` for a pane that
 has exited, and for a queue or pool that already holds 32 queued tasks
-(`MAX_QUEUED_TASKS`). A pane that is `lost` takes the task, held until it is
-resumed and its queue resumed.
+(`MAX_QUEUED_TASKS`). A pane that is `lost` takes the task; it waits until the
+pane is resumed and its turn comes. A lost pane that reopens as a shell (Ruling
+R50) cancels its queued tasks ("the pane reopened as a shell"), and closing a
+pane cancels its queued tasks and fails the one it was running ("the pane was
+closed"). After a restart of plyd, a task that was typed fails ("plyd restarted
+while it ran"), queued tasks wait with their queue paused (`restored`), and a
+pool task no pane had taken is cancelled.
 
 **`task.cancel`** cancels a `queued` task (`task.changed`, `cancelled`); any
 other state is `invalid_state`: a task that was typed cannot be taken back, and

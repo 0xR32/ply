@@ -322,12 +322,27 @@ async fn dispatch(shared: &Arc<Shared>, call: Call) -> Result<Value, ErrorBody> 
             let sources = SkillSources::from_env(&shared.login.base);
             ok(&shared.skills.get(sources, p.cli, cwd).await)
         }
-        Call::TaskList(_)
-        | Call::TaskAdd(_)
-        | Call::TaskCancel(_)
-        | Call::TaskMove(_)
-        | Call::TaskSend(_)
-        | Call::QueuePause(_) => Err(refuse(ErrorCode::Internal, "not in this build of plyd yet")),
+        Call::TaskList(p) => ok(&shared.registry().tasks_of(p.workspace_id)?),
+        Call::TaskAdd(p) => {
+            if shared.is_stopping() {
+                return Err(refuse(ErrorCode::ShuttingDown, "plyd is shutting down"));
+            }
+            let task = shared.registry().add_task(&p, unix_now())?;
+            ok(&task)
+        }
+        Call::TaskCancel(p) => {
+            shared.registry().cancel_task(p.task_id, unix_now())?;
+            ok(&Empty {})
+        }
+        Call::TaskMove(p) => {
+            shared.registry().move_task(p.task_id, p.position)?;
+            ok(&Empty {})
+        }
+        Call::QueuePause(p) => {
+            shared.registry().pause_queue(p.pane_id, p.paused)?;
+            ok(&Empty {})
+        }
+        Call::TaskSend(_) => Err(refuse(ErrorCode::Internal, "not in this build of plyd yet")),
     }
 }
 

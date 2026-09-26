@@ -6,7 +6,9 @@
 //! and a tab disappears with its last open pane. Tabs are named after the basename of their first pane's directory
 //! (Ruling R3); one default workspace, the home directory, exists after the first start. Events for C1
 //! (`pane.added`, `pane.removed`, `pane.status`, `pane.meta`, `pane.exit`) are broadcast from here, after the change
-//! is stored. `layout.save`'s `active_tab_id` has no column in schema v1, so it is kept in memory only.
+//! is stored. `layout.save`'s `active_tab_id` has no column in schema v1, so it is kept in memory only. The task
+//! queue (Ruling R60) lives here too, in [`Queues`]: every task change is stored in `tasks` and then announced with
+//! `task.changed`; a queue's pause and block are kept in memory and announced with `queue.changed`.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
@@ -14,10 +16,12 @@ use std::path::Path;
 use ply_agents::SessionMeta;
 use ply_proto::control::{
     ErrorBody, ErrorCode, Event, PaneExit, PaneMeta, PaneProgress, PaneRemoved, PaneStatusChanged,
+    TaskAddParams,
 };
 use ply_proto::pane::{
-    Cli, Layout, MAX_PANES_PER_TAB, Pane, PaneId, PaneStatus, Progress, Session, Settings, Tab,
-    TerminalTheme, UnixSeconds, Workspace,
+    Cli, Layout, MAX_PANES_PER_TAB, MAX_QUEUED_TASKS, Pane, PaneId, PaneStatus, PauseReason,
+    Progress, Session, Settings, Tab, Task, TaskId, TaskList, TaskState, TaskTarget, TerminalTheme,
+    UnixSeconds, Workspace,
 };
 use tokio::sync::{broadcast, mpsc};
 
@@ -25,6 +29,7 @@ use crate::config::Config;
 use crate::db::{Db, TabRow};
 use crate::error::Result;
 use crate::panes::pane::PaneCmd;
+use crate::panes::queue::{MAX_SKILL_BYTES, QueueKey, Queues, REOPENED_AS_SHELL, check_text};
 
 /// The result of a registry change requested over C1: the value, or the error to answer with.
 pub type MethodResult<T> = std::result::Result<T, ErrorBody>;
@@ -105,6 +110,7 @@ pub struct Registry {
     tabs: BTreeMap<u64, TabState>,
     panes: BTreeMap<PaneId, PaneEntry>,
     active_tabs: HashMap<u64, u64>,
+    queues: Queues,
 }
 
 impl Registry {
@@ -123,6 +129,7 @@ impl Registry {
             tabs: BTreeMap::new(),
             panes: BTreeMap::new(),
             active_tabs: HashMap::new(),
+            queues: Queues::default(),
             db,
             config,
             config_path: config_path.to_path_buf(),
@@ -202,6 +209,17 @@ impl Registry {
         for id in empty {
             reg.tabs.remove(&id);
             reg.db.delete_tab(id)?;
+        }
+        let open: HashSet<PaneId> = reg.panes.keys().copied().collect();
+        let (queues, changed) = Queues::restore(reg.db.tasks()?, &open, now);
+        reg.queues = queues;
+        for task in &changed {
+            reg.db.update_task(task)?;
+        }
+        let ws_ids: Vec<u64> = reg.workspaces.keys().copied().collect();
+        for ws in ws_ids {
+            let pruned = reg.queues.prune(ws);
+            reg.db.delete_tasks(&pruned)?;
         }
         let tab_ids: Vec<u64> = reg.tabs.keys().copied().collect();
         for id in tab_ids {
@@ -677,8 +695,8 @@ impl Registry {
         }));
     }
 
-    /// Makes the pane run `cli` from now on, titled `title`, and announces the whole record again with `pane.added` (no other event carries `cli`); `pane.resume` reopens a pane without a session as a shell.
-    pub fn set_cli(&mut self, id: PaneId, cli: Cli, title: &str) {
+    /// Makes the pane run `cli` from now on, titled `title`, and announces the whole record again with `pane.added` (no other event carries `cli`); `pane.resume` reopens a pane without a session as a shell, which ends its queued tasks.
+    pub fn set_cli(&mut self, id: PaneId, cli: Cli, title: &str, now: UnixSeconds) {
         let Some(entry) = self.panes.get_mut(&id) else {
             return;
         };
@@ -689,6 +707,10 @@ impl Registry {
         let pane = entry.pane.clone();
         let announced = entry.announced;
         self.store(&pane);
+        if cli == Cli::Shell {
+            let ended = self.queues.end_pane(id, REOPENED_AS_SHELL, now);
+            self.apply_tasks(ended);
+        }
         if announced {
             self.emit(Event::PaneAdded(Box::new(pane)));
         }
@@ -732,8 +754,159 @@ impl Registry {
         if let Err(e) = self.leave_tab(&entry.pane) {
             tracing::error!(pane_id = id, error = %e, "cannot update the tab of a closed pane");
         }
+        let cancelled = self.queues.close_pane(id, now);
+        self.apply_tasks(cancelled);
         self.emit(Event::PaneRemoved(PaneRemoved { pane_id: id }));
         Ok(entry.handle)
+    }
+
+    /// The workspace's tasks and flagged queues (`task.list`); `not_found` for an unknown workspace.
+    pub fn tasks_of(&self, workspace_id: u64) -> MethodResult<TaskList> {
+        if !self.workspaces.contains_key(&workspace_id) {
+            return Err(refuse(
+                ErrorCode::NotFound,
+                format!("no workspace {workspace_id}"),
+            ));
+        }
+        let panes: HashSet<PaneId> = self
+            .panes
+            .values()
+            .filter(|e| e.pane.workspace_id == workspace_id)
+            .map(|e| e.pane.id)
+            .collect();
+        Ok(self.queues.list(workspace_id, &panes))
+    }
+
+    /// Queues a task (`task.add`), stores it and announces it with `task.changed`.
+    /// Fails with `not_found` (workspace, pane), `bad_request` (text, skill, a shell pane, a relative pool directory), `invalid_state` (an exited pane, a full queue), `internal` if SQLite fails.
+    pub fn add_task(&mut self, p: &TaskAddParams, now: UnixSeconds) -> MethodResult<Task> {
+        if !self.workspaces.contains_key(&p.workspace_id) {
+            return Err(refuse(
+                ErrorCode::NotFound,
+                format!("no workspace {}", p.workspace_id),
+            ));
+        }
+        check_text(&p.text)?;
+        if p.skill
+            .as_deref()
+            .is_some_and(|s| s.len() > MAX_SKILL_BYTES || s.chars().any(char::is_control))
+        {
+            return Err(refuse(
+                ErrorCode::BadRequest,
+                "the skill is not a skill invocation",
+            ));
+        }
+        let (pane_id, pool) = match &p.target {
+            TaskTarget::Pane(id) => {
+                let entry = self
+                    .panes
+                    .get(id)
+                    .filter(|e| e.announced && e.pane.workspace_id == p.workspace_id)
+                    .ok_or_else(|| {
+                        refuse(
+                            ErrorCode::NotFound,
+                            format!("no pane {id} in this workspace"),
+                        )
+                    })?;
+                if entry.pane.cli == Cli::Shell {
+                    return Err(refuse(ErrorCode::BadRequest, "a shell pane takes no tasks"));
+                }
+                if entry.pane.status == PaneStatus::Exited {
+                    return Err(refuse(
+                        ErrorCode::InvalidState,
+                        "the pane's process has exited",
+                    ));
+                }
+                (Some(*id), None)
+            }
+            TaskTarget::Pool(pool) => {
+                if !Path::new(&pool.cwd).is_absolute() {
+                    return Err(refuse(
+                        ErrorCode::BadRequest,
+                        "the pool's directory must be absolute",
+                    ));
+                }
+                (None, Some(pool.clone()))
+            }
+        };
+        let mut task = Task {
+            id: 0,
+            workspace_id: p.workspace_id,
+            pane_id,
+            pool,
+            text: p.text.clone(),
+            skill: p.skill.clone(),
+            state: TaskState::Queued,
+            position: 0,
+            detail: None,
+            created_at: now,
+            sent_at: None,
+            started_at: None,
+            ended_at: None,
+        };
+        let key = QueueKey::of(&task)
+            .ok_or_else(|| refuse(ErrorCode::Internal, "the task has no queue"))?;
+        let queued = self.queues.queued_len(&key);
+        if queued >= MAX_QUEUED_TASKS {
+            return Err(refuse(
+                ErrorCode::InvalidState,
+                format!("the queue already holds {MAX_QUEUED_TASKS} tasks"),
+            ));
+        }
+        task.position = count(queued);
+        task.id = self
+            .db
+            .insert_task(&task)
+            .map_err(|e| internal("cannot store the task", &e))?;
+        self.queues.insert(task.clone());
+        self.emit(Event::TaskChanged(Box::new(task.clone())));
+        Ok(task)
+    }
+
+    /// Cancels a queued task (`task.cancel`); `not_found` for an unknown task, `invalid_state` for one no longer queued.
+    pub fn cancel_task(&mut self, id: TaskId, now: UnixSeconds) -> MethodResult<()> {
+        let changed = self.queues.cancel(id, "cancelled", now)?;
+        self.apply_tasks(changed);
+        Ok(())
+    }
+
+    /// Moves a queued task within its queue (`task.move`); errors as [`Registry::cancel_task`].
+    pub fn move_task(&mut self, id: TaskId, position: u32) -> MethodResult<()> {
+        let changed = self.queues.move_to(id, position)?;
+        self.apply_tasks(changed);
+        Ok(())
+    }
+
+    /// Pauses or resumes a pane's queue (`queue.pause`) and announces a change; `not_found` for an unknown pane.
+    pub fn pause_queue(&mut self, pane: PaneId, paused: bool) -> MethodResult<()> {
+        self.require(pane)?;
+        if let Some(state) = self.queues.pause(pane, paused.then_some(PauseReason::User)) {
+            self.emit(Event::QueueChanged(state));
+        }
+        Ok(())
+    }
+
+    /// Stores and announces changed tasks, then drops finished history past what each workspace keeps.
+    fn apply_tasks(&mut self, changed: Vec<Task>) {
+        let mut finished = HashSet::new();
+        for task in changed {
+            if let Err(e) = self.db.update_task(&task) {
+                tracing::error!(task_id = task.id, error = %e, "cannot store the task");
+            }
+            if matches!(
+                task.state,
+                TaskState::Ended | TaskState::Failed | TaskState::Cancelled
+            ) {
+                finished.insert(task.workspace_id);
+            }
+            self.emit(Event::TaskChanged(Box::new(task)));
+        }
+        for ws in finished {
+            let pruned = self.queues.prune(ws);
+            if let Err(e) = self.db.delete_tasks(&pruned) {
+                tracing::error!(workspace_id = ws, error = %e, "cannot delete old finished tasks");
+            }
+        }
     }
 
     /// The workspace's tabs in bar order with their announced panes (as `pane.list` has them) in position order; a tab holding none is left out; `not_found` for an unknown workspace.
@@ -999,6 +1172,8 @@ fn count(n: usize) -> u32 {
 
 #[cfg(test)]
 mod tests {
+    use ply_proto::pane::{AgentCli, MAX_TASK_TEXT_BYTES, TaskPool};
+
     use super::*;
 
     fn registry() -> (Registry, broadcast::Receiver<Event>) {
@@ -1204,7 +1379,7 @@ mod tests {
         let mut new = new_pane(None, "/Users/example");
         new.cli = Cli::Claude;
         let a = reg.insert_pane(&new, 10).unwrap();
-        reg.set_cli(a.id, Cli::Shell, "zsh");
+        reg.set_cli(a.id, Cli::Shell, "zsh", 40);
         assert!(
             rx.try_recv().is_err(),
             "an unannounced pane is not announced by it"
@@ -1212,7 +1387,7 @@ mod tests {
         let (tx, _handle) = mpsc::channel(1);
         reg.announce(a.id, tx);
         let _added = rx.try_recv().unwrap();
-        reg.set_cli(a.id, Cli::Shell, "zsh");
+        reg.set_cli(a.id, Cli::Shell, "zsh", 40);
         assert!(matches!(
             rx.try_recv(),
             Ok(Event::PaneAdded(p)) if p.id == a.id && p.cli == Cli::Shell && p.title == "zsh"
@@ -1257,6 +1432,274 @@ mod tests {
         assert_eq!(stored(&reg), "zsh", "a title change alone writes nothing");
         reg.touch(a.id, 20);
         assert_eq!(stored(&reg), "vim notes.txt");
+    }
+
+    fn agent(reg: &mut Registry, cwd: &str) -> Pane {
+        let pane = reg
+            .insert_pane(
+                &NewPane {
+                    cli: Cli::Claude,
+                    title: "claude",
+                    ..new_pane(None, cwd)
+                },
+                10,
+            )
+            .unwrap();
+        reg.panes.get_mut(&pane.id).unwrap().announced = true;
+        pane
+    }
+
+    fn add(pane: PaneId, text: &str) -> TaskAddParams {
+        TaskAddParams {
+            workspace_id: 1,
+            target: TaskTarget::Pane(pane),
+            text: text.to_owned(),
+            skill: None,
+        }
+    }
+
+    fn events(rx: &mut broadcast::Receiver<Event>) -> Vec<Event> {
+        std::iter::from_fn(|| rx.try_recv().ok()).collect()
+    }
+
+    #[test]
+    fn a_task_joins_an_agent_panes_queue_and_is_stored_and_announced() {
+        let (mut reg, mut rx) = registry();
+        let pane = agent(&mut reg, "/Users/example");
+        let first = reg.add_task(&add(pane.id, "/review-pr #1"), 20).unwrap();
+        let second = reg.add_task(&add(pane.id, "then this"), 21).unwrap();
+        assert_eq!(
+            (first.state, first.position, first.pane_id),
+            (TaskState::Queued, 0, Some(pane.id))
+        );
+        assert_eq!(second.position, 1);
+        assert!(
+            matches!(&events(&mut rx)[..], [Event::TaskChanged(a), Event::TaskChanged(b)] if a.id == first.id && b.id == second.id)
+        );
+        let list = reg.tasks_of(1).unwrap();
+        assert_eq!(
+            list.tasks.iter().map(|t| t.id).collect::<Vec<_>>(),
+            [first.id, second.id]
+        );
+        assert_eq!(reg.db.tasks().unwrap().len(), 2, "stored before announced");
+        assert_eq!(reg.tasks_of(9).unwrap_err().code, ErrorCode::NotFound);
+    }
+
+    #[test]
+    fn task_add_refuses_what_cannot_be_queued() {
+        let (mut reg, _) = registry();
+        let shell_pane = shell(&mut reg, None, "/Users/example");
+        let pane = agent(&mut reg, "/Users/example");
+        let exited = agent(&mut reg, "/Users/example");
+        reg.mark_exited(exited.id, 0, 15);
+        let code = |reg: &mut Registry, p: TaskAddParams| reg.add_task(&p, 20).unwrap_err().code;
+        assert_eq!(
+            code(&mut reg, add(shell_pane.id, "ls")),
+            ErrorCode::BadRequest,
+            "a shell takes no tasks"
+        );
+        assert_eq!(code(&mut reg, add(exited.id, "x")), ErrorCode::InvalidState);
+        assert_eq!(code(&mut reg, add(999, "x")), ErrorCode::NotFound);
+        assert_eq!(
+            code(
+                &mut reg,
+                TaskAddParams {
+                    workspace_id: 9,
+                    ..add(pane.id, "x")
+                }
+            ),
+            ErrorCode::NotFound
+        );
+        for bad in [
+            "",
+            "   \n",
+            "a\rb",
+            "esc \u{1b}[31m",
+            "nul \0",
+            &"x".repeat(MAX_TASK_TEXT_BYTES + 1),
+        ] {
+            assert_eq!(
+                code(&mut reg, add(pane.id, bad)),
+                ErrorCode::BadRequest,
+                "{bad:?}"
+            );
+        }
+        assert!(
+            reg.add_task(&add(pane.id, "two\nlines\twith a tab"), 20)
+                .is_ok()
+        );
+        let pool = |cwd: &str| TaskAddParams {
+            target: TaskTarget::Pool(TaskPool {
+                cli: AgentCli::Codex,
+                cwd: cwd.to_owned(),
+            }),
+            ..add(pane.id, "x")
+        };
+        assert_eq!(code(&mut reg, pool("relative")), ErrorCode::BadRequest);
+        assert!(reg.add_task(&pool("/Users/example/project"), 20).is_ok());
+        for i in 1..MAX_QUEUED_TASKS {
+            reg.add_task(&add(pane.id, &format!("t{i}")), 20).unwrap();
+        }
+        assert_eq!(
+            code(&mut reg, add(pane.id, "one too many")),
+            ErrorCode::InvalidState
+        );
+    }
+
+    #[test]
+    fn cancel_move_and_pause_change_the_queue_and_announce_it() {
+        let (mut reg, mut rx) = registry();
+        let pane = agent(&mut reg, "/Users/example");
+        let a = reg.add_task(&add(pane.id, "a"), 20).unwrap();
+        let b = reg.add_task(&add(pane.id, "b"), 20).unwrap();
+        events(&mut rx);
+        reg.move_task(b.id, 0).unwrap();
+        assert_eq!(events(&mut rx).len(), 2, "both positions changed");
+        reg.cancel_task(b.id, 30).unwrap();
+        let got = events(&mut rx);
+        assert!(
+            matches!(&got[0], Event::TaskChanged(t) if t.id == b.id && t.state == TaskState::Cancelled)
+        );
+        assert!(matches!(&got[1], Event::TaskChanged(t) if t.id == a.id && t.position == 0));
+        reg.pause_queue(pane.id, true).unwrap();
+        reg.pause_queue(pane.id, true).unwrap();
+        let got = events(&mut rx);
+        assert_eq!(got.len(), 1, "an unchanged pause sends nothing");
+        assert!(matches!(&got[0], Event::QueueChanged(q) if q.paused == Some(PauseReason::User)));
+        assert_eq!(reg.tasks_of(1).unwrap().queues.len(), 1);
+        reg.pause_queue(pane.id, false).unwrap();
+        assert!(reg.tasks_of(1).unwrap().queues.is_empty());
+        assert_eq!(
+            reg.pause_queue(999, true).unwrap_err().code,
+            ErrorCode::NotFound
+        );
+    }
+
+    #[test]
+    fn a_pane_reopened_as_a_shell_cancels_its_queued_tasks() {
+        let (mut reg, mut rx) = registry();
+        let pane = agent(&mut reg, "/Users/example");
+        let task = reg.add_task(&add(pane.id, "never typed"), 11).unwrap();
+        events(&mut rx);
+        reg.set_cli(pane.id, Cli::Shell, "zsh", 40);
+        let list = reg.tasks_of(1).unwrap();
+        assert_eq!(list.tasks[0].id, task.id);
+        assert_eq!(list.tasks[0].state, TaskState::Cancelled);
+        assert_eq!(
+            list.tasks[0].detail.as_deref(),
+            Some(crate::panes::queue::REOPENED_AS_SHELL)
+        );
+    }
+
+    #[test]
+    fn closing_a_pane_cancels_its_queued_tasks() {
+        let (mut reg, mut rx) = registry();
+        let pane = agent(&mut reg, "/Users/example");
+        reg.add_task(&add(pane.id, "never typed"), 11).unwrap();
+        reg.mark_exited(pane.id, 0, 12);
+        events(&mut rx);
+        reg.close_pane(pane.id, 30).unwrap();
+        let got = events(&mut rx);
+        assert!(
+            got.iter()
+                .any(|e| matches!(e, Event::TaskChanged(t) if t.state == TaskState::Cancelled))
+        );
+        assert!(
+            reg.db
+                .tasks()
+                .unwrap()
+                .iter()
+                .all(|t| t.state == TaskState::Cancelled)
+        );
+    }
+
+    #[test]
+    fn a_restart_holds_the_queues_of_the_panes_that_come_back() {
+        let db = Db::open_in_memory().unwrap();
+        let ws = db.insert_workspace("/Users/example", "example", 1).unwrap();
+        let tab = db
+            .insert_tab(&TabRow {
+                id: 0,
+                workspace_id: ws.id,
+                name: "example".into(),
+                position: 0,
+                focus_pane_id: None,
+                zoomed: false,
+            })
+            .unwrap();
+        let pane_id = db
+            .insert_pane(&Pane {
+                id: 0,
+                workspace_id: ws.id,
+                tab_id: tab,
+                position: 0,
+                cli: Cli::Claude,
+                cwd: "/Users/example".into(),
+                title: "claude".into(),
+                status: PaneStatus::Idle,
+                detail: None,
+                progress: None,
+                model_seen: None,
+                worktree_seen: None,
+                branch: None,
+                project: None,
+                git_worktree: None,
+                session_ref: Some("s".into()),
+                exit_code: None,
+                created_at: 1,
+                closed_at: None,
+                last_activity_at: None,
+            })
+            .unwrap();
+        let base = Task {
+            id: 0,
+            workspace_id: ws.id,
+            pane_id: Some(pane_id),
+            pool: None,
+            text: "x".into(),
+            skill: None,
+            state: TaskState::Queued,
+            position: 0,
+            detail: None,
+            created_at: 2,
+            sent_at: None,
+            started_at: None,
+            ended_at: None,
+        };
+        let running = db
+            .insert_task(&Task {
+                state: TaskState::Running,
+                ..base.clone()
+            })
+            .unwrap();
+        let waiting = db
+            .insert_task(&Task {
+                position: 1,
+                ..base
+            })
+            .unwrap();
+        let (tx, _rx) = broadcast::channel(16);
+        let path =
+            std::env::temp_dir().join(format!("ply-reg-restart-{}.toml", std::process::id()));
+        let reg = Registry::load(db, Config::default(), &path, tx, "/Users/example", 50).unwrap();
+        let list = reg.tasks_of(ws.id).unwrap();
+        let state = |id| list.tasks.iter().find(|t| t.id == id).unwrap().clone();
+        assert_eq!(state(running).state, TaskState::Failed);
+        assert_eq!(
+            (state(waiting).state, state(waiting).position),
+            (TaskState::Queued, 0)
+        );
+        assert_eq!(list.queues[0].paused, Some(PauseReason::Restored));
+        assert_eq!(
+            reg.db
+                .tasks()
+                .unwrap()
+                .iter()
+                .find(|t| t.id == running)
+                .unwrap()
+                .state,
+            TaskState::Failed
+        );
     }
 
     #[test]
