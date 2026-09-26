@@ -139,7 +139,8 @@ fn a_synchronized_update_holds_frames_until_it_ends_or_150_ms_pass() {
     let mut d = sb.attach_ready(pane);
     d.input(b"A=HALF; B=DONE\r").unwrap();
     d.settle(Duration::from_millis(300)).unwrap();
-    d.input(b"printf '\\033[?2026h%s-%s' \"$A\" \"$B\"; sleep 0.05; printf '\\r\\033[K%s-%s\\033[?2026l\\n' \"$B\" \"$A\"\r")
+    // One process, so no fork falls inside the update: on the CI runner `sleep 0.05` outlasted the 150 ms hold.
+    d.input(b"/usr/bin/perl -e '$|=1; print \"\\e[?2026h$ARGV[0]-$ARGV[1]\"; select(undef, undef, undef, 0.05); print \"\\r\\e[K$ARGV[1]-$ARGV[0]\\e[?2026l\\n\"' \"$A\" \"$B\"\r")
         .unwrap();
     let deadline = Instant::now() + WAIT;
     while !d.shows("DONE-HALF") {
