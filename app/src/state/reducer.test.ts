@@ -735,7 +735,7 @@ describe('task queue (R60)', () => {
     ).toBe("waits for the CLI's prompt");
   });
 
-  test('matchSkills finds a query in the invocation, name or description, ignoring case', () => {
+  test('matchSkills finds a query in the name or the invocation, ignoring case, never in the description', () => {
     const skills: Skill[] = [
       { name: 'review-pr', invocation: '/review-pr', description: 'Full review', source: 'user' },
       {
@@ -753,7 +753,10 @@ describe('task queue (R60)', () => {
     ];
     expect(matchSkills(skills, 'REVIEW').map((s) => s.name)).toEqual(['review-pr']);
     expect(matchSkills(skills, 'audit').map((s) => s.name)).toEqual(['audit']);
+    expect(matchSkills(skills, '$aud').map((s) => s.name)).toEqual(['audit']);
     expect(matchSkills(skills, 'superpowers').map((s) => s.name)).toEqual(['brainstorming']);
+    expect(matchSkills(skills, 'diff')).toEqual([]);
+    expect(matchSkills(skills, 'full')).toEqual([]);
     expect(matchSkills(skills, '  ')).toHaveLength(3);
   });
 });

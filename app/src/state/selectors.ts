@@ -459,12 +459,12 @@ export function queueStripView(state: AppState, paneId: number): QueueStrip | nu
   return null;
 }
 
-/** The skills whose invocation, name, plugin or description holds `query`, ignoring case; all of them for a blank query. */
+/** The skills whose name or invocation (the name as typed, with its `/`, `$` or plugin prefix) holds `query`, ignoring case; never matched on the description; all of them for a blank query. */
 export function matchSkills(skills: readonly Skill[], query: string): Skill[] {
   const q = query.trim().toLowerCase();
   if (!q) return [...skills];
-  return skills.filter((s) =>
-    `${s.invocation} ${s.name} ${s.plugin ?? ''} ${s.description ?? ''}`.toLowerCase().includes(q),
+  return skills.filter(
+    (s) => s.name.toLowerCase().includes(q) || s.invocation.toLowerCase().includes(q),
   );
 }
 
