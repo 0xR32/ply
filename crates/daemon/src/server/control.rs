@@ -28,6 +28,7 @@ use crate::daemon::{Shared, unix_now};
 use crate::panes::launch;
 use crate::panes::pane::PaneCmd;
 use crate::panes::registry::{internal, is_live, refuse};
+use crate::skills::SkillSources;
 use crate::usage::UsageSources;
 
 /// Responses queued towards one connection's writer.
@@ -310,13 +311,23 @@ async fn dispatch(shared: &Arc<Shared>, call: Call) -> Result<Value, ErrorBody> 
             let sources = UsageSources::from_env(&shared.login.base);
             ok(&shared.usage.get(sources).await)
         }
+        Call::SkillList(p) => {
+            let cwd = std::path::PathBuf::from(&p.cwd);
+            if !cwd.is_absolute() {
+                return Err(refuse(
+                    ErrorCode::BadRequest,
+                    "cwd must be an absolute path",
+                ));
+            }
+            let sources = SkillSources::from_env(&shared.login.base);
+            ok(&shared.skills.get(sources, p.cli, cwd).await)
+        }
         Call::TaskList(_)
         | Call::TaskAdd(_)
         | Call::TaskCancel(_)
         | Call::TaskMove(_)
         | Call::TaskSend(_)
-        | Call::QueuePause(_)
-        | Call::SkillList(_) => Err(refuse(ErrorCode::Internal, "not in this build of plyd yet")),
+        | Call::QueuePause(_) => Err(refuse(ErrorCode::Internal, "not in this build of plyd yet")),
     }
 }
 

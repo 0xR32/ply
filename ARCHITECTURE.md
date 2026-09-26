@@ -94,6 +94,7 @@ crates/agents/src
 │                    usage.rs (token_count rate limits)
 ├── install.rs       reads a CLI's version from its install layout without executing it
 ├── usage.rs         what both usage parsers share: window labels, RFC 3339 times
+├── skills.rs        skill, command and prompt files and the plugin registry → Skill records (R61)
 ├── meta.rs · plan.rs · version.rs
 
 crates/hook/src      main.rs: stdin (or Codex's last argv) → one C3 line, 200 ms, exit 0
@@ -108,6 +109,7 @@ crates/daemon/src
 │                    machine) · launch.rs (create, resume, restore) · mod.rs
 ├── tail.rs          C4: finding and tailing a Codex pane's rollout
 ├── usage.rs         usage.get: Claude panes' status line reports, else the CLIs' own files, bounded, cached 5 s
+├── skills.rs        skill.list: the folders each CLI reads its skills from, bounded, read-only, cached 10 s
 ├── osc.rs · branch.rs   OSC 7/9 and typed input; the git branch label
 ├── publisher.rs     the C2 delivery rules as small clocked state machines
 ├── pty.rs           rustix pty + Command, setsid/TIOCSCTTY in the one audited pre_exec block

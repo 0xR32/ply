@@ -612,11 +612,55 @@ with its age, and reads their files without ever writing them
 An answer is reused for 5 s. A CLI with no readable record is simply absent,
 and the view says "No usage recorded yet".
 
+## Skills
+
+The task form (⌘E) lists the skills each CLI offers on this machine
+(`skill.list`, Ruling R61). ply runs none of them and changes none of their
+files: it reads what the CLI itself reads and shows each skill with the text
+the user types to run it (`crates/daemon/src/skills.rs` walks the folders,
+`crates/agents/src/skills.rs` reads each file).
+
+| CLI | Source | Read from | Typed as |
+|---|---|---|---|
+| Claude Code | project | `<cwd>/.claude/skills/<name>/SKILL.md`, `<cwd>/.claude/commands/<name>.md` | `/<name>` |
+| Claude Code | user | `skills/<name>/SKILL.md` and `commands/<name>.md` in `$CLAUDE_CONFIG_DIR`, else `~/.claude` | `/<name>` |
+| Claude Code | plugin | `skills/` and `commands/` of each enabled plugin's install folder: `enabledPlugins` of the user's `settings.json`, then the project's `.claude/settings.json` and `.claude/settings.local.json` (a later file wins), looked up in `plugins/installed_plugins.json` (`installPath`; a project-scoped install only for its own project) | `/<plugin>:<name>` |
+| Claude Code | plugin | skills synced from the user's claude.ai account, `skills/synced/<account>/<name>/SKILL.md` | `/anthropic-skills:<name>` |
+| Codex | project | `.agents/skills/<name>/SKILL.md` and `.codex/skills/<name>/SKILL.md` in the pane's directory and each parent up to its repository root (8 levels at most, never the home directory) | `$<name>` |
+| Codex | user | `$CODEX_HOME/skills/<name>/SKILL.md` (default `~/.codex`), `~/.agents/skills/<name>/SKILL.md` | `$<name>` |
+| Codex | system | `$CODEX_HOME/skills/.system/<name>/SKILL.md`, the skills Codex installs itself | `$<name>` |
+| Codex | prompt | `$CODEX_HOME/prompts/<name>.md`, custom prompts | `/prompts:<name>` |
+
+A skill's name is its front matter's `name` when that can be typed as one word,
+else its folder's; a command or prompt is named after its file. The front
+matter's `description` (400 characters at most) and `argument-hint` (80) are
+shown beside it. A skill whose front matter says `user-invocable: false` is left
+out, as is a name holding white space, `/`, `$` or a control character, or
+starting with `-`. An earlier row wins when two offer the same invocation.
+Claude Code's built-in commands live inside its binary, so they are not listed;
+they can still be typed as a task's text.
+
+**Facts behind the table**, checked on 2026-09-26 against the installs of
+Claude Code 2.1.283 and Codex 0.157.1 (the Codex binary was searched, never run): Codex's
+bundled instructions tell it to "mention the skill as `$skill-name`" and its TUI
+says "Use $ to insert"; it ships its own skills under `skills/.system` and reads
+`.agents` folders; Claude Code keeps synced skills under `skills/synced/` with a
+`manifest.json` and names them `anthropic-skills:<name>`; skill folders may
+hold a colon (`team:deploy`), which the invocation keeps.
+
+Every read is bounded: 256 entries per folder, the first 32 KiB of a skill file
+(front matter that does not close within them does not count), 1 MiB of a
+settings file or the plugin registry, 512 skills per answer. A missing folder
+lists nothing; one that cannot be read is skipped and logged. An answer is
+reused for 10 s per CLI and directory, and `crates/daemon/tests/skills.rs`
+checks that every file it read is unchanged (INV-8).
+
 ## What ply never does to the user's configuration
 
 ply never writes `~/.claude/settings.json`, `~/.claude.json` or
 `~/.codex/config.toml` (INV-8); it reads `~/.claude.json` only for the usage
-cache above, and the user's `settings.json` files only for their `statusLine`. Everything it configures is per invocation:
+cache above, and the user's `settings.json` files only for their `statusLine`
+and their `enabledPlugins` (**Skills**). Everything it configures is per invocation:
 Claude Code's `--settings` file lives in ply's own `run/panes/<id>/`, and
 Codex's options are `-c` arguments. ply never passes a permission-skipping flag,
 never installs, updates or signs in either CLI, and adds no hook to the user's
@@ -685,6 +729,11 @@ terminal and the CLI repaints it.
   its models); `crates/daemon/src/usage.rs` (the sources, the bounded
   tail-first reading, missing and malformed files, the 5 s cache) and
   `crates/daemon/tests/usage.rs` (a real plyd, files unchanged).
+- `crates/agents/tests/skills.rs`: front matter (plain, quoted, folded,
+  nested, CRLF), names and invocations, opting out, the plugin registry;
+  `crates/daemon/src/skills.rs` (limits, precedence, the repository root) and
+  `crates/daemon/tests/skills.rs` (a real plyd listing both CLIs' skills from a
+  sandboxed home, files unchanged).
 - `crates/hook/tests/hook.rs`: the C3 line, the payload byte for byte, INV-12
   (plyd down, stdin held open, a listener that never reads) and INV-14 (stdout
   and stderr empty on fourteen bad paths).

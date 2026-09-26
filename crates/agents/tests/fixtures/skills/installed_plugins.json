@@ -1,0 +1,41 @@
+{
+  "version": 2,
+  "plugins": {
+    "superpowers@claude-plugins-official": [
+      {
+        "scope": "user",
+        "installPath": "/Users/example/.claude/plugins/cache/claude-plugins-official/superpowers/6.4.1",
+        "version": "6.4.1",
+        "installedAt": "2026-09-01T10:00:00.000Z"
+      }
+    ],
+    "rust-analyzer-lsp@claude-plugins-official": [
+      {
+        "scope": "user",
+        "installPath": "/Users/example/.claude/plugins/cache/claude-plugins-official/rust-analyzer-lsp/1.0.0",
+        "version": "1.0.0"
+      }
+    ],
+    "team-tools@team": [
+      {
+        "scope": "project",
+        "projectPath": "/Users/example/other",
+        "installPath": "/Users/example/.claude/plugins/cache/team/team-tools/0.3.0",
+        "version": "0.3.0"
+      },
+      {
+        "scope": "project",
+        "projectPath": "/Users/example/project",
+        "installPath": "/Users/example/.claude/plugins/cache/team/team-tools/0.4.0",
+        "version": "0.4.0"
+      }
+    ],
+    "disabled-one@team": [
+      {
+        "scope": "user",
+        "installPath": "/Users/example/.claude/plugins/cache/team/disabled-one/1.0.0",
+        "version": "1.0.0"
+      }
+    ]
+  }
+}

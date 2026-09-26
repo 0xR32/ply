@@ -2,7 +2,7 @@
 //! `~/.claude/settings.json`, `~/.claude.json` and `~/.codex/config.toml` byte for byte as they were. The CLIs are the
 //! fakes of `tests/fake/` in a sandboxed `HOME` (so `CODEX_HOME` is `$HOME/.codex`); all their configuration comes
 //! per invocation, the per-pane settings file lives only under plyd's run directory and holds nothing but hooks and
-//! the theme.
+//! the theme. Listing both CLIs' skills (`skill.list`) reads the settings file and writes nothing.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -122,6 +122,10 @@ fn a_claude_and_a_codex_session_leave_the_users_cli_config_byte_identical() {
     wait_status(&mut c, codex, PaneStatus::Idle, WAIT);
     fake.send("exit 0");
     wait_status(&mut c, codex, PaneStatus::Exited, WAIT);
+    for cli in ["claude", "codex"] {
+        c.call("skill.list", json!({"cli": cli, "cwd": sb.home}))
+            .unwrap();
+    }
     for pane in [claude, codex] {
         c.call("pane.close", json!({"pane_id": pane, "kill": false}))
             .unwrap();

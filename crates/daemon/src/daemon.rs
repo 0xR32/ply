@@ -33,6 +33,7 @@ use crate::paths::Paths;
 use crate::power::KeepAwake;
 use crate::pty::Geometry;
 use crate::server::{control, data, hooks};
+use crate::skills::SkillCache;
 use crate::usage::UsageCache;
 
 /// C1 events buffered per connected client before a slow one is dropped.
@@ -78,6 +79,8 @@ pub struct Shared {
     pub palette: watch::Sender<Option<Palette>>,
     /// The last `usage.get` answer, reused for a few seconds.
     pub usage: UsageCache,
+    /// The last `skill.list` answers, reused for a few seconds.
+    pub skills: SkillCache,
     /// The git `HEAD` of each pane, watched for branch switches.
     pub heads: crate::branch::HeadWatches,
     registry: Mutex<Registry>,
@@ -222,6 +225,7 @@ pub async fn run(options: Options) -> Result<()> {
         events,
         palette: watch::Sender::new(palette),
         usage: UsageCache::default(),
+        skills: SkillCache::default(),
         heads: crate::branch::HeadWatches::default(),
         registry: Mutex::new(registry),
         geometry: Mutex::new(DEFAULT_GEOMETRY),
