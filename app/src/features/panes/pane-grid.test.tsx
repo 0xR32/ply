@@ -88,9 +88,9 @@ const demo = () =>
   );
 
 describe.if(hasNativeTestRenderer)('PaneGrid', () => {
-  // On the CI runner a 1440 px test window came out 1024 px wide, its display's width; 996 fits and divides by 6.
+  // On the CI runner a 1440 × 812 test window came out 1024 × 653, its usable screen; these fit, and 996 divides by 6.
   const W = 996;
-  const H = 700;
+  const H = 600;
   const PAD = { x: 14, top: 2, bottom: 10 };
   const GAP = 10;
   const inner = { width: W - 2 * PAD.x, height: H - PAD.top - PAD.bottom };
