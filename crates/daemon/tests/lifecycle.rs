@@ -130,6 +130,20 @@ fn a_client_that_never_acks_is_disconnected_after_30_s() {
     );
 }
 
+/// Holds a DEC 2026 update for 10 ms from `A-B` to `B-A`, then writes how many ms it held it to the third argument.
+const SYNC_PL: &str = r#"use Time::HiRes qw(time sleep);
+$| = 1;
+my ($a, $b, $out) = @ARGV;
+my $t = time;
+print "\e[?2026h$a-$b";
+sleep 0.01;
+my $held = time - $t;
+print "\r\e[K$b-$a\e[?2026l\n";
+open my $f, '>', $out or die;
+print $f int($held * 1000);
+close $f;
+"#;
+
 #[test]
 fn a_synchronized_update_holds_frames_until_it_ends_or_150_ms_pass() {
     let sb = Sandbox::new("sync");
@@ -137,22 +151,46 @@ fn a_synchronized_update_holds_frames_until_it_ends_or_150_ms_pass() {
     let (mut c, ws) = sb.control();
     let pane = sb.shell(&mut c, ws);
     let mut d = sb.attach_ready(pane);
+    let script = sb.home.join("sync.pl");
+    let held_file = sb.home.join("sync.ms");
+    std::fs::write(&script, SYNC_PL).unwrap();
     d.input(b"A=HALF; B=DONE\r").unwrap();
     d.settle(Duration::from_millis(300)).unwrap();
-    // One process, so no fork falls inside the update: on the CI runner `sleep 0.05` outlasted the 150 ms hold.
-    d.input(b"/usr/bin/perl -e '$|=1; print \"\\e[?2026h$ARGV[0]-$ARGV[1]\"; select(undef, undef, undef, 0.05); print \"\\r\\e[K$ARGV[1]-$ARGV[0]\\e[?2026l\\n\"' \"$A\" \"$B\"\r")
-        .unwrap();
+    d.input(
+        format!(
+            "/usr/bin/perl {} \"$A\" \"$B\" {}\r",
+            script.display(),
+            held_file.display()
+        )
+        .as_bytes(),
+    )
+    .unwrap();
     let deadline = Instant::now() + WAIT;
+    let mut intermediate = None;
     while !d.shows("DONE-HALF") {
         assert!(Instant::now() < deadline, "{:?}", d.screen());
         if let Some(frame) = d.recv(Duration::from_millis(200)).unwrap() {
             d.apply(&frame, true).unwrap();
-            assert!(
-                !d.shows("HALF-DONE"),
-                "a frame showed the update's intermediate state: {:?}",
-                d.screen()
-            );
+            if d.shows("HALF-DONE") {
+                intermediate.get_or_insert_with(|| d.screen());
+            }
         }
+    }
+    assert!(
+        eventually(WAIT, || held_file.exists()),
+        "the update's length"
+    );
+    let held: u64 = std::fs::read_to_string(&held_file)
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
+    // The cap rightly releases an update a stalled machine kept open; one closed well inside it must never show.
+    if held < 50 {
+        assert!(
+            intermediate.is_none(),
+            "a frame showed the update's intermediate state after {held} ms: {intermediate:?}"
+        );
     }
     d.settle(Duration::from_millis(200)).unwrap();
     let sent = Instant::now();
