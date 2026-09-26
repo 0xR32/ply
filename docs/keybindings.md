@@ -32,6 +32,8 @@ unless an overlay is open.
 | ⌘= / ⌘- / ⌘0 | `font.up` / `font.down` / `font.reset` | Text size up or down by 1 pt within 9.5–24.5, or back to 12.5. The chrome and the terminals scale together; the size is stored with `settings.set`. |
 | ⌘, | `settings.open` | Opens Settings. |
 | ⌘U, held | `usage.show` | Shows Claude Code's and Codex's plan usage for as long as it is held, and hides it on release (see **Holding ⌘U**). |
+| ⌘E | `task.dispatch` | Opens the task form (Ruling R60) on the focused agent pane: a skill or a prompt for this pane, the next free pane of a CLI in a folder, or a new pane. |
+| ⌘⇧E | `task.queue` | Opens the task queue: every pane's queued and running tasks, the pool and the finished ones. The top bar's queue pill and a pane's queue badge open it too. |
 
 The commands are implemented in `app/src/state/reducer.ts` (`runCommand`) and,
 for the ones that talk to plyd (`pane.terminalHere`, `pane.close`, and
@@ -205,6 +207,8 @@ While an overlay is open it takes the keys; global chords do nothing.
 |---|---|
 | Palette (⌘K) | Type to filter commands, tabs and panes · ↑↓ move, wrapping · ⏎ run · esc close · a digit 1–9 on an empty query shows that tab |
 | New pane, New tab (⌘N, ⌘T) | ←→ choose the CLI, or 1 Claude Code, 2 Codex, 3 Shell while the CLI field has focus · typing in Directory opens its suggestion list: ↑↓ move, wrapping · ⏎ or a click takes the highlighted folder into the field and closes the list · Tab / ⇧Tab move between fields (Directory, then Browse…), closing the list · Space or ⏎ toggles the worktree switch or presses a button (Browse… opens the folder picker) · ⌘⏎ open, with the Directory field as it reads · esc closes the list when it is open, else cancels |
+| Task form (⌘E) | Focus starts in the skill search: type to filter the skills of the target's CLI · ↑↓ move, wrapping · ⏎ or a click puts the skill's invocation in Prompt and moves there · Tab / ⇧Tab move between fields (Send to, the pane or the CLI and folder, the search, Prompt, the buttons) · ←→ change Send to, the pane or the CLI while that field has focus · ⌘⏎ queue (or open the new pane) · esc cancel |
+| Task queue (⌘⇧E) | ↑↓ select a task · ⌥↑ ⌥↓ move a queued task up or down its queue · ⌫ cancel a queued task · p pause or resume the selected task's pane queue · ⏎ go to its pane · esc close |
 | Settings (⌘,) | Tab / ⇧Tab move between fields · ←→ change the accent or ⌥ as Meta · Space or ⏎ toggles a switch · esc close |
 | Close confirmation (⌘⇧W on a live pane) | ⏎ close and stop · esc cancel |
 | Quit confirmation ("Quit ply and stop sessions") | ⏎ quit and stop · esc cancel |

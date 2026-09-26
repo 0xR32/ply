@@ -1,8 +1,8 @@
 import { describe, expect, test } from 'bun:test';
 import { hasNativeTestRenderer } from '@gpuix/react/testing';
 import type { Action } from '../../state/actions';
-import type { PaneState } from '../../state/reducer';
-import { makePane, makeState, mountWithStore } from '../../state/test-support';
+import { type PaneState, reduce } from '../../state/reducer';
+import { makePane, makeState, makeTask, mountWithStore } from '../../state/test-support';
 import { matches, paletteItems } from './commands';
 import { Palette } from './palette';
 
@@ -46,6 +46,34 @@ describe('palette commands', () => {
     expect(items[3]?.hint).toBe('pane 1 in ~/code/ply');
     expect(items.every((i) => i.section === 'Commands')).toBe(true);
     expect(paletteItems(state(false), '', 0).some((i) => i.id === 'pane.nextWaiting')).toBe(false);
+  });
+
+  test('the task queue has its commands, and a pane with queued tasks can be paused or resumed', () => {
+    const withTasks = reduce(state(), {
+      type: 'tasks/loaded',
+      list: {
+        tasks: [makeTask({ id: 1, pane_id: 1 }), makeTask({ id: 2, pane_id: 3 })],
+        queues: [{ pane_id: 3, paused: 'restored' }],
+      },
+    });
+    const items = paletteItems(withTasks, '', 0);
+    const find = (id: string) => items.find((i) => i.id === id);
+    expect([find('task.dispatch')?.label, find('task.dispatch')?.keys]).toEqual([
+      'Dispatch a task',
+      '⌘E',
+    ]);
+    expect([find('task.queue')?.label, find('task.queue')?.keys]).toEqual([
+      'Show task queue',
+      '⌘⇧E',
+    ]);
+    expect(find('queue-pause-1')?.label).toBe('Pause queue of pane 1');
+    expect(find('queue-pause-1')?.actions).toEqual([
+      { type: 'overlay/close' },
+      { type: 'queue/pause', paneId: 1, paused: true },
+    ]);
+    expect(find('queue-pause-3')?.label).toBe('Resume queue of pane 1');
+    expect(find('queue-pause-3')?.hint).toContain('held after plyd restarted');
+    expect(find('queue-pause-2')).toBeUndefined();
   });
 
   test('every lost pane gets a resume command saying how it resumes', () => {

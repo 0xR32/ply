@@ -15,6 +15,8 @@ import {
   selectActiveTab,
   selectFocusedPane,
   selectForeignDaemon,
+  selectPaneQueue,
+  selectQueueCounts,
   selectWaitingCount,
   statusView,
   tabDot,
@@ -122,12 +124,59 @@ function commands(state: AppState): PaletteItem[] {
       place ? `pane ${place.pane} · asks while it runs` : '',
       'dim',
     ),
+    ...taskItems(state),
     command('settings.open', 'Settings', 'accent, ⌥ as Meta, keep awake', 'dim'),
     command('font.up', 'Bigger text', `${state.settings.font_size} pt now`, 'dim'),
     command('font.down', 'Smaller text', `${state.settings.font_size} pt now`, 'dim'),
     command('font.reset', 'Reset text size', '', 'dim'),
     ...daemonItems(state),
   );
+  return items;
+}
+
+const PAUSE_REASON = {
+  user: 'paused',
+  restored: 'held after plyd restarted',
+  failed: 'its last task failed',
+} as const;
+
+/** The task queue (Ruling R60): the form, the queue, and pausing or resuming each pane that holds queued tasks. */
+function taskItems(state: AppState): PaletteItem[] {
+  if (!state.tasks.available) return [];
+  const counts = selectQueueCounts(state);
+  const items: PaletteItem[] = [
+    command(
+      'task.dispatch',
+      'Dispatch a task',
+      'a skill or a prompt, to a pane or the next free one',
+      'accent',
+    ),
+    command(
+      'task.queue',
+      'Show task queue',
+      `${counts.queued} queued · ${counts.running} running${counts.needsYou ? ` · ${counts.needsYou} needs you` : ''}`,
+      'accent',
+    ),
+  ];
+  for (const tab of state.tabs) {
+    for (const id of tab.pane_ids) {
+      const queued = selectPaneQueue(state, id).length;
+      const pane = state.panes[id];
+      if (queued === 0 || !pane) continue;
+      const paused = state.tasks.queues[id]?.paused;
+      const place = panePlace(state, id);
+      const name = place ? `pane ${place.pane}` : paneTitle(pane);
+      items.push({
+        id: `queue-pause-${id}`,
+        section: 'Commands',
+        label: `${paused ? 'Resume' : 'Pause'} queue of ${name}`,
+        hint: `${pane.cli} · ${paused ? `${PAUSE_REASON[paused]} · ` : ''}${queued} queued`,
+        keys: '',
+        dot: 'dim',
+        actions: [{ type: 'overlay/close' }, { type: 'queue/pause', paneId: id, paused: !paused }],
+      });
+    }
+  }
   return items;
 }
 

@@ -1,8 +1,15 @@
 import { type PublicInstance, useGpuix } from '@gpuix/react';
 import { type RefObject, useEffect, useRef, useState } from 'react';
-import type { PaneState } from '../../state/reducer';
-import { isDone, paneTitle, type StatusTone, statusView } from '../../state/selectors';
-import { useAppSelector } from '../../state/store';
+import type { AppState, PaneState } from '../../state/reducer';
+import {
+  isDone,
+  paneTitle,
+  type StatusTone,
+  selectActiveTask,
+  selectPaneQueue,
+  statusView,
+} from '../../state/selectors';
+import { useAppSelector, useDispatch } from '../../state/store';
 import { type ChromeTheme, useChrome } from '../../theme/chrome';
 import { tokens } from '../../theme/tokens';
 import { StatusChip } from '../../ui/chip';
@@ -31,6 +38,8 @@ export interface HeaderFit {
   model: boolean;
   progressBar: boolean;
   branch: boolean;
+  queue: boolean;
+  queueWords: boolean;
   cli: boolean;
 }
 
@@ -39,6 +48,8 @@ const FULL_FIT: HeaderFit = {
   model: true,
   progressBar: true,
   branch: true,
+  queue: true,
+  queueWords: true,
   cli: true,
 };
 
@@ -51,6 +62,8 @@ export function headerFit(width: number | null, scale: number): HeaderFit {
     model: w >= 400,
     progressBar: w >= 330,
     branch: w >= 290,
+    queue: w >= 260,
+    queueWords: w >= 520,
     cli: w >= 240,
   };
 }
@@ -114,12 +127,67 @@ export interface PaneHeaderProps {
   onActivate: () => void;
 }
 
+/** What the header badge says about a pane's task queue: the queued count, held while paused, or the task being typed. */
+function queueBadge(state: AppState, paneId: number): string | null {
+  const active = selectActiveTask(state, paneId);
+  if (active?.state === 'sent') return 'sending';
+  const queued = selectPaneQueue(state, paneId).length;
+  if (queued === 0) return null;
+  return `${queued} ${state.tasks.queues[paneId]?.paused ? 'held' : 'queued'}`;
+}
+
+/** The header's queue badge; a click opens the task queue (⌘⇧E). */
+function QueueBadge({ paneId, words }: { paneId: number; words: boolean }) {
+  const dispatch = useDispatch();
+  const { z, accent } = useChrome();
+  const full = useAppSelector((s) => queueBadge(s, paneId));
+  if (!full) return null;
+  const sending = full === 'sending';
+  const held = full.endsWith('held');
+  const label = words || sending ? full : (full.split(' ')[0] ?? full);
+  return (
+    <div
+      testId={`pane-${paneId}-queue`}
+      aria-label={full}
+      role="button"
+      onClick={() => dispatch({ type: 'command', id: 'task.queue' })}
+      style={{
+        height: z(22),
+        flexShrink: 0,
+        display: 'flex',
+        alignItems: 'center',
+        gap: z(5),
+        paddingLeft: z(7),
+        paddingRight: z(8),
+        borderRadius: z(6),
+        backgroundColor: sending ? accent.a10 : tokens.white[4],
+        borderWidth: 1,
+        borderColor: sending ? accent.a28 : tokens.white[8],
+        cursor: 'pointer',
+      }}
+    >
+      <Icon
+        name={held ? 'pause' : 'queue'}
+        size={held ? 10 : 11}
+        color={sending ? accent.base : held ? tokens.text3 : tokens.textSoft}
+      />
+      <Text
+        color={sending ? accent.base : held ? tokens.text3 : tokens.textSoft}
+        variant="label"
+        mono
+      >
+        {label}
+      </Text>
+    </div>
+  );
+}
+
 /** The last component of `path`, the project shown before plyd has asked git; `undefined` for `/`. */
 export function folderName(path: string): string | undefined {
   return path.split('/').filter(Boolean).at(-1);
 }
 
-/** The 42 px pane header: position key, project, title, a bell mark until the pane is looked at, branch, plan progress, CLI and model, status chip; narrow, it drops the progress numbers, the model, the bar, the branch and the CLI in that order and clips rather than overlaps. */
+/** The 42 px pane header: position key, project, title, a bell mark until the pane is looked at, branch, plan progress, the task queue badge, CLI and model, status chip; narrow, it drops the progress numbers, the model, the bar, the branch, the badge and the CLI in that order and clips rather than overlaps. */
 export function PaneHeader({ pane, position, focused, onActivate }: PaneHeaderProps) {
   const chrome = useChrome();
   const { z, accent } = chrome;
@@ -242,6 +310,7 @@ export function PaneHeader({ pane, position, focused, onActivate }: PaneHeaderPr
           ) : null}
         </>
       ) : null}
+      {agent && fit.queue ? <QueueBadge paneId={pane.id} words={fit.queueWords} /> : null}
       {agent && fit.cli ? (
         <div
           testId={`pane-${pane.id}-cli`}

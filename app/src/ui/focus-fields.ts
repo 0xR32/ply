@@ -13,6 +13,8 @@ export interface FocusFields<F extends string> {
   step(backwards: boolean): void;
   /** `onFocus` / `onBlur` for `field`, keeping the ring in step with clicks. */
   track(field: F): { onFocus: () => void; onBlur: () => void };
+  /** Moves GPUI focus to `field` when it is shown. */
+  focus(field: F): void;
 }
 
 /** Focus tracking for a form's fields in `order` (the ones shown now); GPUIX binds no Tab, so forms move focus. */
@@ -63,6 +65,12 @@ export function useFocusFields<F extends string>(
           onFocus: () => setFocused(field),
           onBlur: () => setFocused((f) => (f === field ? null : f)),
         };
+      },
+      focus(field) {
+        const id = ids.current.get(field);
+        if (id === undefined || !renderer) return;
+        renderer.focusElement?.(id);
+        setFocused(field);
       },
     }),
     [focused, renderer, fieldOf, order],

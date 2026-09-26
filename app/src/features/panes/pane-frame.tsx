@@ -5,10 +5,11 @@ import { useChrome } from '../../theme/chrome';
 import { terminalThemeFor, tokens } from '../../theme/tokens';
 import { LostStrip } from './lost-strip';
 import { PaneHeader } from './pane-header';
+import { QueuedStrip } from './queued-strip';
 import { TerminalSlot } from './terminal-slot';
 import { WaitingStrip } from './waiting-strip';
 
-/** One pane card: header, terminal body, and the waiting strip (needs you) or the resume strip (lost). */
+/** One pane card: header, terminal body, and one strip: the waiting strip (needs you), the resume strip (lost) or the queue strip. */
 export function PaneFrame({ paneId, position }: { paneId: number; position: number }) {
   const dispatch = useDispatch();
   const { z, accent, fonts, type } = useChrome();
@@ -97,6 +98,7 @@ export function PaneFrame({ paneId, position }: { paneId: number; position: numb
       </div>
       {waiting ? <WaitingStrip pane={pane} /> : null}
       {isLost(pane) ? <LostStrip pane={pane} /> : null}
+      {!waiting && !isLost(pane) && pane.cli !== 'shell' ? <QueuedStrip paneId={paneId} /> : null}
     </div>
   );
 }

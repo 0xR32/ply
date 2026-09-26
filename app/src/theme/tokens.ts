@@ -229,6 +229,10 @@ export const tokens = {
     newPaneWidth: 560,
     newPaneHeight: 580,
     usageWidth: 440,
+    dispatchWidth: 600,
+    dispatchHeight: 660,
+    queueWidth: 640,
+    queueHeight: 620,
   },
   type: {
     wordmark: { fontSize: 15, fontWeight: 600, lineHeight: 20 },

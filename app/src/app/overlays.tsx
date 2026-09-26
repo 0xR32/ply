@@ -1,3 +1,5 @@
+import { DispatchForm } from '../features/dispatch/dispatch-form';
+import { QueueSheet } from '../features/dispatch/queue-sheet';
 import { NewPane } from '../features/new-pane/new-pane';
 import { Palette } from '../features/palette/palette';
 import { QuitConfirm } from '../features/palette/quit-confirm';
@@ -41,6 +43,18 @@ export function Overlays() {
       return (
         <Backdrop onClose={close}>
           <QuitConfirm />
+        </Backdrop>
+      );
+    case 'dispatch':
+      return (
+        <Backdrop onClose={close}>
+          <DispatchForm paneId={overlay.paneId} />
+        </Backdrop>
+      );
+    case 'queue':
+      return (
+        <Backdrop onClose={close}>
+          <QueueSheet />
         </Backdrop>
       );
   }

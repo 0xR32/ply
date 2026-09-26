@@ -131,8 +131,9 @@ app/src
 ├── terminal/        frames.ts (C2 codec) · data-client.ts · replica.ts · runs.ts (row → <text> runs) ·
 │                    input.ts · selection.ts · links.ts (⌘-click URLs) · session.ts · host.ts · metrics.ts
 ├── keymap/          keymap.ts (every binding, once) · dispatcher.ts (the window's keys, the ⌘U hold) · reserved.ts
-├── features/        panes/ (grid, frame, header, waiting and lost strips, terminal-view, close confirm) · tabs/ ·
-│                    statusbar/ · palette/ · new-pane/ · settings/ · usage/ (the hold-⌘U usage card)
+├── features/        panes/ (grid, frame, header, waiting, lost and queue strips, terminal-view, close confirm) · tabs/ ·
+│                    statusbar/ · palette/ · new-pane/ · settings/ · usage/ (the hold-⌘U usage card) ·
+│                    dispatch/ (the ⌘E task form with its skill list, the ⌘⇧E task queue; R60, R61)
 ├── ui/              presentational primitives: text, kbd, chip, button, segments, switch, overlay card
 └── theme/           tokens.ts (the only palette and type scale) · chrome.ts
 ```
