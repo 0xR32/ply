@@ -104,8 +104,9 @@ export function DispatchForm({ paneId }: { paneId?: number }) {
 
   const pick = (skill: Skill | undefined) => {
     if (!skill) return;
+    const written = picked !== null && text.startsWith(picked) ? text.slice(picked.length) : text;
     setPicked(skill.invocation);
-    setText(`${skill.invocation} `);
+    setText(`${skill.invocation} ${written.trimStart()}`);
     setProblem(null);
     fields.focus('prompt');
   };

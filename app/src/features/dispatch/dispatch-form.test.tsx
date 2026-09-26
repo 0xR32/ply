@@ -133,6 +133,25 @@ describe.if(hasNativeTestRenderer)('DispatchForm', () => {
     }
   });
 
+  test('picking a skill after writing keeps the prompt, and another pick replaces only the invocation', () => {
+    const { renderer, seen, press, type, unmount } = mount();
+    try {
+      press('tab');
+      type('check the auth flow');
+      click(renderer, 'dispatch-skill-/review-pr');
+      click(renderer, 'dispatch-skill-/open-pr');
+      press('cmd-enter');
+      expect(seen.at(-1)).toEqual({
+        type: 'task/add',
+        target: { kind: 'pane', paneId: 1 },
+        text: '/open-pr check the auth flow',
+        skill: '/open-pr',
+      });
+    } finally {
+      unmount();
+    }
+  });
+
   test('the search filters the skills and ↑↓ ⏎ pick one', () => {
     const { renderer, seen, press, type, unmount } = mount();
     try {
