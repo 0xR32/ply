@@ -17,7 +17,7 @@
 //! | `notify [thread]` | — | runs the `-c notify=[…]` program with an `agent-turn-complete` payload for `thread` (default its own) |
 //! | `osc9 <body>` | — | prints `ESC ] 9 ; <body> BEL` |
 //! | `out <text>` | prints a line | prints a line |
-//! | `spin <n>` | prints a dot every 100 ms, n times | — |
+//! | `spin <n>` | prints a dot every 100 ms, n times, then a line end, and creates `$HOME/fake-spin.done` after it | — |
 //! | `keys <n>` | reads n bytes the pane typed in raw mode (after creating `$HOME/fake-keys.ready`) and appends them as hex to `$HOME/fake-keys.log` | — |
 //! | `exit <code>` | exits | exits |
 //!

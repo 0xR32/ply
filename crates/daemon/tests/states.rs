@@ -359,15 +359,29 @@ fn a_quiet_claude_pane_goes_idle_after_5_s_while_output_keeps_it_running() {
     let (id, fake) = e.claude();
     e.claude_hook(&fake, id, "UserPromptSubmit", json!({"prompt": "go"}));
     e.next(id, Running);
+    let done = e.sb.home.join("fake-spin.done");
     let started = Instant::now();
     fake.send("spin 65");
-    no_status(&mut e.c, id, Duration::from_millis(5800));
+    // 65 forked sleeps take as long as the machine makes them, so the silence is timed from the spin's end.
+    while !done.exists() {
+        assert!(
+            started.elapsed() < Duration::from_secs(60),
+            "the spin never ended"
+        );
+        no_status(&mut e.c, id, Duration::from_millis(100));
+    }
+    let spun = started.elapsed();
+    assert!(
+        spun >= Duration::from_millis(6_000),
+        "the output outlasted the 5 s timeout and kept the pane running: {spun:?}"
+    );
+    let silent_from = Instant::now();
     let (s, _) = next_status(&mut e.c, id, WAIT);
-    let after = started.elapsed();
+    let silent = silent_from.elapsed();
     assert_eq!(s.status, Idle, "R17: silent pty and no hook for 5 s");
     assert!(
-        after >= Duration::from_millis(11_000),
-        "output kept it running until the spin ended: {after:?}"
+        silent >= Duration::from_millis(4_500),
+        "idle only after 5 s of silence: {silent:?}"
     );
 }
 
