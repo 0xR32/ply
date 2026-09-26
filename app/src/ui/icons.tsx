@@ -10,7 +10,31 @@ const BRANCH =
 const BELL =
   '<svg viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 16V11a6 6 0 0 1 12 0v5l1.5 2h-15z"/><path d="M10 20.5a2 2 0 0 0 4 0"/></svg>';
 
-const SOURCES = { search: SEARCH, plus: PLUS, branch: BRANCH, bell: BELL } as const;
+const QUEUE =
+  '<svg viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h11M4 12h11M4 18h7"/><path d="M17 15l4 3-4 3z"/></svg>';
+const PAUSE =
+  '<svg viewBox="0 0 24 24" fill="black" stroke="none"><rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/></svg>';
+const PLAY =
+  '<svg viewBox="0 0 24 24" fill="black" stroke="none"><path d="M7 4l13 8-13 8z"/></svg>';
+const UP =
+  '<svg viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 15l6-6 6 6"/></svg>';
+const DOWN =
+  '<svg viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>';
+const CLOSE =
+  '<svg viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>';
+
+const SOURCES = {
+  search: SEARCH,
+  plus: PLUS,
+  branch: BRANCH,
+  bell: BELL,
+  queue: QUEUE,
+  pause: PAUSE,
+  play: PLAY,
+  up: UP,
+  down: DOWN,
+  close: CLOSE,
+} as const;
 
 /** Name of one of the canvas's line icons. */
 export type IconName = keyof typeof SOURCES;

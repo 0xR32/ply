@@ -1,0 +1,15 @@
+{
+  "t": "res",
+  "id": 21,
+  "ok": true,
+  "r": {
+    "id": 7,
+    "workspace_id": 1,
+    "pane_id": 2,
+    "text": "/review-pr #212",
+    "skill": "/review-pr",
+    "state": "queued",
+    "position": 1,
+    "created_at": 1790276000
+  }
+}

@@ -32,6 +32,15 @@ directory to `0700` even when they existed, and writes `config.toml`,
 `plyd.lock` and the pane files as `0600`. A pane's directory is removed when the
 pane is closed.
 
+**The database only moves forward.** `ply.db` is at schema v2 since the task
+queue (Ruling R60) added its `tasks` table; plyd migrates an older database
+when it opens it, and a plyd from before refuses a newer one
+(`Error::SchemaTooNew`) rather than downgrade it. To run an older build, give it
+its own `PLY_HOME`. To take a database back to v1 by hand, with plyd stopped:
+`sqlite3 ply.db "DROP TABLE tasks; UPDATE schema_version SET version = 1;"`,
+which loses the queue and its history and nothing else. The database keeps every
+task, with the 200 most recent finished ones per workspace.
+
 **Socket paths must stay under 104 bytes**, the macOS limit for a Unix socket
 path; plyd refuses to start when one would not (103 bytes plus the NUL). Keep
 `PLY_HOME` short.
@@ -117,8 +126,8 @@ set them in the file with plyd stopped, or with `settings.set`.
 | `CODEX_HOME`, `CLAUDE_CONFIG_DIR`, `HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY`, `ALL_PROXY` (and `http_proxy`, `https_proxy`, `no_proxy`, `all_proxy`), `SSL_CERT_FILE`, `SSL_CERT_DIR`, `NODE_EXTRA_CA_CERTS`, `LANG`, `LC_ALL`, `LC_CTYPE` | the login-shell probe, then every pane | Ruling R52: when the login shell (its rc files included) exports one of these, every pane gets that value, as in a terminal; plyd's own value goes into the probe and is kept when the shell does not change it, or when no shell answers. No other variable is read from the shell, so an API key an rc file exports never reaches plyd or a pane. The log names the variables taken (`crates/daemon/src/login.rs`, `CAPTURED`). |
 | `LANG`, `LC_*`, `TMPDIR`, `LOGNAME`, `SSH_AUTH_SOCK`, `__CF_USER_TEXT_ENCODING` | plyd | Passed through to every pane when set (the login shell's `LANG`, `LC_ALL` and `LC_CTYPE` win, above); `LANG` defaults to `en_US.UTF-8`. |
 | `NODE_ENV` | the app | `test` (set by `bun test`) keeps the log in memory instead of a file, and gives terminal views an inert host that never opens a socket or touches the pasteboard. |
-| `CODEX_HOME` | Codex, plyd | Where Codex keeps its rollouts (`$CODEX_HOME/sessions/`, default `~/.codex`). plyd follows a Codex pane's rollouts under the `CODEX_HOME` that pane runs with, the login shell's when it exports one (above), and reads the rate limits in the newest of them for ⌘U's usage view. Tests that run a CLI sandbox it together with `HOME`. |
-| `CLAUDE_CONFIG_DIR` | Claude Code, plyd | Where Claude Code keeps its configuration, `.claude.json` included (default: `~/.claude.json` in the home directory). plyd reads the plan-usage cache in that `.claude.json` for ⌘U's usage view, from the login shell's value when it exports one (above). |
+| `CODEX_HOME` | Codex, plyd | Where Codex keeps its rollouts (`$CODEX_HOME/sessions/`, default `~/.codex`). plyd follows a Codex pane's rollouts under the `CODEX_HOME` that pane runs with, the login shell's when it exports one (above), reads the rate limits in the newest of them for ⌘U's usage view, and lists the skills and prompts under it for the task form. Tests that run a CLI sandbox it together with `HOME`. |
+| `CLAUDE_CONFIG_DIR` | Claude Code, plyd | Where Claude Code keeps its configuration, `.claude.json` included (default: `~/.claude.json` in the home directory). plyd reads the plan-usage cache in that `.claude.json` for ⌘U's usage view, and the skills, commands and plugins under it (default `~/.claude`) for the task form, from the login shell's value when it exports one (above). |
 
 **Set by plyd for panes** (`docs/agents.md`): `TERM=xterm-256color` and
 `COLORTERM=truecolor` for every pane, `SHELL` and the login `PATH`;
@@ -277,6 +286,11 @@ fonts are registered for its own process, not installed.
   the project's `.claude/settings.local.json` and `.claude/settings.json` and
   from `settings.json` in `$CLAUDE_CONFIG_DIR` or `~/.claude`, read-only, so
   the pane's status line can run it (`docs/agents.md`, **The status line**).
+- When the task form (⌘E) asks for a CLI's skills, plyd reads, at most once
+  every 10 s per CLI and directory, the skill, command and prompt files the CLI
+  itself reads (the first 32 KiB of each), Claude Code's `settings.json` files
+  for `enabledPlugins` and its `plugins/installed_plugins.json`, read-only and
+  kept in memory only (`docs/agents.md`, **Skills**).
 - ply makes no network request while it runs (INV-1).
 
 ### Building

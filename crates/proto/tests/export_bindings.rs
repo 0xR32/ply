@@ -14,13 +14,16 @@ use ply_proto::control::{
     Answer, Call, ClientMsg, DaemonShutdownParams, DaemonStopping, Empty, ErrorBody, ErrorCode,
     Event, HANDSHAKE_ID, Hello, LayoutSaveParams, MAX_LINE_BYTES, METHODS, PaneAnswerParams,
     PaneCloseParams, PaneCreateParams, PaneExit, PaneMeta, PaneProgress, PaneRef, PaneRemoved,
-    PaneStatusChanged, Request, Response, ServerMsg, SessionListParams, SettingsSetParams,
-    ThemeSetParams, Welcome, WorkspaceOpenParams, WorkspaceRef, WorktreeOption,
+    PaneStatusChanged, QueuePauseParams, Request, Response, ServerMsg, SessionListParams,
+    SettingsSetParams, SkillListParams, TaskAddParams, TaskMoveParams, TaskRef, ThemeSetParams,
+    Welcome, WorkspaceOpenParams, WorkspaceRef, WorktreeOption,
 };
 use ply_proto::hook::HookEnvelope;
 use ply_proto::pane::{
-    AccentName, AgentCli, Cli, CliUsage, Layout, MAX_PANES_PER_TAB, OptionAsMeta, Pane, PaneStatus,
-    Progress, Rgb, Session, Settings, Tab, TerminalTheme, Usage, UsageWindow, Workspace,
+    AccentName, AgentCli, BlockReason, Cli, CliUsage, Layout, MAX_PANES_PER_TAB, MAX_QUEUED_TASKS,
+    MAX_TASK_TEXT_BYTES, OptionAsMeta, Pane, PaneStatus, PauseReason, Progress, QueueState, Rgb,
+    Session, Settings, Skill, SkillList, SkillSource, Tab, Task, TaskList, TaskPool, TaskState,
+    TaskTarget, TerminalTheme, Usage, UsageWindow, Workspace,
 };
 use ply_proto::{C2_VERSION, HOOK_VERSION, PROTOCOL_VERSION};
 use ts_rs::{Config, TS};
@@ -67,6 +70,17 @@ fn generate() -> String {
         decl::<Usage>(&cfg),
         decl::<CliUsage>(&cfg),
         decl::<UsageWindow>(&cfg),
+        decl::<TaskState>(&cfg),
+        decl::<TaskPool>(&cfg),
+        decl::<TaskTarget>(&cfg),
+        decl::<Task>(&cfg),
+        decl::<PauseReason>(&cfg),
+        decl::<BlockReason>(&cfg),
+        decl::<QueueState>(&cfg),
+        decl::<TaskList>(&cfg),
+        decl::<SkillSource>(&cfg),
+        decl::<Skill>(&cfg),
+        decl::<SkillList>(&cfg),
         decl::<ClientMsg>(&cfg),
         decl::<ServerMsg>(&cfg),
         decl::<Hello>(&cfg),
@@ -90,6 +104,11 @@ fn generate() -> String {
         decl::<LayoutSaveParams>(&cfg),
         decl::<SettingsSetParams>(&cfg),
         decl::<DaemonShutdownParams>(&cfg),
+        decl::<TaskAddParams>(&cfg),
+        decl::<TaskRef>(&cfg),
+        decl::<TaskMoveParams>(&cfg),
+        decl::<QueuePauseParams>(&cfg),
+        decl::<SkillListParams>(&cfg),
         decl::<Event>(&cfg),
         decl::<PaneRemoved>(&cfg),
         decl::<PaneStatusChanged>(&cfg),
@@ -162,6 +181,16 @@ fn generate() -> String {
             "MAX_PANES_PER_TAB",
             "Most panes one tab holds; `pane.create` into a full tab is `tab_full`.",
             MAX_PANES_PER_TAB as u64,
+        ),
+        (
+            "MAX_TASK_TEXT_BYTES",
+            "Longest task text in bytes; `task.add` refuses a longer one.",
+            MAX_TASK_TEXT_BYTES as u64,
+        ),
+        (
+            "MAX_QUEUED_TASKS",
+            "Most queued tasks one pane's queue or one pool holds.",
+            MAX_QUEUED_TASKS as u64,
         ),
         (
             "HANDSHAKE_ID",
@@ -245,6 +274,30 @@ fn method_table_matches_call() {
         }),
         Call::DaemonShutdown(DaemonShutdownParams { kill_panes: false }),
         Call::UsageGet(Empty {}),
+        Call::TaskList(WorkspaceRef { workspace_id: 1 }),
+        Call::TaskAdd(TaskAddParams {
+            workspace_id: 1,
+            target: TaskTarget::Pool(TaskPool {
+                cli: AgentCli::Codex,
+                cwd: String::new(),
+            }),
+            text: String::new(),
+            skill: None,
+        }),
+        Call::TaskCancel(TaskRef { task_id: 1 }),
+        Call::TaskMove(TaskMoveParams {
+            task_id: 1,
+            position: 0,
+        }),
+        Call::TaskSend(TaskRef { task_id: 1 }),
+        Call::QueuePause(QueuePauseParams {
+            pane_id: 1,
+            paused: true,
+        }),
+        Call::SkillList(SkillListParams {
+            cli: AgentCli::Claude,
+            cwd: String::new(),
+        }),
     ];
     let from_calls: Vec<&str> = calls.iter().map(Call::method).collect();
     assert_eq!(names, from_calls);

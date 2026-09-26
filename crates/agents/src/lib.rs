@@ -4,7 +4,8 @@
 //! plyd picks an [`Adapter`] with [`adapter`], spawns what [`Adapter::launch`] returns after writing its files, and feeds
 //! every event of the pane to that pane's [`AgentSession`]. Session metadata (model, worktree, cwd, session id) is only
 //! ever what the CLI reports (spec 6.5, INV-7); progress stays hidden until the agent's own plan appears (R16, R26).
-//! Plan usage is parsed from bytes plyd reads out of the CLIs' own files ([`usage`], Ruling R59).
+//! Plan usage is parsed from bytes plyd reads out of the CLIs' own files ([`usage`], Ruling R59), and the skills each CLI
+//! offers from their skill, command and plugin registry files ([`skills`], Ruling R61).
 //!
 //! The crate never runs a CLI, never writes a file, and reads only the install metadata named in
 //! [`Adapter::installed_version`] (R14); it depends on no ply crate but `ply-proto`, and never on gpui or tokio (spec 3.2,
@@ -40,6 +41,7 @@ mod error;
 mod install;
 pub mod meta;
 pub mod plan;
+pub mod skills;
 pub mod usage;
 pub mod version;
 

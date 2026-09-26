@@ -1,0 +1,10 @@
+{
+  "model": "example",
+  "enabledPlugins": {
+    "superpowers@claude-plugins-official": true,
+    "rust-analyzer-lsp@claude-plugins-official": true,
+    "team-tools@team": false,
+    "disabled-one@team": false
+  },
+  "statusLine": { "type": "command", "command": "~/.claude/statusline.sh" }
+}

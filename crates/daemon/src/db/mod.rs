@@ -1,24 +1,34 @@
-//! The session store (spec 11.2): SQLite schema v1 with forward-only migrations.
+//! The session store (spec 11.2): SQLite schema v2 with forward-only migrations.
 //!
 //! Migrations are the numbered files in `db/migrations/`, compiled in; [`Db::open`] applies every one above the
 //! stored `schema_version` in a transaction and records the new version. A database whose version is newer than
 //! [`SCHEMA_VERSION`] was written by a newer plyd, and opening it fails with [`Error::SchemaTooNew`] so plyd refuses
-//! to start instead of downgrading it (spec 15). The schema is exactly 11.2's; `worktree_seen` is the only worktree
+//! to start instead of downgrading it (spec 15). Schema v1 is exactly 11.2's; `worktree_seen` is the only worktree
 //! column and holds what the CLI reported (Ruling R5, INV-7). Pane rows are kept after the pane closes (`closed_at`),
-//! so `session.list {include_closed:true}` returns finished sessions (F3). A [`Db`] is not `Sync`; plyd keeps it
+//! so `session.list {include_closed:true}` returns finished sessions (F3). Schema v2 adds `tasks`, the task queue of
+//! Ruling R60: every task with its target, text, state and times; a queue's pause is not stored. A [`Db`] is not `Sync`; plyd keeps it
 //! behind the registry's lock, and every call blocks briefly on the local file.
 
 use std::path::Path;
 
-use ply_proto::pane::{Cli, Pane, PaneId, PaneStatus, Session, UnixSeconds, Workspace};
+use ply_proto::pane::{
+    AgentCli, Cli, Pane, PaneId, PaneStatus, Session, Task, TaskId, TaskPool, TaskState,
+    UnixSeconds, Workspace,
+};
 use rusqlite::{Connection, OptionalExtension, Row, params};
 
 use crate::error::{Error, Result};
 
 /// The schema version this build writes and the newest it opens.
-pub const SCHEMA_VERSION: i64 = 1;
+pub const SCHEMA_VERSION: i64 = 2;
 
-const MIGRATIONS: &[(i64, &str)] = &[(1, include_str!("migrations/0001_init.sql"))];
+const MIGRATIONS: &[(i64, &str)] = &[
+    (1, include_str!("migrations/0001_init.sql")),
+    (2, include_str!("migrations/0002_tasks.sql")),
+];
+
+const TASK_COLUMNS: &str = "id, workspace_id, pane_id, pool_cli, pool_cwd, text, skill, state, position, detail, \
+     created_at, sent_at, started_at, ended_at";
 
 const PANE_COLUMNS: &str = "id, workspace_id, tab_id, position, cli, cwd, model_seen, worktree_seen, exit_code, \
      last_activity_at, session_ref, title, status, created_at, closed_at";
@@ -312,6 +322,76 @@ impl Db {
         Ok(())
     }
 
+    /// Every stored task, by id; plyd loads them once at startup.
+    /// Fails with [`Error::Db`] or [`Error::BadRow`].
+    pub fn tasks(&self) -> Result<Vec<Task>> {
+        let mut stmt = self
+            .conn
+            .prepare(&format!("SELECT {TASK_COLUMNS} FROM tasks ORDER BY id"))?;
+        let mut rows = stmt.query([])?;
+        let mut out = Vec::new();
+        while let Some(row) = rows.next()? {
+            out.push(task_of(row)?);
+        }
+        Ok(out)
+    }
+
+    /// Inserts a task (its `id` is ignored) and returns the new id.
+    /// Fails with [`Error::Db`].
+    pub fn insert_task(&self, task: &Task) -> Result<TaskId> {
+        let (pool_cli, pool_cwd) = pool_columns(task);
+        self.conn.execute(
+            "INSERT INTO tasks (workspace_id, pane_id, pool_cli, pool_cwd, text, skill, state, position, detail, \
+             created_at, sent_at, started_at, ended_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+            params![
+                task.workspace_id,
+                task.pane_id,
+                pool_cli,
+                pool_cwd,
+                task.text,
+                task.skill,
+                task_state_str(task.state),
+                task.position,
+                task.detail,
+                task.created_at,
+                task.sent_at,
+                task.started_at,
+                task.ended_at,
+            ],
+        )?;
+        self.last_id()
+    }
+
+    /// Writes every mutable column of an existing task: its pane (a pool task taken by a pane), state, place, detail and times.
+    /// Fails with [`Error::Db`].
+    pub fn update_task(&self, task: &Task) -> Result<()> {
+        self.conn.execute(
+            "UPDATE tasks SET pane_id = ?2, state = ?3, position = ?4, detail = ?5, sent_at = ?6, started_at = ?7, \
+             ended_at = ?8 WHERE id = ?1",
+            params![
+                task.id,
+                task.pane_id,
+                task_state_str(task.state),
+                task.position,
+                task.detail,
+                task.sent_at,
+                task.started_at,
+                task.ended_at,
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Deletes the tasks `ids`, the finished ones past the history plyd keeps.
+    /// Fails with [`Error::Db`].
+    pub fn delete_tasks(&self, ids: &[TaskId]) -> Result<()> {
+        for id in ids {
+            self.conn.execute("DELETE FROM tasks WHERE id = ?1", [id])?;
+        }
+        Ok(())
+    }
+
     fn last_id(&self) -> Result<u64> {
         u64::try_from(self.conn.last_insert_rowid()).map_err(|_| Error::BadRow {
             what: "row id",
@@ -344,6 +424,88 @@ fn pane_of(r: &Row<'_>) -> Result<Pane> {
         branch: None,
         project: None,
         git_worktree: None,
+    })
+}
+
+fn pool_columns(task: &Task) -> (Option<&'static str>, Option<&str>) {
+    match &task.pool {
+        Some(pool) => (Some(agent_cli_str(pool.cli)), Some(pool.cwd.as_str())),
+        None => (None, None),
+    }
+}
+
+fn task_of(r: &Row<'_>) -> Result<Task> {
+    let pool_cli: Option<String> = r.get(3)?;
+    let pool_cwd: Option<String> = r.get(4)?;
+    let pool = match (pool_cli, pool_cwd) {
+        (Some(cli), Some(cwd)) => Some(TaskPool {
+            cli: parse_agent_cli(&cli)?,
+            cwd,
+        }),
+        _ => None,
+    };
+    let state: String = r.get(7)?;
+    Ok(Task {
+        id: r.get(0)?,
+        workspace_id: r.get(1)?,
+        pane_id: r.get(2)?,
+        pool,
+        text: r.get(5)?,
+        skill: r.get(6)?,
+        state: parse_task_state(&state)?,
+        position: r.get(8)?,
+        detail: r.get(9)?,
+        created_at: r.get(10)?,
+        sent_at: r.get(11)?,
+        started_at: r.get(12)?,
+        ended_at: r.get(13)?,
+    })
+}
+
+fn agent_cli_str(cli: AgentCli) -> &'static str {
+    match cli {
+        AgentCli::Claude => "claude",
+        AgentCli::Codex => "codex",
+    }
+}
+
+fn parse_agent_cli(s: &str) -> Result<AgentCli> {
+    match s {
+        "claude" => Ok(AgentCli::Claude),
+        "codex" => Ok(AgentCli::Codex),
+        _ => Err(Error::BadRow {
+            what: "pool_cli",
+            value: s.to_owned(),
+        }),
+    }
+}
+
+/// The `tasks.state` value of a state, its C1 wire name.
+pub fn task_state_str(state: TaskState) -> &'static str {
+    match state {
+        TaskState::Queued => "queued",
+        TaskState::Sent => "sent",
+        TaskState::Running => "running",
+        TaskState::Ended => "ended",
+        TaskState::Failed => "failed",
+        TaskState::Cancelled => "cancelled",
+    }
+}
+
+fn parse_task_state(s: &str) -> Result<TaskState> {
+    Ok(match s {
+        "queued" => TaskState::Queued,
+        "sent" => TaskState::Sent,
+        "running" => TaskState::Running,
+        "ended" => TaskState::Ended,
+        "failed" => TaskState::Failed,
+        "cancelled" => TaskState::Cancelled,
+        _ => {
+            return Err(Error::BadRow {
+                what: "task state",
+                value: s.to_owned(),
+            });
+        }
     })
 }
 
@@ -448,9 +610,10 @@ mod tests {
     }
 
     #[test]
-    fn a_new_database_is_at_schema_v1_with_the_11_2_tables() {
+    fn a_new_database_is_at_schema_v2_with_the_11_2_tables_and_tasks() {
         let db = Db::open_in_memory().unwrap();
-        assert_eq!(db.schema_version().unwrap(), 1);
+        assert_eq!(db.schema_version().unwrap(), 2);
+        assert!(db.tasks().unwrap().is_empty());
         let ws = db.insert_workspace("/Users/example", "example", 1).unwrap();
         let tab = TabRow {
             id: 0,
@@ -495,12 +658,12 @@ mod tests {
         let path = dir.join("ply.db");
         let db = Db::open(&path).unwrap();
         db.conn
-            .execute("UPDATE schema_version SET version = 2", [])
+            .execute("UPDATE schema_version SET version = 3", [])
             .unwrap();
         drop(db);
         match Db::open(&path) {
             Err(Error::SchemaTooNew { found, supported }) => {
-                assert_eq!((found, supported), (2, SCHEMA_VERSION));
+                assert_eq!((found, supported), (3, SCHEMA_VERSION));
             }
             other => panic!("expected SchemaTooNew, got {other:?}"),
         }
@@ -508,9 +671,125 @@ mod tests {
         let v: i64 = reopened
             .query_row("SELECT version FROM schema_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(v, 2, "a refused database is left untouched");
+        assert_eq!(v, 3, "a refused database is left untouched");
         drop(reopened);
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_v1_database_migrates_to_v2_and_keeps_its_panes() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(MIGRATIONS[0].1).unwrap();
+        conn.execute("INSERT INTO schema_version (version) VALUES (1)", [])
+            .unwrap();
+        conn.execute(
+            "INSERT INTO workspaces (path, name, opened_at) VALUES ('/Users/example', 'example', 1)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO panes (workspace_id, tab_id, position, cli, cwd, title, status, created_at) \
+             VALUES (1, 1, 0, 'claude', '/Users/example', 'claude', 'idle', 5)",
+            [],
+        )
+        .unwrap();
+        let db = Db::init(conn).unwrap();
+        assert_eq!(db.schema_version().unwrap(), 2);
+        let panes = db.open_panes().unwrap();
+        assert_eq!(panes.len(), 1);
+        assert_eq!(panes[0].cli, Cli::Claude);
+        assert!(db.tasks().unwrap().is_empty());
+    }
+
+    fn task(workspace_id: u64, pane_id: Option<PaneId>) -> Task {
+        Task {
+            id: 0,
+            workspace_id,
+            pane_id,
+            pool: None,
+            text: "/review-pr #212\nthen tell me".into(),
+            skill: Some("/review-pr".into()),
+            state: TaskState::Queued,
+            position: 2,
+            detail: None,
+            created_at: 100,
+            sent_at: None,
+            started_at: None,
+            ended_at: None,
+        }
+    }
+
+    #[test]
+    fn tasks_round_trip_through_their_row() {
+        let db = Db::open_in_memory().unwrap();
+        let ws = db.insert_workspace("/Users/example", "example", 1).unwrap();
+        let pane_id = db.insert_pane(&pane(ws.id, 1)).unwrap();
+        let queued = task(ws.id, Some(pane_id));
+        let id = db.insert_task(&queued).unwrap();
+        let pooled = Task {
+            pane_id: None,
+            pool: Some(TaskPool {
+                cli: AgentCli::Codex,
+                cwd: "/Users/example/project".into(),
+            }),
+            skill: None,
+            ..task(ws.id, None)
+        };
+        let pool_id = db.insert_task(&pooled).unwrap();
+        let mut stored = db.tasks().unwrap();
+        stored.sort_by_key(|t| t.id);
+        assert_eq!(
+            stored[0],
+            Task {
+                id,
+                ..queued.clone()
+            }
+        );
+        assert_eq!(
+            stored[1],
+            Task {
+                id: pool_id,
+                ..pooled
+            }
+        );
+        let ended = Task {
+            id,
+            state: TaskState::Ended,
+            sent_at: Some(110),
+            started_at: Some(111),
+            ended_at: Some(150),
+            detail: Some("done".into()),
+            ..queued
+        };
+        db.update_task(&ended).unwrap();
+        assert!(db.tasks().unwrap().contains(&ended));
+        db.delete_tasks(&[pool_id]).unwrap();
+        assert_eq!(db.tasks().unwrap(), vec![ended]);
+    }
+
+    #[test]
+    fn task_states_round_trip_and_the_column_rejects_others() {
+        for s in [
+            TaskState::Queued,
+            TaskState::Sent,
+            TaskState::Running,
+            TaskState::Ended,
+            TaskState::Failed,
+            TaskState::Cancelled,
+        ] {
+            assert_eq!(parse_task_state(task_state_str(s)).unwrap(), s);
+            assert_eq!(
+                serde_json::to_value(s).unwrap(),
+                serde_json::Value::from(task_state_str(s))
+            );
+        }
+        let db = Db::open_in_memory().unwrap();
+        let ws = db.insert_workspace("/Users/example", "example", 1).unwrap();
+        let bad = db.conn.execute(
+            "INSERT INTO tasks (workspace_id, text, state, position, created_at) VALUES (?1, 'x', 'paused', 0, 1)",
+            [ws.id],
+        );
+        assert!(bad.is_err());
     }
 
     #[test]

@@ -15,7 +15,7 @@ use ply_proto::control::{
     HANDSHAKE_ID, MAX_LINE_BYTES, PaneAnswerParams, PaneCloseParams, Response, ServerMsg,
     ThemeSetParams, Welcome, encode_line,
 };
-use ply_proto::pane::{PaneStatus, Settings};
+use ply_proto::pane::{PaneId, PaneStatus, Settings, TaskPool, TaskTarget};
 use ply_term::Palette;
 use serde::Serialize;
 use serde_json::Value;
@@ -28,6 +28,7 @@ use crate::daemon::{Shared, unix_now};
 use crate::panes::launch;
 use crate::panes::pane::PaneCmd;
 use crate::panes::registry::{internal, is_live, refuse};
+use crate::skills::SkillSources;
 use crate::usage::UsageSources;
 
 /// Responses queued towards one connection's writer.
@@ -146,12 +147,8 @@ async fn connection(stream: UnixStream, shared: Arc<Shared>) {
                 }
             },
         };
-        let bytes = match encode_line(&ServerMsg::Res(response)) {
-            Ok(bytes) => bytes,
-            Err(e) => {
-                tracing::error!(conn, error = %e, "cannot encode a response");
-                continue;
-            }
+        let Some(bytes) = response_line(conn, response) else {
+            continue;
         };
         if tx.send(bytes).await.is_err() {
             break;
@@ -310,6 +307,110 @@ async fn dispatch(shared: &Arc<Shared>, call: Call) -> Result<Value, ErrorBody> 
             let sources = UsageSources::from_env(&shared.login.base);
             ok(&shared.usage.get(sources).await)
         }
+        Call::SkillList(p) => {
+            let cwd = std::path::PathBuf::from(&p.cwd);
+            if !cwd.is_absolute() {
+                return Err(refuse(
+                    ErrorCode::BadRequest,
+                    "cwd must be an absolute path",
+                ));
+            }
+            let sources = SkillSources::from_env(&shared.login.base);
+            ok(&shared.skills.get(sources, p.cli, cwd).await)
+        }
+        Call::TaskList(p) => ok(&shared.registry().tasks_of(p.workspace_id)?),
+        Call::TaskAdd(mut p) => {
+            if shared.is_stopping() {
+                return Err(refuse(ErrorCode::ShuttingDown, "plyd is shutting down"));
+            }
+            if let TaskTarget::Pool(pool) = &mut p.target {
+                resolve_pool_dir(pool);
+            }
+            let (task, candidates) = {
+                let mut reg = shared.registry();
+                let task = reg.add_task(&p, unix_now())?;
+                let candidates = match (&task.pane_id, &task.pool) {
+                    (Some(pane), _) => vec![*pane],
+                    (None, Some(pool)) => reg.pool_panes(task.workspace_id, pool.cli),
+                    (None, None) => Vec::new(),
+                };
+                (task, candidates)
+            };
+            for pane in candidates {
+                nudge(shared, Some(pane)).await;
+            }
+            ok(&task)
+        }
+        Call::TaskCancel(p) => {
+            let pane = {
+                let mut reg = shared.registry();
+                let pane = reg.task_pane(p.task_id);
+                reg.cancel_task(p.task_id, unix_now())?;
+                pane
+            };
+            nudge(shared, pane).await;
+            ok(&Empty {})
+        }
+        Call::TaskMove(p) => {
+            let pane = {
+                let mut reg = shared.registry();
+                reg.move_task(p.task_id, p.position)?;
+                reg.task_pane(p.task_id)
+            };
+            nudge(shared, pane).await;
+            ok(&Empty {})
+        }
+        Call::TaskSend(p) => {
+            let (pane, handle) = shared.registry().sendable(p.task_id)?;
+            tracing::info!(
+                pane_id = pane,
+                task_id = p.task_id,
+                "sending a queued task now"
+            );
+            match handle {
+                Some(handle) if handle.send(PaneCmd::SendNow(p.task_id)).await.is_ok() => {
+                    ok(&Empty {})
+                }
+                _ => {
+                    tracing::warn!(pane_id = pane, "the pane task is gone; task.send dropped");
+                    Err(refuse(ErrorCode::Internal, "the pane task is gone"))
+                }
+            }
+        }
+        Call::QueuePause(p) => {
+            shared.registry().pause_queue(p.pane_id, p.paused)?;
+            nudge(shared, Some(p.pane_id)).await;
+            ok(&Empty {})
+        }
+    }
+}
+
+/// Resolves a pool's absolute directory through symlinks, as the CLIs report their own (`/var` is `/private/var`); a directory that cannot be resolved stays as given.
+fn resolve_pool_dir(pool: &mut TaskPool) {
+    if !std::path::Path::new(&pool.cwd).is_absolute() {
+        return;
+    }
+    match std::fs::canonicalize(&pool.cwd) {
+        Ok(real) => pool.cwd = real.to_string_lossy().into_owned(),
+        Err(e) => {
+            tracing::debug!(dir = %pool.cwd, error = %e, "cannot resolve a pool directory; keeping it as given")
+        }
+    }
+}
+
+/// Tells a pane's task its queue changed, so its dispatch looks at it again; a stopped task is skipped.
+async fn nudge(shared: &Shared, pane: Option<PaneId>) {
+    let Some(pane) = pane else {
+        return;
+    };
+    let handle = shared.registry().handle_of(pane);
+    if let Some(handle) = handle
+        && handle.send(PaneCmd::Queue).await.is_err()
+    {
+        tracing::debug!(
+            pane_id = pane,
+            "the pane task had stopped before the queue changed"
+        );
     }
 }
 
@@ -424,9 +525,47 @@ async fn settings_set(shared: &Shared, settings: Settings) -> Result<Value, Erro
     ok(&Empty {})
 }
 
+/// The line answering a request; an answer that does not fit in one line becomes an `internal` error, so the client is
+/// never left waiting.
+fn response_line(conn: u64, response: Response) -> Option<Vec<u8>> {
+    let id = response.id;
+    let err = match encode_line(&ServerMsg::Res(response)) {
+        Ok(bytes) => return Some(bytes),
+        Err(e) => e,
+    };
+    tracing::error!(conn, id, error = %err, "cannot encode a response; answering with an error");
+    let fallback = Response {
+        id,
+        outcome: Err(ErrorBody {
+            code: ErrorCode::Internal,
+            msg: format!("the answer does not fit in one C1 line: {err}"),
+        }),
+    };
+    match encode_line(&ServerMsg::Res(fallback)) {
+        Ok(bytes) => Some(bytes),
+        Err(e) => {
+            tracing::error!(conn, id, error = %e, "cannot encode an error response");
+            None
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_answer_too_long_for_one_line_is_answered_with_an_error() {
+        let big = Response {
+            id: 7,
+            outcome: Ok(serde_json::Value::String("x".repeat(MAX_LINE_BYTES))),
+        };
+        let line = response_line(1, big).expect("an answer, not silence");
+        let msg: serde_json::Value = serde_json::from_slice(&line).unwrap();
+        assert_eq!(msg["id"], 7);
+        assert_eq!(msg["ok"], false);
+        assert_eq!(msg["err"]["code"], "internal");
+    }
 
     #[tokio::test]
     async fn lines_are_capped_and_split_at_newlines() {

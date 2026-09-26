@@ -1,0 +1,9 @@
+{
+  "t": "req",
+  "id": 26,
+  "m": "queue.pause",
+  "p": {
+    "pane_id": 2,
+    "paused": true
+  }
+}

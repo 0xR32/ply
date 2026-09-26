@@ -1,0 +1,33 @@
+{
+  "t": "res",
+  "id": 27,
+  "ok": true,
+  "r": {
+    "skills": [
+      {
+        "name": "review-pr",
+        "invocation": "$review-pr",
+        "description": "Full pre-merge review pipeline",
+        "argument_hint": "[#PR or URL]",
+        "source": "user"
+      },
+      {
+        "name": "review-agent",
+        "invocation": "$review-agent",
+        "description": "Perform a read-only, defect-first review of a specified code change",
+        "source": "system"
+      },
+      {
+        "name": "brainstorming",
+        "invocation": "/superpowers:brainstorming",
+        "source": "plugin",
+        "plugin": "superpowers"
+      },
+      {
+        "name": "open-pr",
+        "invocation": "/prompts:open-pr",
+        "source": "prompt"
+      }
+    ]
+  }
+}

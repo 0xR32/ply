@@ -2,8 +2,9 @@ import { describe, expect, test } from 'bun:test';
 import { join } from 'node:path';
 import { createTestRoot, hasNativeTestRenderer, type TestRenderer } from '@gpuix/react/testing';
 import { windowKeyListeners } from '../keymap/dispatcher';
+import { reduce } from '../state/reducer';
 import { createStore, type Store } from '../state/store';
-import { makePane, makeState } from '../state/test-support';
+import { makePane, makeState, makeTask } from '../state/test-support';
 import { App } from './App';
 
 const shots = process.env.PLY_SCREENSHOT_DIR;
@@ -120,6 +121,46 @@ describe.if(hasNativeTestRenderer)('App', () => {
       if (!b) throw new Error('pill did not paint');
       renderer.nativeSimulateClick(b.x + b.width / 2, b.y + b.height / 2);
       expect(store.getState().tabs[0]?.focus_pane_id).toBe(2);
+    } finally {
+      unmount();
+    }
+  });
+
+  test('the queue pill counts queued tasks, opens the queue on a click, and ⌘E ⌘⇧E open the form and the queue', () => {
+    const loaded = reduce(canvasState(), {
+      type: 'tasks/loaded',
+      list: {
+        tasks: [makeTask({ id: 1, pane_id: 1 }), makeTask({ id: 2, pane_id: 4 })],
+        queues: [{ pane_id: 4, paused: 'restored' }],
+      },
+    });
+    const store = createStore(loaded);
+    const { renderer, unmount } = mount(store);
+    try {
+      const pill = renderer.findByTestId('queue-pill');
+      const b = pill && renderer.getElementBounds(pill.id);
+      if (!b) throw new Error('queue pill did not paint');
+      expect(renderer.getAllText()).toContain('2 queued');
+      renderer.nativeSimulateClick(b.x + b.width / 2, b.y + b.height / 2);
+      renderer.flush();
+      expect(store.getState().overlay).toEqual({ kind: 'queue' });
+      expect(renderer.findByTestId('queue')).toBeDefined();
+      renderer.simulateKeystrokes('escape');
+      renderer.flush();
+      expect(store.getState().overlay).toBeNull();
+      renderer.simulateKeystrokes('cmd-e');
+      renderer.flush();
+      expect(store.getState().overlay?.kind).toBe('dispatch');
+      expect(renderer.findByTestId('dispatch')).toBeDefined();
+    } finally {
+      unmount();
+    }
+  });
+
+  test('no queue pill while nothing is queued', () => {
+    const { renderer, unmount } = mount(createStore(canvasState()));
+    try {
+      expect(renderer.findByTestId('queue-pill')).toBeUndefined();
     } finally {
       unmount();
     }

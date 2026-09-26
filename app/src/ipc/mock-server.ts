@@ -19,8 +19,11 @@ import {
   type PaneStatus,
   PROTOCOL_VERSION,
   type Progress,
+  type QueueState,
   type Session,
   type Settings,
+  type SkillList,
+  type Task,
   type TerminalTheme,
   type Usage,
   type Workspace,
@@ -82,6 +85,12 @@ export class MockServer {
   settings: Settings = { ...DEFAULT_SETTINGS };
   /** What `usage.get` answers; tests set it, and `{}` means neither CLI recorded any usage. */
   usage: Usage = {};
+  /** What `skill.list` answers, for any CLI and directory; tests set it. */
+  skills: SkillList = { skills: [] };
+  /** The task queue (Ruling R60) by task id, and the queues that are paused or blocked. */
+  readonly tasks = new Map<number, Task>();
+  readonly queues = new Map<number, QueueState>();
+  private nextTaskId = 1;
   readonly workspace: Workspace;
   private readonly clients = new Set<Socket<{ buffer: string; welcomed: boolean }>>();
   private readonly timers = new Set<ReturnType<typeof setTimeout>>();
@@ -409,6 +418,40 @@ export class MockServer {
         return {};
       case 'usage.get':
         return this.usage;
+      case 'skill.list':
+        return this.skills;
+      case 'task.list':
+        return {
+          tasks: [...this.tasks.values()].sort((a, b) => a.id - b.id),
+          queues: [...this.queues.values()],
+        };
+      case 'task.add':
+        return this.addTask(p as Methods['task.add']['params']);
+      case 'task.cancel':
+        return this.updateQueued((p as Methods['task.cancel']['params']).task_id, (t) => ({
+          ...t,
+          state: 'cancelled',
+          ended_at: nowSeconds(),
+        }));
+      case 'task.move':
+        return this.moveTask(p as Methods['task.move']['params']);
+      case 'task.send':
+        return this.updateQueued((p as Methods['task.send']['params']).task_id, (t) => ({
+          ...t,
+          state: 'sent',
+          sent_at: nowSeconds(),
+        }));
+      case 'queue.pause': {
+        const params = p as Methods['queue.pause']['params'];
+        this.requirePane(params.pane_id);
+        const queue: QueueState = params.paused
+          ? { pane_id: params.pane_id, paused: 'user' }
+          : { pane_id: params.pane_id };
+        if (params.paused) this.queues.set(params.pane_id, queue);
+        else this.queues.delete(params.pane_id);
+        this.later(0, () => this.emit({ e: 'queue.changed', p: queue }));
+        return {};
+      }
       case 'daemon.shutdown':
         this.later(0, () => {
           this.emit({ e: 'daemon.stopping', p: p as Methods['daemon.shutdown']['params'] });
@@ -458,6 +501,72 @@ export class MockServer {
       }
       this.panes.delete(pane.id);
       this.emit({ e: 'pane.removed', p: { pane_id: pane.id } });
+    });
+    return {};
+  }
+
+  private queued(key: (t: Task) => boolean): Task[] {
+    return [...this.tasks.values()]
+      .filter((t) => t.state === 'queued' && key(t))
+      .sort((a, b) => a.position - b.position);
+  }
+
+  private announceTask(task: Task): void {
+    this.tasks.set(task.id, task);
+    this.later(0, () => this.emit({ e: 'task.changed', p: task }));
+  }
+
+  private addTask(params: Methods['task.add']['params']): Task {
+    if (!params.text.trim()) throw new MethodError('bad_request', 'the task has no text');
+    let task: Task;
+    const base = {
+      id: this.nextTaskId,
+      workspace_id: params.workspace_id,
+      text: params.text,
+      ...(params.skill ? { skill: params.skill } : {}),
+      state: 'queued' as const,
+      created_at: nowSeconds(),
+    };
+    if ('pane' in params.target) {
+      const paneId = params.target.pane;
+      const pane = this.requirePane(paneId);
+      if (pane.cli === 'shell') throw new MethodError('bad_request', 'a shell pane takes no tasks');
+      task = {
+        ...base,
+        pane_id: paneId,
+        position: this.queued((t) => t.pane_id === paneId).length,
+      };
+    } else {
+      const pool = params.target.pool;
+      if (!isAbsolute(pool.cwd))
+        throw new MethodError('bad_request', 'the pool directory must be absolute');
+      const same = (t: Task) =>
+        t.pool?.cli === pool.cli && t.pool.cwd === pool.cwd && t.pane_id === undefined;
+      task = { ...base, pool, position: this.queued(same).length };
+    }
+    this.nextTaskId++;
+    this.announceTask(task);
+    return task;
+  }
+
+  private updateQueued(id: number, change: (t: Task) => Task): Record<string, never> {
+    const task = this.tasks.get(id);
+    if (!task) throw new MethodError('not_found', `no task ${id}`);
+    if (task.state !== 'queued')
+      throw new MethodError('invalid_state', 'the task is no longer queued');
+    this.announceTask(change(task));
+    return {};
+  }
+
+  private moveTask(params: Methods['task.move']['params']): Record<string, never> {
+    const task = this.tasks.get(params.task_id);
+    if (!task) throw new MethodError('not_found', `no task ${params.task_id}`);
+    if (task.state !== 'queued')
+      throw new MethodError('invalid_state', 'the task is no longer queued');
+    const order = this.queued((t) => t.pane_id === task.pane_id && t.id !== task.id);
+    order.splice(Math.min(params.position, order.length), 0, task);
+    order.forEach((t, i) => {
+      if (t.position !== i) this.announceTask({ ...t, position: i });
     });
     return {};
   }

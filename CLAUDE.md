@@ -6,7 +6,8 @@
 (Codex CLI) TUIs in terminal panes — tabs across the top, up to four panes per tab —
 and adds what a terminal multiplexer lacks: status per pane ("needs you", "your
 turn", running, exited), progress from the agent's own plan, the model the
-session reports, stored session history, and the CLIs' own worktrees.
+session reports, stored session history, the CLIs' own worktrees, and a queue of
+tasks the user writes for a pane, typed when that pane is idle.
 
 It is **not** an LLM wrapper. It never calls a model API, holds a key, rewrites a
 prompt, hands a transcript between CLIs or picks a model or effort level; the
@@ -22,9 +23,9 @@ map. `docs/` has one document per subject (see the doc map below).
 |---|---|
 | the app | `app/` — Bun + React on GPUIX (`@gpuix/react` and `@gpuix/native` 0.10.0 from npm, used as released). `app/src/main.tsx` is the entry, `app/src/theme/tokens.ts` the only palette |
 | the terminal view | `app/src/terminal/` (C2 codec, replica, runs, input, selection) and `app/src/features/panes/terminal-view.tsx` |
-| the daemon | `crates/daemon` (`plyd`): ptys, one libghostty-vt terminal per pane, the C1 and C2 servers, SQLite, the LaunchAgent, `usage.get` (Claude panes' status line reports and the CLIs' own usage records, read-only) |
+| the daemon | `crates/daemon` (`plyd`): ptys, one libghostty-vt terminal per pane, the C1 and C2 servers, SQLite, the LaunchAgent, the task queue and its dispatch (`panes/queue.rs`, `panes/dispatch.rs`), `skill.list`, `usage.get` (Claude panes' status line reports and the CLIs' own usage records, read-only) |
 | the terminal engine | `crates/term` (`ply-term`) over `crates/ghostty-sys`, whose `build.rs` downloads pristine ghostty 44f2a44 (SHA-256-verified) and builds libghostty-vt from it with Zig |
-| the agent adapters | `crates/agents` (`ply-agents`): launch specs, the Claude hooks file, hook/notify/OSC 9/rollout parsing, progress, the version check, the plan-usage parsers |
+| the agent adapters | `crates/agents` (`ply-agents`): launch specs, the Claude hooks file, hook/notify/OSC 9/rollout parsing, progress, the version check, the plan-usage parsers, skill discovery (`skills.rs`, read-only) |
 | the hook helper | `crates/hook` (`ply-hook`): one hook or notify payload → one C3 line to plyd; as `ply-hook statusline`, Claude Code's status line in a pane |
 | the wire types | `crates/proto` (`ply-proto`): C1, C2, C3; `app/src/ipc/proto.gen.ts` is generated from it |
 | the bundle | `scripts/dmg.ts` (`just dmg`) → `dist/ply.app` and `dist/ply-<version>.dmg`; `app/src/bundle.ts` is the bundled app's entry |
@@ -58,6 +59,14 @@ user's own) and the optional theme, never WorktreeCreate or WorktreeRemove; Code
 `tools.update_plan.enabled` (`crates/agents/tests/launch.rs`). The user's
 `~/.claude/settings.json`, `~/.claude.json` and `~/.codex/config.toml` are never
 written (INV-8).
+
+**ply types only a task the user wrote, and never answers for the CLI.** A queued
+task is pasted, text unchanged, into an idle Claude or Codex pane whose running
+process has shown its prompt (`Adapter::shows_prompt`; a stored session id does not
+count), never into a shell, a pane whose input holds the user's unsent text (their
+Enter does not clear it) or one showing a dialog; failure pauses the pane's queue
+(`crates/daemon/src/panes/dispatch.rs`, `crates/daemon/tests/dispatch.rs`).
+`skill.list` only reads the CLIs' skill folders.
 
 **ply never manages worktrees.** The CLI creates and removes them; ply passes
 `claude --worktree <name>` and shows what the CLI reports. The only worktree
@@ -158,7 +167,7 @@ cargo run -p ply-daemon --example ply-cli      # the command-line C1/C2 test cli
 ```
 just check      # fmt, clippy -D warnings, cargo doc -D warnings, check-rules, check-deps, biome, tsc
 just test       # cargo nextest, doctests, bun test
-just e2e        # journeys J1–J6 on the full app and the release plyd (opens windows, unfocused)
+just e2e        # journeys J1–J7 on the full app and the release plyd (opens windows, unfocused)
 just deny       # licences, advisories, the HTTP-client and gpui bans
 just gen        # regenerate app/src/ipc/proto.gen.ts
 just fonts      # copy the Geist TTFs into ~/Library/Fonts (writes outside the checkout)
@@ -242,7 +251,7 @@ GPUIX's test renderer (`@gpuix/react/testing`) and the mock daemon
 - `docs/keybindings.md` — every binding, the reserved chords, how to add one.
 - `docs/configuration.md` — paths, `config.toml`, settings, environment variables, what a run writes to the machine.
 - `docs/development.md` — setup, the gates, running plyd and the app, adding a dependency.
-- `docs/perf.md` — the commissioning evidence: journeys J1–J6, P1–P5 and F1–F4 against their targets, the real-CLI
+- `docs/perf.md` — the commissioning evidence: journeys J1–J7, P1–P5 and F1–F4 against their targets, the real-CLI
   runs and the soak, with the commands that measured them.
 
 ## What lives elsewhere

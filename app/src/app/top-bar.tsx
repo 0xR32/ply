@@ -1,8 +1,8 @@
 import { StatusBar } from '../features/statusbar/statusbar';
 import { TabBar } from '../features/tabs/tab-bar';
 import { commandKeyLabel } from '../keymap/keymap';
-import { selectWaitingCount } from '../state/selectors';
-import { useAppSelector, useDispatch } from '../state/store';
+import { selectQueueCounts, selectWaitingCount } from '../state/selectors';
+import { shallowEqual, useAppSelector, useDispatch } from '../state/store';
 import { useChrome } from '../theme/chrome';
 import { tokens } from '../theme/tokens';
 import { Dot } from '../ui/chip';
@@ -77,6 +77,47 @@ function NeedsYouPill() {
   );
 }
 
+/** The task queue pill (Ruling R60): queued tasks, or how many are held when every one is; a click opens the queue (⌘⇧E). */
+function QueuePill() {
+  const dispatch = useDispatch();
+  const { z, accent } = useChrome();
+  const counts = useAppSelector(selectQueueCounts, shallowEqual);
+  const available = useAppSelector((s) => s.tasks.available);
+  if (!available || counts.queued === 0) return null;
+  const held = counts.held === counts.queued;
+  const colour = held ? tokens.textSoft : accent.base;
+  return (
+    <div
+      testId="queue-pill"
+      role="button"
+      aria-label="Open the task queue"
+      onClick={() => dispatch({ type: 'command', id: 'task.queue' })}
+      style={{
+        height: z(26),
+        flexShrink: 0,
+        display: 'flex',
+        alignItems: 'center',
+        gap: z(8),
+        paddingLeft: z(10),
+        paddingRight: z(12),
+        borderRadius: z(13),
+        backgroundColor: held ? tokens.white[4] : accent.a10,
+        borderWidth: 1,
+        borderColor: held ? tokens.white[10] : accent.a35,
+        cursor: 'pointer',
+      }}
+    >
+      <Icon name={held ? 'pause' : 'queue'} size={held ? 11 : 13} color={colour} />
+      <Text color={colour} weight={500}>
+        {held ? `${counts.held} held` : `${counts.queued} queued`}
+      </Text>
+      <Text color={held ? tokens.text3 : accent.a70} variant="label" mono>
+        {commandKeyLabel('task.queue')}
+      </Text>
+    </div>
+  );
+}
+
 /** The search field look-alike that opens the command palette (⌘K). */
 function PaletteButton() {
   const dispatch = useDispatch();
@@ -119,7 +160,7 @@ function PaletteButton() {
   );
 }
 
-/** The 40 px title bar beside the traffic lights: wordmark, tabs, the status and pane counts, the needs-you pill and the palette button. */
+/** The 40 px title bar beside the traffic lights: wordmark, tabs, the status and pane counts, the needs-you pill, the queue pill and the palette button. */
 export function TopBar() {
   const { z } = useChrome();
   return (
@@ -140,6 +181,7 @@ export function TopBar() {
       <div style={{ flexGrow: 1 }} />
       <StatusBar />
       <NeedsYouPill />
+      <QueuePill />
       <PaletteButton />
     </div>
   );

@@ -31,9 +31,10 @@ recorded on disk (`usage.get`).
 line, `#[serde(deny_unknown_fields)]` on every struct, `PROTOCOL_VERSION = 1`
 checked at `hello`. Requests carry an id and a method (`workspace.*`, `pane.*`,
 `session.list`, `theme.set`, `layout.*`, `settings.*`, `daemon.shutdown`,
-`usage.get`);
+`usage.get`, and the task queue's `task.*`, `queue.pause` and `skill.list`);
 plyd broadcasts events (`pane.added`, `pane.removed`, `pane.status`,
-`pane.progress`, `pane.meta`, `pane.exit`, `daemon.stopping`) to every client.
+`pane.progress`, `pane.meta`, `pane.exit`, `daemon.stopping`, `task.changed`,
+`queue.changed`) to every client.
 The Rust types in `crates/proto/src/control.rs` and `pane.rs` are the single
 source; `bun run gen` writes `app/src/ipc/proto.gen.ts` from them with ts-rs, and
 `check-rules` fails when that file is stale. C1 carries no pty bytes (INV-2).
@@ -69,7 +70,7 @@ crates/proto/src
 ├── lib.rs           the three protocols and their versions
 ├── control.rs       C1: ClientMsg, ServerMsg, every request and event, ErrorCode, MAX_LINE_BYTES
 ├── pane.rs          Pane, PaneStatus, Progress, Workspace, Tab, Layout, Session, TerminalTheme, Settings,
-│                    Usage (the CLIs' plan usage)
+│                    Usage (the CLIs' plan usage), Task, QueueState, Skill (the task queue, R60/R61)
 ├── data.rs          C2: Frame, the hand-written little-endian codec, FrameReader, cells, styles, input payloads
 ├── hook.rs          C3: HookEnvelope
 └── version.rs       PROTOCOL_VERSION, C2_VERSION, HOOK_VERSION and the one comparison
@@ -93,6 +94,7 @@ crates/agents/src
 │                    usage.rs (token_count rate limits)
 ├── install.rs       reads a CLI's version from its install layout without executing it
 ├── usage.rs         what both usage parsers share: window labels, RFC 3339 times
+├── skills.rs        skill, command and prompt files and the plugin registry → Skill records (R61)
 ├── meta.rs · plan.rs · version.rs
 
 crates/hook/src      main.rs: stdin (or Codex's last argv) → one C3 line, 200 ms, exit 0
@@ -103,10 +105,12 @@ crates/daemon/src
 ├── server/          control.rs (C1) · data.rs (C2) · hooks.rs (C3) · mod.rs
 ├── panes/           registry.rs (workspaces, tabs, panes, mirrored to SQLite) · pane.rs (one task per pane:
 │                    the only owner of its Engine, pty channels and attached clients) · agent.rs (one agent
-│                    process's session, status machine, progress limit and tailer) · state.rs (the spec 6.3
-│                    machine) · launch.rs (create, resume, restore) · mod.rs
+│                    process's session, status machine, progress limit, tailer and task dispatch) · state.rs (the
+│                    spec 6.3 machine) · launch.rs (create, resume, restore) · queue.rs (the task queue's state,
+│                    R60) · dispatch.rs (when a queued task is typed and how it is followed) · mod.rs
 ├── tail.rs          C4: finding and tailing a Codex pane's rollout
 ├── usage.rs         usage.get: Claude panes' status line reports, else the CLIs' own files, bounded, cached 5 s
+├── skills.rs        skill.list: the folders each CLI reads its skills from, bounded, read-only, cached 10 s
 ├── osc.rs · branch.rs   OSC 7/9 and typed input; the git branch label
 ├── publisher.rs     the C2 delivery rules as small clocked state machines
 ├── pty.rs           rustix pty + Command, setsid/TIOCSCTTY in the one audited pre_exec block
@@ -128,8 +132,9 @@ app/src
 │                    input.ts · selection.ts · links.ts (⌘-click URLs) · session.ts · frame-scheduler.ts (the
 │                    shared flush timer) · host.ts · metrics.ts
 ├── keymap/          keymap.ts (every binding, once) · dispatcher.ts (the window's keys, the ⌘U hold) · reserved.ts
-├── features/        panes/ (grid, frame, header, waiting and lost strips, terminal-view, close confirm) · tabs/ ·
-│                    statusbar/ · palette/ · new-pane/ · settings/ · usage/ (the hold-⌘U usage card)
+├── features/        panes/ (grid, frame, header, waiting, lost and queue strips, terminal-view, close confirm) · tabs/ ·
+│                    statusbar/ · palette/ · new-pane/ · settings/ · usage/ (the hold-⌘U usage card) ·
+│                    dispatch/ (the ⌘E task form with its skill list, the ⌘⇧E task queue; R60, R61)
 ├── ui/              presentational primitives: text, kbd, chip, button, segments, switch, overlay card
 └── theme/           tokens.ts (the only palette and type scale) · chrome.ts
 ```
@@ -155,7 +160,9 @@ keyed by content hash, so a scroll moves the rows it kept. Every GPUIX host node
 costs about 0.01 ms per frame, so runs are coalesced and a test keeps a 4-pane
 tab under 2 000 host nodes. Keys, mouse, paste and focus go
 back as C2 events and plyd encodes them against the pane's live modes; the app
-never mirrors terminal modes. `docs/terminal.md` has the details and the
+never mirrors terminal modes. A queued task (Ruling R60) is typed the same way,
+by plyd: one paste and one Enter encoded against the pane's modes, only when it
+is the user's turn there (`docs/agents.md`, **Dispatching tasks**). `docs/terminal.md` has the details and the
 measured numbers.
 
 ## Startup

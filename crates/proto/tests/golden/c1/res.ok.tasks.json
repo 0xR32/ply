@@ -1,0 +1,55 @@
+{
+  "t": "res",
+  "id": 20,
+  "ok": true,
+  "r": {
+    "tasks": [
+      {
+        "id": 5,
+        "workspace_id": 1,
+        "pane_id": 2,
+        "text": "/review-pr #212",
+        "skill": "/review-pr",
+        "state": "running",
+        "position": 0,
+        "created_at": 1790275000,
+        "sent_at": 1790275100,
+        "started_at": 1790275101
+      },
+      {
+        "id": 6,
+        "workspace_id": 1,
+        "pool": {
+          "cli": "claude",
+          "cwd": "/Users/example/project"
+        },
+        "text": "/performance-inspector app/src/terminal",
+        "state": "queued",
+        "position": 0,
+        "created_at": 1790275200
+      },
+      {
+        "id": 4,
+        "workspace_id": 1,
+        "pane_id": 3,
+        "text": "$e2e-from-diff",
+        "state": "failed",
+        "position": 0,
+        "detail": "not submitted: the CLI did not acknowledge the prompt within 10 s",
+        "created_at": 1790274000,
+        "sent_at": 1790274010,
+        "ended_at": 1790274020
+      }
+    ],
+    "queues": [
+      {
+        "pane_id": 3,
+        "paused": "failed"
+      },
+      {
+        "pane_id": 4,
+        "blocked": "typing"
+      }
+    ]
+  }
+}

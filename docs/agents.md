@@ -612,11 +612,141 @@ with its age, and reads their files without ever writing them
 An answer is reused for 5 s. A CLI with no readable record is simply absent,
 and the view says "No usage recorded yet".
 
+## Dispatching tasks
+
+The task queue (Ruling R60) lets the user line up prompts and skills for a pane
+and has plyd type each one in when it is their turn there
+(`docs/control-channel.md`, **The task queue**). plyd types a task's text
+exactly as written, into the pane's terminal as the user would, and nothing
+else: it never answers a dialog, passes an option or changes a prompt. Each
+agent process's `Agent` owns a small clocked machine for it
+(`crates/daemon/src/panes/dispatch.rs`); the registry holds the queue.
+
+**When a task is typed.** Only into an agent pane whose running process has
+shown its prompt, that has been `idle` for 1 s (`SETTLE`), has no other task
+typed, and whose queue is not paused, and only the queue's first task. The
+prompt rule keeps a queued Enter away from a CLI's startup screens (trust,
+hooks review, update), which wait for as long as nobody answers: a Codex pane
+counts as `idle` from its first output byte, which such a screen prints too.
+`Adapter::shows_prompt` names the signals that count, raised by the process
+itself: for Claude Code SessionStart (`Ready`; its hooks run only once the
+folder is trusted), UserPromptSubmit or Stop; for Codex a turn starting
+(`task_started` read live from the rollout, not the thread's past) or ending.
+Codex's first byte and its Enter guess do not count, and neither does a stored
+session id: a resumed process starts over. So a Codex pane, fresh or resumed,
+takes tasks after its first turn (open it with a first prompt, or type one);
+meanwhile its queue is `blocked: startup` and nothing, not even `task.send`,
+types into it. Every new process, every change to `idle`, the process first
+showing its prompt and the input clearing make the machine look at its queue
+again, so a task added while the pane was busy, lost or starting still goes.
+The user's own input comes first:
+
+- any key, raw input or paste of the user's marks the pane's input as typed,
+  since the CLI may be holding text the task would be appended to. Only Ctrl+C,
+  Ctrl+U (in either key encoding), the CLI acknowledging a prompt
+  (`Adapter::acknowledges_prompt`) or starting a new session (`Ready`) clear
+  it. The user's Enter does not: it may add a line to a draft (`\` then Enter,
+  ⌥⏎) or open a local command's picker (`/model`, `/resume`), and a task typed
+  there would join the draft or pick an entry. Enter alone on an empty input
+  marks nothing, and neither do keys typed while the pane waits for permission
+  or input, which answer the CLI's dialog or question. Esc counts as typing:
+  Claude Code puts an interrupted prompt back into its input;
+- while the input is typed, the queue is `blocked: typing` and waits; the user
+  submits or clears their text, or sends the task anyway with `task.send`;
+- every key the user types restarts the 1 s, and an Enter of theirs holds the
+  pane for 3 s (`SETTLE_AFTER_ENTER`), so their own prompt reaches the CLI
+  before a task can.
+
+**A pool task** (sent to "the next free pane") goes to the first pane that
+asks for its next task with its own queue empty and running, a process that
+has shown its prompt, no unsent typing, the pool's CLI, and a directory at or
+below the pool's. The pane takes it at the
+moment it would type it, under the registry's lock, so one task is never typed
+twice; a new pool task nudges every live pane of its CLI in the workspace.
+
+**How it is typed.** The registry marks the task `sent` and hands over its
+text; the pane task writes it as one paste encoded against the pane's modes
+(bracketed when the CLI enabled bracketed paste, as both do), and 50 ms later
+(`ENTER_DELAY`, so a slash or `$` pop-over the text opened has settled) one
+Enter, a real key press and release encoded like a typed one (so a CLI in the
+kitty keyboard protocol gets `CSI 13 u`). The Enter counts as a key typed for
+the status machine, like any other. It is left out when, by then, the pane is
+no longer `idle` (a dialog opened) or the user wrote to it after the paste; the
+task then waits for an acknowledgement like any other and fails as not
+submitted without one. A paste the terminal refuses (text with line breaks for
+a CLI without bracketed paste, Ruling R21) fails the task and no Enter
+follows.
+
+**How it is followed**, from the signals the status machine already uses:
+
+| Signal | Task |
+|---|---|
+| the CLI takes the prompt: Claude Code's UserPromptSubmit (`PromptSubmitted`); Codex's rollout `task_started` (`TurnStarted`) — Codex's Enter fast path is no acknowledgement (R48). `Adapter::acknowledges_prompt` names it | `running` |
+| the turn ends: `TurnComplete` (Stop, notify, `task_complete`, `turn_aborted`) or Claude Code's quiet timeout | `ended` |
+| no acknowledgement within 10 s (`ACK_WAIT`), or a Codex Enter that started no turn (`NoTurnStarted`) | `failed` (not submitted), queue paused `failed` |
+| the process exits, or the pane closes | `failed` |
+
+A task whose pane waits for permission or input stays `running`: the user
+answers the CLI as always. `ended` means the turn the task started ended,
+which ply cannot tell from the user interrupting it. After a task ends or
+fails, the next waits for the pane to settle again; a task that failed as not
+submitted may have left its text in the CLI's input, so the input counts as
+typed until the user clears or submits it. Every step is logged at
+`info` with the pane and task ids.
+
+A task's text is typed as is, so a leading `!` or `#` does in the CLI what it
+does when typed there. The queue never hands one session's output to another
+(spec 1.4).
+
+## Skills
+
+The task form (⌘E) lists the skills each CLI offers on this machine
+(`skill.list`, Ruling R61). ply runs none of them and changes none of their
+files: it reads what the CLI itself reads and shows each skill with the text
+the user types to run it (`crates/daemon/src/skills.rs` walks the folders,
+`crates/agents/src/skills.rs` reads each file).
+
+| CLI | Source | Read from | Typed as |
+|---|---|---|---|
+| Claude Code | project | `<cwd>/.claude/skills/<name>/SKILL.md`, `<cwd>/.claude/commands/<name>.md` | `/<name>` |
+| Claude Code | user | `skills/<name>/SKILL.md` and `commands/<name>.md` in `$CLAUDE_CONFIG_DIR`, else `~/.claude` | `/<name>` |
+| Claude Code | plugin | `skills/` and `commands/` of each enabled plugin's install folder: `enabledPlugins` of the user's `settings.json`, then the project's `.claude/settings.json` and `.claude/settings.local.json` (a later file wins), looked up in `plugins/installed_plugins.json` (`installPath`; a project-scoped install only for its own project) | `/<plugin>:<name>` |
+| Claude Code | plugin | skills synced from the user's claude.ai account, `skills/synced/<account>/<name>/SKILL.md` | `/anthropic-skills:<name>` |
+| Codex | project | `.agents/skills/<name>/SKILL.md` and `.codex/skills/<name>/SKILL.md` in the pane's directory and each parent up to its repository root (8 levels at most, never the home directory) | `$<name>` |
+| Codex | user | `$CODEX_HOME/skills/<name>/SKILL.md` (default `~/.codex`), `~/.agents/skills/<name>/SKILL.md` | `$<name>` |
+| Codex | system | `$CODEX_HOME/skills/.system/<name>/SKILL.md`, the skills Codex installs itself | `$<name>` |
+| Codex | prompt | `$CODEX_HOME/prompts/<name>.md`, custom prompts | `/prompts:<name>` |
+
+A skill's name is its front matter's `name` when that can be typed as one word,
+else its folder's; a command or prompt is named after its file. The front
+matter's `description` (400 characters at most) and `argument-hint` (80) are
+shown beside it. A skill whose front matter says `user-invocable: false` is left
+out, as is a name holding white space, `/`, `$` or a control character, or
+starting with `-`. An earlier row wins when two offer the same invocation.
+Claude Code's built-in commands live inside its binary, so they are not listed;
+they can still be typed as a task's text.
+
+**Facts behind the table**, checked on 2026-09-26 against the installs of
+Claude Code 2.1.283 and Codex 0.157.1 (the Codex binary was searched, never run): Codex's
+bundled instructions tell it to "mention the skill as `$skill-name`" and its TUI
+says "Use $ to insert"; it ships its own skills under `skills/.system` and reads
+`.agents` folders; Claude Code keeps synced skills under `skills/synced/` with a
+`manifest.json` and names them `anthropic-skills:<name>`; skill folders may
+hold a colon (`team:deploy`), which the invocation keeps.
+
+Every read is bounded: 256 entries per folder, the first 32 KiB of a skill file
+(front matter that does not close within them does not count), 1 MiB of a
+settings file or the plugin registry, 512 skills per answer. A missing folder
+lists nothing; one that cannot be read is skipped and logged. An answer is
+reused for 10 s per CLI and directory, and `crates/daemon/tests/skills.rs`
+checks that every file it read is unchanged (INV-8).
+
 ## What ply never does to the user's configuration
 
 ply never writes `~/.claude/settings.json`, `~/.claude.json` or
 `~/.codex/config.toml` (INV-8); it reads `~/.claude.json` only for the usage
-cache above, and the user's `settings.json` files only for their `statusLine`. Everything it configures is per invocation:
+cache above, and the user's `settings.json` files only for their `statusLine`
+and their `enabledPlugins` (**Skills**). Everything it configures is per invocation:
 Claude Code's `--settings` file lives in ply's own `run/panes/<id>/`, and
 Codex's options are `-c` arguments. ply never passes a permission-skipping flag,
 never installs, updates or signs in either CLI, and adds no hook to the user's
@@ -685,6 +815,22 @@ terminal and the CLI repaints it.
   its models); `crates/daemon/src/usage.rs` (the sources, the bounded
   tail-first reading, missing and malformed files, the 5 s cache) and
   `crates/daemon/tests/usage.rs` (a real plyd, files unchanged).
+- `crates/daemon/src/panes/dispatch.rs` (when a task is typed, the settle
+  times, the typing block, acknowledgements, failures),
+  `crates/daemon/src/panes/queue.rs` (order, positions, restart, history) and
+  `crates/daemon/tests/dispatch.rs`: a real plyd typing two tasks into a
+  fake Claude Code one per turn, a Codex task queued before its first turn
+  going after it and confirmed by its rollout, a Codex pane resumed after a
+  restart typed into only after its first turn, the typing block and
+  `task.send`, a task never acknowledged failing and pausing its queue, pool
+  tasks going to the one free Claude Code pane in their folder and to a pane
+  opened after them, and the queue over C1 and across a restart. The fakes' `submit`
+  command reads what the pane submits (`crates/daemon/tests/common/fake.rs`).
+- `crates/agents/tests/skills.rs`: front matter (plain, quoted, folded,
+  nested, CRLF), names and invocations, opting out, the plugin registry;
+  `crates/daemon/src/skills.rs` (limits, precedence, the repository root) and
+  `crates/daemon/tests/skills.rs` (a real plyd listing both CLIs' skills from a
+  sandboxed home, files unchanged).
 - `crates/hook/tests/hook.rs`: the C3 line, the payload byte for byte, INV-12
   (plyd down, stdin held open, a listener that never reads) and INV-14 (stdout
   and stderr empty on fourteen bad paths).

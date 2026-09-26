@@ -45,6 +45,8 @@ const SPEC_7_2: CommandId[] = [
   'font.reset',
   'settings.open',
   'usage.show',
+  'task.dispatch',
+  'task.queue',
 ];
 
 function key(

@@ -420,6 +420,175 @@ export type UsageWindow = {
 };
 
 /**
+ * Where a task stands (Ruling R60); `ended` means the turn it started ended, which ply cannot tell from an interrupt.
+ */
+export type TaskState = 'queued' | 'sent' | 'running' | 'ended' | 'failed' | 'cancelled';
+
+/**
+ * The next-free-pane target: the first idle pane of `cli` whose directory is `cwd` or inside it takes the task.
+ */
+export type TaskPool = {
+  /**
+   * The CLI the pane must run.
+   */
+  cli: AgentCli;
+  /**
+   * Absolute directory the pane must be in, or below.
+   */
+  cwd: string;
+};
+
+/**
+ * Where `task.add` sends a task: one pane's queue, or a pool that the next free matching pane takes from.
+ */
+export type TaskTarget = { pane: number } | { pool: TaskPool };
+
+/**
+ * One task: text the user wrote or picked, typed verbatim into a pane when it is the user's turn (Ruling R60).
+ */
+export type Task = {
+  /**
+   * Task id.
+   */
+  id: number;
+  /**
+   * Workspace the task belongs to.
+   */
+  workspace_id: number;
+  /**
+   * The pane it is queued on or ran in; absent while a pool task waits for a pane.
+   */
+  pane_id?: number;
+  /**
+   * The pool it was added to, kept after a pane took it.
+   */
+  pool?: TaskPool;
+  /**
+   * Exactly what is typed, at most [`MAX_TASK_TEXT_BYTES`]; ply never changes it.
+   */
+  text: string;
+  /**
+   * The skill's invocation when the user picked one from `skill.list`; display only.
+   */
+  skill?: string;
+  /**
+   * Current state.
+   */
+  state: TaskState;
+  /**
+   * 0-based place among the queued tasks of its queue; kept as it was once the task leaves `queued`.
+   */
+  position: number;
+  /**
+   * Why a task failed or was cancelled, one line.
+   */
+  detail?: string;
+  /**
+   * When it was added.
+   */
+  created_at: number;
+  /**
+   * When plyd typed it.
+   */
+  sent_at?: number;
+  /**
+   * When the CLI acknowledged it.
+   */
+  started_at?: number;
+  /**
+   * When it ended, failed or was cancelled.
+   */
+  ended_at?: number;
+};
+
+/**
+ * Why a pane's queue holds its tasks back until the user resumes it.
+ */
+export type PauseReason = 'user' | 'restored' | 'failed';
+
+/**
+ * Why the next task of an unpaused queue cannot be typed right now.
+ */
+export type BlockReason = 'typing' | 'startup';
+
+/**
+ * The state of one pane's queue beyond its tasks; `queue.changed` carries it, and a queue with neither field is running.
+ */
+export type QueueState = {
+  /**
+   * The pane.
+   */
+  pane_id: number;
+  /**
+   * Set while the queue is paused.
+   */
+  paused?: PauseReason;
+  /**
+   * Set while the next task waits for something other than the pane's turn.
+   */
+  blocked?: BlockReason;
+};
+
+/**
+ * What `task.list` returns: the open tasks and the most recent finished ones, and every queue that is paused or blocked.
+ */
+export type TaskList = {
+  /**
+   * Queued, sent and running tasks, then finished ones newest first.
+   */
+  tasks: Array<Task>;
+  /**
+   * Queues that are paused or blocked; every other queue runs.
+   */
+  queues: Array<QueueState>;
+};
+
+/**
+ * Where a skill was found (Ruling R61).
+ */
+export type SkillSource = 'project' | 'user' | 'plugin' | 'system' | 'prompt';
+
+/**
+ * One skill or command a CLI offers, as its files on this machine describe it; ply only reads them.
+ */
+export type Skill = {
+  /**
+   * The skill's name.
+   */
+  name: string;
+  /**
+   * What the user types to run it, e.g. `/superpowers:brainstorming` or `$review-pr`.
+   */
+  invocation: string;
+  /**
+   * The front matter's `description`, when it has one.
+   */
+  description?: string;
+  /**
+   * The front matter's `argument-hint`, when it has one.
+   */
+  argument_hint?: string;
+  /**
+   * Where it was found.
+   */
+  source: SkillSource;
+  /**
+   * The plugin it comes from, for `source: plugin`.
+   */
+  plugin?: string;
+};
+
+/**
+ * What `skill.list` returns: the CLI's skills, project first, then user, plugins, system and prompts.
+ */
+export type SkillList = {
+  /**
+   * The skills, each invocation once.
+   */
+  skills: Array<Skill>;
+};
+
+/**
  * Messages from the app to plyd, tagged by `"t"`.
  */
 export type ClientMsg = ({ t: 'hello' } & Hello) | ({ t: 'req' } & Request);
@@ -488,6 +657,13 @@ export type Request = {
   | { m: 'settings.set'; p: SettingsSetParams }
   | { m: 'daemon.shutdown'; p: DaemonShutdownParams }
   | { m: 'usage.get'; p: Empty }
+  | { m: 'task.list'; p: WorkspaceRef }
+  | { m: 'task.add'; p: TaskAddParams }
+  | { m: 'task.cancel'; p: TaskRef }
+  | { m: 'task.move'; p: TaskMoveParams }
+  | { m: 'task.send'; p: TaskRef }
+  | { m: 'queue.pause'; p: QueuePauseParams }
+  | { m: 'skill.list'; p: SkillListParams }
 );
 
 /**
@@ -508,7 +684,14 @@ export type Call =
   | { m: 'settings.get'; p: Empty }
   | { m: 'settings.set'; p: SettingsSetParams }
   | { m: 'daemon.shutdown'; p: DaemonShutdownParams }
-  | { m: 'usage.get'; p: Empty };
+  | { m: 'usage.get'; p: Empty }
+  | { m: 'task.list'; p: WorkspaceRef }
+  | { m: 'task.add'; p: TaskAddParams }
+  | { m: 'task.cancel'; p: TaskRef }
+  | { m: 'task.move'; p: TaskMoveParams }
+  | { m: 'task.send'; p: TaskRef }
+  | { m: 'queue.pause'; p: QueuePauseParams }
+  | { m: 'skill.list'; p: SkillListParams };
 
 /**
  * The answer to a request: `{"t":"res","id","ok":true,"r":…}` or `{"t":"res","id","ok":false,"err":{…}}`.
@@ -715,6 +898,80 @@ export type DaemonShutdownParams = {
 };
 
 /**
+ * `task.add` params (Ruling R60): the text is typed verbatim into the target pane when it is the user's turn.
+ */
+export type TaskAddParams = {
+  /**
+   * Workspace of the target.
+   */
+  workspace_id: number;
+  /**
+   * One agent pane's queue, or a pool the next free matching pane takes from.
+   */
+  target: TaskTarget;
+  /**
+   * What to type: not empty, at most [`crate::pane::MAX_TASK_TEXT_BYTES`], no control characters but newline and tab.
+   */
+  text: string;
+  /**
+   * The invocation of the skill the text starts with, when it was picked from `skill.list`; display only.
+   */
+  skill?: string;
+};
+
+/**
+ * Params naming one task (`task.cancel`, `task.send`).
+ */
+export type TaskRef = {
+  /**
+   * Task id.
+   */
+  task_id: number;
+};
+
+/**
+ * `task.move` params: a queued task takes `position` among its queue's queued tasks (clamped to the end).
+ */
+export type TaskMoveParams = {
+  /**
+   * A queued task.
+   */
+  task_id: number;
+  /**
+   * Its new 0-based place.
+   */
+  position: number;
+};
+
+/**
+ * `queue.pause` params: `paused: false` resumes a queue paused for any reason.
+ */
+export type QueuePauseParams = {
+  /**
+   * The pane whose queue to pause or resume.
+   */
+  pane_id: number;
+  /**
+   * Pause (`true`) or resume (`false`).
+   */
+  paused: boolean;
+};
+
+/**
+ * `skill.list` params (Ruling R61): the CLI whose skills to list and the directory whose project skills count.
+ */
+export type SkillListParams = {
+  /**
+   * Claude Code or Codex.
+   */
+  cli: AgentCli;
+  /**
+   * Absolute directory, normally the target pane's.
+   */
+  cwd: string;
+};
+
+/**
  * Daemon events, tagged `"e"` with the payload in `"p"`; broadcast to every connected client.
  */
 export type Event =
@@ -724,7 +981,9 @@ export type Event =
   | { e: 'pane.progress'; p: PaneProgress }
   | { e: 'pane.meta'; p: PaneMeta }
   | { e: 'pane.exit'; p: PaneExit }
-  | { e: 'daemon.stopping'; p: DaemonStopping };
+  | { e: 'daemon.stopping'; p: DaemonStopping }
+  | { e: 'task.changed'; p: Task }
+  | { e: 'queue.changed'; p: QueueState };
 
 /**
  * `pane.removed` payload.
@@ -881,6 +1140,13 @@ export type Methods = {
   'settings.set': { params: SettingsSetParams; result: Empty };
   'daemon.shutdown': { params: DaemonShutdownParams; result: Empty };
   'usage.get': { params: Empty; result: Usage };
+  'task.list': { params: WorkspaceRef; result: TaskList };
+  'task.add': { params: TaskAddParams; result: Task };
+  'task.cancel': { params: TaskRef; result: Empty };
+  'task.move': { params: TaskMoveParams; result: Empty };
+  'task.send': { params: TaskRef; result: Empty };
+  'queue.pause': { params: QueuePauseParams; result: Empty };
+  'skill.list': { params: SkillListParams; result: SkillList };
 };
 
 /** A C1 method name. */
@@ -900,6 +1166,12 @@ export const MAX_LINE_BYTES = 1048576;
 
 /** Most panes one tab holds; `pane.create` into a full tab is `tab_full`. */
 export const MAX_PANES_PER_TAB = 4;
+
+/** Longest task text in bytes; `task.add` refuses a longer one. */
+export const MAX_TASK_TEXT_BYTES = 16384;
+
+/** Most queued tasks one pane's queue or one pool holds. */
+export const MAX_QUEUED_TASKS = 32;
 
 /** Response id plyd uses to reject a `hello`; requests start at 1. */
 export const HANDSHAKE_ID = 0;

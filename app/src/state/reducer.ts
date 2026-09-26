@@ -8,9 +8,13 @@ import type {
   Layout,
   Overlay,
   Pane,
+  QueueState,
   Settings,
+  Skill,
   Split,
   Tab,
+  Task,
+  TaskList,
   Usage,
   Workspace,
 } from './actions';
@@ -85,6 +89,31 @@ export interface UsageView {
   error: string | null;
 }
 
+/** The task queue as plyd reports it (Ruling R60): this workspace's tasks by id and the queues that are paused or blocked. */
+export interface TaskQueueView {
+  /** False until `task.list` answered, and for a plyd that predates the queue. */
+  available: boolean;
+  tasks: Readonly<Record<number, Task>>;
+  queues: Readonly<Record<number, QueueState>>;
+}
+
+/** The skills the dispatch form lists: the last `skill.list` answer for `key` (`cli cwd`). */
+export interface SkillsView {
+  key: string | null;
+  list: readonly Skill[];
+  loading: boolean;
+  error: string | null;
+}
+
+/** Progress of the dispatch form's submit: pending while `task.add` runs, `error` after a failure. */
+export interface DispatchStatus {
+  pending: boolean;
+  error: string | null;
+}
+
+/** Finished tasks the app keeps per workspace, as plyd does. */
+export const KEEP_FINISHED_TASKS = 200;
+
 /** The whole app state; tabs are in bar order with `position` equal to their index. */
 export interface AppState {
   connection: ConnectionState;
@@ -100,6 +129,9 @@ export interface AppState {
   /** Pane sizes dragged per tab, kept in memory; one that no longer fits the tab's shape is ignored (`paneSplit`). */
   splits: Readonly<Record<number, Split>>;
   usage: UsageView;
+  tasks: TaskQueueView;
+  skills: SkillsView;
+  taskForm: DispatchStatus;
   reducedMotion: boolean;
   env: Environment;
 }
@@ -131,6 +163,9 @@ export function initialState(env: Environment): AppState {
     notice: null,
     splits: {},
     usage: { shown: false, usage: null, error: null },
+    tasks: { available: false, tasks: {}, queues: {} },
+    skills: { key: null, list: [], loading: false, error: null },
+    taskForm: { pending: false, error: null },
     reducedMotion: false,
     env,
   };
@@ -306,7 +341,56 @@ function applyEvent(state: AppState, event: Event): AppState {
         state,
         event.p.kill_panes ? 'plyd is stopping its sessions' : 'plyd is restarting',
       );
+    case 'task.changed':
+      return upsertTask(state, event.p);
+    case 'queue.changed':
+      return setQueue(state, event.p);
   }
+}
+
+function isFinished(task: Task): boolean {
+  return task.state === 'ended' || task.state === 'failed' || task.state === 'cancelled';
+}
+
+/** Drops finished tasks beyond the newest `KEEP_FINISHED_TASKS`, as plyd's history does. */
+function pruneTasks(tasks: Record<number, Task>): Record<number, Task> {
+  const finished = Object.values(tasks).filter(isFinished);
+  if (finished.length <= KEEP_FINISHED_TASKS) return tasks;
+  finished.sort((a, b) => (a.ended_at ?? 0) - (b.ended_at ?? 0) || a.id - b.id);
+  const next = { ...tasks };
+  for (const t of finished.slice(0, finished.length - KEEP_FINISHED_TASKS)) delete next[t.id];
+  return next;
+}
+
+function upsertTask(state: AppState, task: Task): AppState {
+  if (state.workspace && task.workspace_id !== state.workspace.id) return state;
+  const tasks = pruneTasks({ ...state.tasks.tasks, [task.id]: task });
+  return { ...state, tasks: { ...state.tasks, tasks } };
+}
+
+function setQueue(state: AppState, queue: QueueState): AppState {
+  const { [queue.pane_id]: _old, ...rest } = state.tasks.queues;
+  const queues = queue.paused || queue.blocked ? { ...rest, [queue.pane_id]: queue } : rest;
+  return { ...state, tasks: { ...state.tasks, queues } };
+}
+
+function loadTasks(state: AppState, list: TaskList | null): AppState {
+  if (!list) return { ...state, tasks: { available: false, tasks: {}, queues: {} } };
+  const tasks: Record<number, Task> = {};
+  for (const t of list.tasks) {
+    if (!state.workspace || t.workspace_id === state.workspace.id) tasks[t.id] = t;
+  }
+  const queues: Record<number, QueueState> = {};
+  for (const q of list.queues) queues[q.pane_id] = q;
+  return { ...state, tasks: { available: true, tasks, queues } };
+}
+
+/** The dispatch form, on the focused pane when it runs an agent. */
+function openDispatch(state: AppState): AppState {
+  const pane = selectFocusedPane(state);
+  const overlay: Overlay =
+    pane && pane.cli !== 'shell' ? { kind: 'dispatch', paneId: pane.id } : { kind: 'dispatch' };
+  return { ...state, overlay, taskForm: { pending: false, error: null } };
 }
 
 function loadSession(
@@ -447,6 +531,10 @@ function runCommand(state: AppState, id: CommandId): AppState {
       return isTabFull(tab) ? showNotice(state, FULL_TAB_NOTICE) : state;
     case 'usage.show':
       return state.usage.shown ? state : { ...state, usage: { ...state.usage, shown: true } };
+    case 'task.dispatch':
+      return openDispatch(state);
+    case 'task.queue':
+      return { ...state, overlay: { kind: 'queue' } };
     default: {
       const digit = Number(id.slice('tab.go.'.length));
       const target = state.tabs[digit - 1];
@@ -559,6 +647,42 @@ function reduceAction(state: AppState, action: Action): AppState {
       return state.reducedMotion === action.value
         ? state
         : { ...state, reducedMotion: action.value };
+    case 'tasks/loaded':
+      return loadTasks(state, action.list);
+    case 'task/add':
+      return { ...state, taskForm: { pending: true, error: null } };
+    case 'task/added': {
+      const next = upsertTask(state, action.task);
+      const overlay = next.overlay?.kind === 'dispatch' ? null : next.overlay;
+      return { ...next, overlay, taskForm: { pending: false, error: null } };
+    }
+    case 'task/opened': {
+      const overlay = state.overlay?.kind === 'dispatch' ? null : state.overlay;
+      return { ...state, overlay, taskForm: { pending: false, error: null } };
+    }
+    case 'task/addFailed':
+      return { ...state, taskForm: { pending: false, error: action.message } };
+    case 'task/cancel':
+    case 'task/move':
+    case 'task/send':
+    case 'queue/pause':
+      return state;
+    case 'skills/query': {
+      const key = `${action.cli} ${action.cwd}`;
+      if (state.skills.key === key && !state.skills.error) return state;
+      return { ...state, skills: { key, list: [], loading: true, error: null } };
+    }
+    case 'skills/loaded':
+      return state.skills.key === action.key
+        ? {
+            ...state,
+            skills: { key: action.key, list: action.list.skills, loading: false, error: null },
+          }
+        : state;
+    case 'skills/failed':
+      return state.skills.key === action.key
+        ? { ...state, skills: { ...state.skills, loading: false, error: action.message } }
+        : state;
     case 'env/buildId': {
       if ((state.env.buildId ?? null) === action.value) return state;
       const { buildId: _old, ...env } = state.env;

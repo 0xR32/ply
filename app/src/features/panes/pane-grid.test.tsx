@@ -2,8 +2,8 @@ import { describe, expect, test } from 'bun:test';
 import { hasNativeTestRenderer, type TestRenderer } from '@gpuix/react/testing';
 import type { ReactNode } from 'react';
 import type { Action } from '../../state/actions';
-import type { PaneState } from '../../state/reducer';
-import { makePane, makeState, mountWithStore } from '../../state/test-support';
+import { type PaneState, reduce } from '../../state/reducer';
+import { makePane, makeState, makeTask, mountWithStore } from '../../state/test-support';
 import { tokens } from '../../theme/tokens';
 import { PaneGrid } from './pane-grid';
 
@@ -394,6 +394,122 @@ describe.if(hasNativeTestRenderer)('PaneGrid', () => {
     }
   });
 
+  test('a pane with queued tasks counts them in its header, held while its queue is paused', () => {
+    const state = reduce(demo(), {
+      type: 'tasks/loaded',
+      list: {
+        tasks: [
+          makeTask({ id: 1, pane_id: 1 }),
+          makeTask({ id: 2, pane_id: 1, position: 1 }),
+          makeTask({ id: 3, pane_id: 2 }),
+        ],
+        queues: [{ pane_id: 2, paused: 'user' }],
+      },
+    });
+    const { store, renderer, unmount } = mountWithStore(grid, state);
+    const seen: Action[] = [];
+    store.addEffect((a) => seen.push(a));
+    try {
+      expect(textOf(renderer, 'pane-1-queue')).toBe('2 queued');
+      expect(textOf(renderer, 'pane-2-queue')).toBe('1 held');
+      expect(renderer.findByTestId('pane-3-queue')).toBeUndefined();
+      const badge = bounds(renderer, 'pane-1-queue');
+      renderer.nativeSimulateClick(badge.x + badge.width / 2, badge.y + badge.height / 2);
+      expect(seen).toContainEqual({ type: 'command', id: 'task.queue' });
+    } finally {
+      unmount();
+    }
+  });
+
+  test('the queue strip says why the next task waits: typing sends it on request, a restart or failure resumes', () => {
+    const base = demo();
+    const panes = {
+      ...base.panes,
+      1: { ...(base.panes[1] as PaneState), status: 'idle' as const },
+      3: { ...(base.panes[3] as PaneState), cli: 'claude' as const, status: 'idle' as const },
+    };
+    const state = reduce(
+      { ...base, panes },
+      {
+        type: 'tasks/loaded',
+        list: {
+          tasks: [
+            makeTask({ id: 1, pane_id: 1, text: '/review-pr 212' }),
+            makeTask({ id: 2, pane_id: 2, text: 'never shown under a waiting pane' }),
+            makeTask({ id: 3, pane_id: 3, text: '/open-pr' }),
+            makeTask({
+              id: 4,
+              pane_id: 3,
+              state: 'failed',
+              detail: 'not submitted: x',
+              ended_at: 9,
+              text: '$e2e',
+            }),
+          ],
+          queues: [
+            { pane_id: 1, blocked: 'typing' },
+            { pane_id: 2, paused: 'restored' },
+            { pane_id: 3, paused: 'failed' },
+          ],
+        },
+      },
+    );
+    const { store, renderer, unmount } = mountWithStore(grid, state);
+    const seen: Action[] = [];
+    store.addEffect((a) => seen.push(a));
+    try {
+      expect(textOf(renderer, 'pane-1-queued')).toContain('/review-pr 212');
+      expect(textOf(renderer, 'pane-1-queued')).toContain('you typed here');
+      const send = bounds(renderer, 'queue-send-1');
+      renderer.nativeSimulateClick(send.x + send.width / 2, send.y + send.height / 2);
+      const hold = bounds(renderer, 'queue-hold-1');
+      renderer.nativeSimulateClick(hold.x + hold.width / 2, hold.y + hold.height / 2);
+      expect(renderer.findByTestId('pane-2-queued')).toBeUndefined();
+      expect(renderer.findByTestId('pane-2-waiting')).toBeDefined();
+      expect(textOf(renderer, 'pane-3-queued')).toContain('was not submitted');
+      const resume = bounds(renderer, 'queue-resume-3');
+      renderer.nativeSimulateClick(resume.x + resume.width / 2, resume.y + resume.height / 2);
+      expect(seen).toEqual([
+        { type: 'task/send', taskId: 1 },
+        { type: 'queue/pause', paneId: 1, paused: true },
+        { type: 'queue/pause', paneId: 3, paused: false },
+      ]);
+    } finally {
+      unmount();
+    }
+  });
+
+  test('a pane whose CLI has not shown its prompt says so and offers only to hold its queue', () => {
+    const base = demo();
+    const panes = {
+      ...base.panes,
+      1: { ...(base.panes[1] as PaneState), cli: 'codex' as const, status: 'idle' as const },
+    };
+    const state = reduce(
+      { ...base, panes },
+      {
+        type: 'tasks/loaded',
+        list: {
+          tasks: [makeTask({ id: 1, pane_id: 1, text: '$review-pr' })],
+          queues: [{ pane_id: 1, blocked: 'startup' }],
+        },
+      },
+    );
+    const { store, renderer, unmount } = mountWithStore(grid, state);
+    const seen: Action[] = [];
+    store.addEffect((a) => seen.push(a));
+    try {
+      expect(textOf(renderer, 'pane-1-queued')).toContain('$review-pr');
+      expect(textOf(renderer, 'pane-1-queued')).toContain('waits for its first prompt');
+      expect(renderer.findByTestId('queue-send-1')).toBeUndefined();
+      const hold = bounds(renderer, 'queue-hold-1');
+      renderer.nativeSimulateClick(hold.x + hold.width / 2, hold.y + hold.height / 2);
+      expect(seen).toEqual([{ type: 'queue/pause', paneId: 1, paused: true }]);
+    } finally {
+      unmount();
+    }
+  });
+
   test('a lost pane shows the resume strip, whose button resumes it through pane.resume', () => {
     const state = demo();
     const panes = {
@@ -442,6 +558,53 @@ describe.if(hasNativeTestRenderer)('PaneGrid', () => {
       const chrome = countNodes(renderer, (id) => id?.startsWith('terminal-') ?? false);
       expect(total).toBeLessThan(2000);
       expect(chrome).toBeLessThan(400);
+    } finally {
+      unmount();
+    }
+  });
+
+  test('with queue badges and strips on every pane, a 4-pane tab stays under the budget', () => {
+    const state = demo();
+    const idle = (id: number) => ({
+      ...(state.panes[id] as PaneState),
+      cli: 'claude' as const,
+      status: 'idle' as const,
+    });
+    const four = reduce(
+      {
+        ...state,
+        panes: {
+          1: idle(1),
+          2: idle(2),
+          3: idle(3),
+          4: { ...idle(4), tab_id: 1, position: 3 },
+        },
+        tabs: [{ ...state.tabs[0], pane_ids: [1, 2, 3, 4] } as (typeof state.tabs)[number]],
+      },
+      {
+        type: 'tasks/loaded',
+        list: {
+          tasks: [1, 2, 3, 4].flatMap((pane) => [
+            makeTask({ id: pane * 10, pane_id: pane }),
+            makeTask({ id: pane * 10 + 1, pane_id: pane, position: 1 }),
+          ]),
+          queues: [
+            { pane_id: 1, blocked: 'typing' },
+            { pane_id: 2, paused: 'restored' },
+            { pane_id: 3, paused: 'user' },
+            { pane_id: 4, paused: 'failed' },
+          ],
+        },
+      },
+    );
+    const { renderer, unmount } = mountWithStore(grid, four);
+    try {
+      for (const pane of [1, 2, 3, 4]) {
+        expect(renderer.findByTestId(`pane-${pane}-queue`)).toBeDefined();
+        expect(renderer.findByTestId(`pane-${pane}-queued`)).toBeDefined();
+      }
+      expect(countNodes(renderer, () => false)).toBeLessThan(2000);
+      expect(countNodes(renderer, (id) => id?.startsWith('terminal-') ?? false)).toBeLessThan(500);
     } finally {
       unmount();
     }
