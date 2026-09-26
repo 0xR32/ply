@@ -105,8 +105,9 @@ crates/daemon/src
 ├── server/          control.rs (C1) · data.rs (C2) · hooks.rs (C3) · mod.rs
 ├── panes/           registry.rs (workspaces, tabs, panes, mirrored to SQLite) · pane.rs (one task per pane:
 │                    the only owner of its Engine, pty channels and attached clients) · agent.rs (one agent
-│                    process's session, status machine, progress limit and tailer) · state.rs (the spec 6.3
-│                    machine) · launch.rs (create, resume, restore) · mod.rs
+│                    process's session, status machine, progress limit, tailer and task dispatch) · state.rs (the
+│                    spec 6.3 machine) · launch.rs (create, resume, restore) · queue.rs (the task queue's state,
+│                    R60) · dispatch.rs (when a queued task is typed and how it is followed) · mod.rs
 ├── tail.rs          C4: finding and tailing a Codex pane's rollout
 ├── usage.rs         usage.get: Claude panes' status line reports, else the CLIs' own files, bounded, cached 5 s
 ├── skills.rs        skill.list: the folders each CLI reads its skills from, bounded, read-only, cached 10 s
@@ -157,7 +158,9 @@ keyed by content hash, so a scroll moves the rows it kept. Every GPUIX host node
 costs about 0.01 ms per frame, so runs are coalesced and a test keeps a 4-pane
 tab under 2 000 host nodes. Keys, mouse, paste and focus go
 back as C2 events and plyd encodes them against the pane's live modes; the app
-never mirrors terminal modes. `docs/terminal.md` has the details and the
+never mirrors terminal modes. A queued task (Ruling R60) is typed the same way,
+by plyd: one paste and one Enter encoded against the pane's modes, only when it
+is the user's turn there (`docs/agents.md`, **Dispatching tasks**). `docs/terminal.md` has the details and the
 measured numbers.
 
 ## Startup

@@ -125,6 +125,10 @@ impl Adapter for CodexAdapter {
     fn quiet_timeout(&self) -> Option<Duration> {
         None
     }
+
+    fn acknowledges_prompt(&self, signal: &StatusSignal) -> bool {
+        matches!(signal, StatusSignal::TurnStarted)
+    }
 }
 
 const NPM_PACKAGE: &str = "@openai/codex";

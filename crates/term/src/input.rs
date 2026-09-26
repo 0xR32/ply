@@ -20,8 +20,8 @@ use ply_proto::data::{
 use crate::engine::{Engine, KeyInput, MouseInput, PasteResult};
 use crate::error::Result;
 
-/// `GhosttyKey` of Return, the key R-R6 rewrites.
-const KEY_ENTER: u16 = 58;
+/// `GhosttyKey` of Return, the key R-R6 rewrites and the one plyd presses to submit a queued task.
+pub const KEY_ENTER: u16 = 58;
 
 /// A client input frame to encode.
 #[derive(Debug, Clone, Copy, PartialEq)]

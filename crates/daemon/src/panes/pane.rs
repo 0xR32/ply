@@ -23,12 +23,14 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use ply_agents::LaunchSpec;
-use ply_proto::data::{Exit, FetchHistory, Frame, History, MAX_FRAME_LEN};
+use ply_proto::data::{
+    Exit, FetchHistory, Frame, History, KeyAction, KeyEvent, MAX_FRAME_LEN, Mods, Paste,
+};
 use ply_proto::hook::HookEnvelope;
-use ply_proto::pane::{AgentCli, Cli, OptionAsMeta, PaneId, PaneStatus, Rgb};
+use ply_proto::pane::{AgentCli, Cli, OptionAsMeta, PaneId, PaneStatus, Rgb, TaskId};
 use ply_term::{
-    ClipboardWrite, Compression, DeltaBuilder, Encoded, Engine, EngineOutput, Input, Palette,
-    Update, encode_input,
+    ClipboardWrite, Compression, DeltaBuilder, Encoded, Engine, EngineOutput, Input, KEY_ENTER,
+    Palette, Update, encode_input,
 };
 use rustix::process::Signal;
 use tokio::sync::{mpsc, oneshot};
@@ -36,7 +38,7 @@ use tokio::sync::{mpsc, oneshot};
 use crate::branch;
 use crate::daemon::{Shared, unix_now};
 use crate::osc::{decode_osc7, is_enter, osc9_bodies};
-use crate::panes::agent::Agent;
+use crate::panes::agent::{Agent, Typed};
 use crate::pty::{Geometry, PaneProcess, PtyChannels, PtyWrite};
 use crate::publisher::{AckOutcome, Cadence, ClientWindow, IdleTimer, SyncHold};
 use crate::tail::TailMsg;
@@ -69,6 +71,10 @@ pub enum PaneCmd {
     },
     /// Bytes for the pty as they are (`pane.answer` digits).
     Write(Vec<u8>),
+    /// The pane's task queue changed (Ruling R60): look at it again once the pane has settled.
+    Queue,
+    /// `task.send`: type this queued task at the pane's next settled moment, over the user's unsent typing.
+    SendNow(TaskId),
     /// A new palette from `theme.set`.
     SetPalette(Palette),
     /// A new `option_as_meta` setting.
@@ -438,6 +444,84 @@ impl PaneTask {
         }
     }
 
+    /// The user's own key or raw input, which the task queue must not type over.
+    fn user_typed(&mut self, bytes: &[u8], now: Instant) {
+        if let Some(agent) = self.agent.as_mut() {
+            agent.on_user_input(&self.shared, bytes, now);
+        }
+    }
+
+    /// Writes what the agent's dispatch decided to type: a queued task's paste, then its Enter as a real key press.
+    fn type_queued(&mut self, now: Instant) {
+        let Some(writes) = self.agent.as_mut().map(Agent::take_writes) else {
+            return;
+        };
+        for write in writes {
+            match write {
+                Typed::Paste(text) => {
+                    let paste = Paste {
+                        allow_unsafe: false,
+                        text,
+                    };
+                    match encode_input(&mut self.engine, Input::Paste(&paste)) {
+                        Ok(Encoded::Bytes(bytes)) => {
+                            tracing::debug!(
+                                pane_id = self.id,
+                                bytes = bytes.len(),
+                                "pasting a queued task"
+                            );
+                            self.write(bytes);
+                        }
+                        Ok(Encoded::Nothing) => {}
+                        Ok(Encoded::PasteRejected) => {
+                            tracing::warn!(
+                                pane_id = self.id,
+                                "the terminal refused a queued task's paste"
+                            );
+                            if let Some(agent) = self.agent.as_mut() {
+                                agent.paste_refused(&self.shared, now);
+                            }
+                        }
+                        Err(e) => {
+                            tracing::warn!(pane_id = self.id, error = %e, "cannot encode a queued task's paste");
+                            if let Some(agent) = self.agent.as_mut() {
+                                agent.paste_refused(&self.shared, now);
+                            }
+                        }
+                    }
+                }
+                Typed::Enter => {
+                    for action in [KeyAction::Press, KeyAction::Release] {
+                        let enter = KeyEvent {
+                            key: KEY_ENTER,
+                            mods: Mods::empty(),
+                            consumed_mods: Mods::empty(),
+                            action,
+                            composing: false,
+                            unshifted_codepoint: 0,
+                            text: String::new(),
+                        };
+                        match encode_input(&mut self.engine, Input::Key(&enter)) {
+                            Ok(Encoded::Bytes(bytes)) => {
+                                tracing::debug!(
+                                    pane_id = self.id,
+                                    ?bytes,
+                                    "pressing Enter for a queued task"
+                                );
+                                self.write(bytes);
+                            }
+                            Ok(Encoded::Nothing | Encoded::PasteRejected) => {}
+                            Err(e) => {
+                                tracing::warn!(pane_id = self.id, error = %e, "cannot encode Enter for a queued task");
+                            }
+                        }
+                    }
+                    self.key_typed(true, now);
+                }
+            }
+        }
+    }
+
     fn on_command(&mut self, cmd: PaneCmd) {
         let now = Instant::now();
         match cmd {
@@ -461,6 +545,19 @@ impl PaneTask {
                 self.write(bytes);
                 self.key_typed(enter, now);
             }
+            PaneCmd::Queue => {
+                if let Some(agent) = self.agent.as_mut() {
+                    agent.nudge(&self.shared, now);
+                }
+            }
+            PaneCmd::SendNow(task) => match self.agent.as_mut() {
+                Some(agent) => agent.send_now(&self.shared, task, now),
+                None => tracing::warn!(
+                    pane_id = self.id,
+                    task_id = task,
+                    "task.send for a pane without an agent ignored"
+                ),
+            },
             PaneCmd::SetPalette(palette) => {
                 if let Err(e) = self.engine.set_palette(&palette) {
                     tracing::warn!(pane_id = self.id, error = %e, "cannot apply the new palette");
@@ -616,6 +713,7 @@ impl PaneTask {
         match frame {
             Frame::InputRaw(bytes) => {
                 let enter = is_enter(&bytes);
+                self.user_typed(&bytes, now);
                 self.write(bytes);
                 self.key_typed(enter, now);
             }
@@ -662,9 +760,15 @@ impl PaneTask {
                     self.engine.reset_mouse_buttons();
                 }
                 let key = matches!(frame, Frame::Key(_));
+                let paste = matches!(frame, Frame::Paste(_));
                 match encode_input(&mut self.engine, input) {
                     Ok(Encoded::Bytes(bytes)) => {
                         let enter = is_enter(&bytes);
+                        if key {
+                            self.user_typed(&bytes, now);
+                        } else if paste && let Some(agent) = self.agent.as_mut() {
+                            agent.on_user_paste(&self.shared, now);
+                        }
                         self.write_key(bytes, key.then_some(received));
                         if key {
                             self.key_typed(enter, now);
@@ -933,7 +1037,7 @@ impl PaneTask {
         self.input = None;
         self.writes.clear();
         if let Some(agent) = self.agent.as_mut() {
-            agent.exit();
+            agent.exit(&self.shared, Instant::now());
         }
         let close = self
             .shared
@@ -984,6 +1088,7 @@ impl PaneTask {
         if let Some(agent) = self.agent.as_mut() {
             agent.on_tick(&self.shared, now);
         }
+        self.type_queued(now);
         if self.kill_at.is_some_and(|t| t <= now) {
             self.kill_at = None;
             self.kill_group();

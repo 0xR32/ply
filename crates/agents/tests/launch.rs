@@ -466,3 +466,26 @@ fn codex_version_comes_from_the_package_metadata() {
         Err(Error::Json { .. })
     ));
 }
+
+#[test]
+fn a_prompt_is_acknowledged_by_userpromptsubmit_in_claude_and_task_started_in_codex() {
+    use ply_agents::{StatusSignal, adapter};
+    use ply_proto::pane::AgentCli;
+    let claude = adapter(AgentCli::Claude);
+    let codex = adapter(AgentCli::Codex);
+    assert!(claude.acknowledges_prompt(&StatusSignal::PromptSubmitted));
+    assert!(!claude.acknowledges_prompt(&StatusSignal::TurnStarted));
+    assert!(codex.acknowledges_prompt(&StatusSignal::TurnStarted));
+    assert!(
+        !codex.acknowledges_prompt(&StatusSignal::PromptSubmitted),
+        "Codex's Enter is only a guess until the rollout confirms a turn (R48)"
+    );
+    for other in [
+        StatusSignal::Ready,
+        StatusSignal::TurnComplete,
+        StatusSignal::KeyTyped,
+        StatusSignal::NoTurnStarted,
+    ] {
+        assert!(!claude.acknowledges_prompt(&other) && !codex.acknowledges_prompt(&other));
+    }
+}

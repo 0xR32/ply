@@ -126,6 +126,10 @@ impl Adapter for ClaudeAdapter {
     fn quiet_timeout(&self) -> Option<Duration> {
         Some(QUIET_TIMEOUT)
     }
+
+    fn acknowledges_prompt(&self, signal: &StatusSignal) -> bool {
+        matches!(signal, StatusSignal::PromptSubmitted)
+    }
 }
 
 const NPM_PACKAGE: &str = "@anthropic-ai/claude-code";

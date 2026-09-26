@@ -612,6 +612,60 @@ with its age, and reads their files without ever writing them
 An answer is reused for 5 s. A CLI with no readable record is simply absent,
 and the view says "No usage recorded yet".
 
+## Dispatching tasks
+
+The task queue (Ruling R60) lets the user line up prompts and skills for a pane
+and has plyd type each one in when it is their turn there
+(`docs/control-channel.md`, **The task queue**). plyd types a task's text
+exactly as written, into the pane's terminal as the user would, and nothing
+else: it never answers a dialog, passes an option or changes a prompt. Each
+agent process's `Agent` owns a small clocked machine for it
+(`crates/daemon/src/panes/dispatch.rs`); the registry holds the queue.
+
+**When a task is typed.** Only into an agent pane that has been `idle` for 1 s
+(`SETTLE`), has no other task typed, and whose queue is not paused, and only
+the queue's first task. The user's own input comes first:
+
+- any key, raw input or paste of the user's marks the pane's input as typed,
+  since the CLI may be holding text the task would be appended to; Enter,
+  Ctrl+C, Ctrl+U (in either key encoding) or the CLI reporting a prompt
+  (`PromptSubmitted`, `TurnStarted`) or a new session (`Ready`) clear it. Esc
+  counts as typing: Claude Code puts an interrupted prompt back into its input;
+- while the input is typed, the queue is `blocked: typing` and waits; the user
+  submits or clears their text, or sends the task anyway with `task.send`;
+- every key the user types restarts the 1 s, and an Enter of theirs holds the
+  pane for 3 s (`SETTLE_AFTER_ENTER`), so their own prompt reaches the CLI
+  before a task can.
+
+**How it is typed.** The registry marks the task `sent` and hands over its
+text; the pane task writes it as one paste encoded against the pane's modes
+(bracketed when the CLI enabled bracketed paste, as both do), and 50 ms later
+(`ENTER_DELAY`, so a slash or `$` pop-over the text opened has settled) one
+Enter, a real key press and release encoded like a typed one (so a CLI in the
+kitty keyboard protocol gets `CSI 13 u`). The Enter counts as a key typed for
+the status machine, like any other. A paste the terminal refuses (text with
+line breaks for a CLI without bracketed paste, Ruling R21) fails the task and
+no Enter follows.
+
+**How it is followed**, from the signals the status machine already uses:
+
+| Signal | Task |
+|---|---|
+| the CLI takes the prompt: Claude Code's UserPromptSubmit (`PromptSubmitted`); Codex's rollout `task_started` (`TurnStarted`) — Codex's Enter fast path is no acknowledgement (R48). `Adapter::acknowledges_prompt` names it | `running` |
+| the turn ends: `TurnComplete` (Stop, notify, `task_complete`, `turn_aborted`) or Claude Code's quiet timeout | `ended` |
+| no acknowledgement within 10 s (`ACK_WAIT`), or a Codex Enter that started no turn (`NoTurnStarted`) | `failed` (not submitted), queue paused `failed` |
+| the process exits, or the pane closes | `failed` |
+
+A task whose pane waits for permission or input stays `running`: the user
+answers the CLI as always. `ended` means the turn the task started ended,
+which ply cannot tell from the user interrupting it. After a task ends or
+fails, the next waits for the pane to settle again. Every step is logged at
+`info` with the pane and task ids.
+
+A task's text is typed as is, so a leading `!` or `#` does in the CLI what it
+does when typed there. The queue never hands one session's output to another
+(spec 1.4).
+
 ## Skills
 
 The task form (⌘E) lists the skills each CLI offers on this machine
@@ -729,6 +783,14 @@ terminal and the CLI repaints it.
   its models); `crates/daemon/src/usage.rs` (the sources, the bounded
   tail-first reading, missing and malformed files, the 5 s cache) and
   `crates/daemon/tests/usage.rs` (a real plyd, files unchanged).
+- `crates/daemon/src/panes/dispatch.rs` (when a task is typed, the settle
+  times, the typing block, acknowledgements, failures),
+  `crates/daemon/src/panes/queue.rs` (order, positions, restart, history) and
+  `crates/daemon/tests/dispatch.rs`: a real plyd typing two tasks into a
+  fake Claude Code one per turn, a Codex task confirmed by its rollout, the
+  typing block and `task.send`, a task never acknowledged failing and pausing
+  its queue, and the queue over C1 and across a restart. The fakes' `submit`
+  command reads what the pane submits (`crates/daemon/tests/common/fake.rs`).
 - `crates/agents/tests/skills.rs`: front matter (plain, quoted, folded,
   nested, CRLF), names and invocations, opting out, the plugin registry;
   `crates/daemon/src/skills.rs` (limits, precedence, the repository root) and

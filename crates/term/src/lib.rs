@@ -81,6 +81,6 @@ pub use engine::{
 };
 pub use error::{Error, Result};
 #[cfg(feature = "engine")]
-pub use input::{Encoded, Input, encode_input};
+pub use input::{Encoded, Input, KEY_ENTER, encode_input};
 pub use palette::Palette;
 pub use replica::{Replica, ReplicaRow, ResolvedCell, cells_text};

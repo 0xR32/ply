@@ -276,6 +276,9 @@ pub trait Adapter: Send + Sync {
     /// Silence after which a `running` pane with no hook becomes `idle` ([`StatusSignal::QuietTimeout`]); `None` disables it.
     fn quiet_timeout(&self) -> Option<Duration>;
 
+    /// Whether `signal` is the CLI confirming it took a prompt typed into it (Ruling R60): a queued task is then `running`.
+    fn acknowledges_prompt(&self, signal: &StatusSignal) -> bool;
+
     /// Passes when `found` is at least [`Adapter::min_version`]; else [`Error::CliTooOld`].
     fn check_version(&self, found: &CliVersion) -> Result<()> {
         let min = self.min_version();

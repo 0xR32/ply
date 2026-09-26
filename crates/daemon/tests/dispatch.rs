@@ -7,10 +7,10 @@ mod common;
 
 use std::time::Duration;
 
-use common::fake::{Fake, WAIT_FOR_START, hook_program, install, wait_status};
-use common::{Control, Sandbox};
+use common::fake::{Fake, WAIT_FOR_START, hook_program, install, typed, wait_status};
+use common::{Control, Data, Sandbox, eventually};
 use ply_proto::control::{ErrorCode, Event};
-use ply_proto::pane::{PaneStatus, PauseReason, Task, TaskState};
+use ply_proto::pane::{BlockReason, PaneStatus, PauseReason, Task, TaskState};
 use serde_json::{Value, json};
 
 const WAIT: Duration = Duration::from_secs(10);
@@ -145,4 +145,162 @@ fn a_restart_keeps_the_queued_tasks_and_holds_their_queue() {
         list["queues"],
         json!([{"pane_id": pane, "paused": "restored"}])
     );
+}
+
+const TURN: Duration = Duration::from_secs(20);
+
+#[test]
+fn two_tasks_are_typed_into_a_claude_pane_one_per_turn() {
+    let sb = Sandbox::new("typed-claude");
+    install(&sb);
+    hook_program();
+    let _plyd = sb.start();
+    let (mut c, ws) = sb.control();
+    let pane = claude_pane(&mut c, &sb, ws, None);
+    let fake = Fake::ready(&sb, pane);
+    wait_status(&mut c, pane, PaneStatus::Idle, WAIT);
+    fake.send("submit 1");
+
+    let a = add(&mut c, ws, pane, "/review-pr #212");
+    let b = add(&mut c, ws, pane, "then write the summary\nin two lines");
+    let sent_a = changed(&mut c, a.id, TaskState::Sent);
+    changed(&mut c, a.id, TaskState::Running);
+    let ended_a = match c.wait_event(
+        TURN,
+        |e| matches!(e, Event::TaskChanged(t) if t.id == a.id && t.state == TaskState::Ended),
+    ) {
+        Some(Event::TaskChanged(t)) => *t,
+        other => panic!("task a did not end: {other:?}"),
+    };
+    let sent_b = changed(&mut c, b.id, TaskState::Sent);
+    changed(&mut c, b.id, TaskState::Running);
+    assert!(
+        c.wait_event(
+            TURN,
+            |e| matches!(e, Event::TaskChanged(t) if t.id == b.id && t.state == TaskState::Ended)
+        )
+        .is_some()
+    );
+    assert!(sent_a.sent_at.is_some());
+    assert!(
+        sent_b.sent_at >= ended_a.ended_at,
+        "the second task waits for the first turn to end"
+    );
+    assert_eq!(
+        typed(&sb, "claude"),
+        ["/review-pr #212", "then write the summary\\nin two lines"],
+        "typed verbatim, a paste's lines kept together"
+    );
+}
+
+#[test]
+fn a_codex_task_runs_once_its_rollout_starts_a_turn() {
+    let sb = Sandbox::new("typed-codex");
+    install(&sb);
+    hook_program();
+    let _plyd = sb.start();
+    let (mut c, ws) = sb.control();
+    let pane = c
+        .call(
+            "pane.create",
+            json!({"workspace_id": ws, "cli": "codex", "cwd": sb.home}),
+        )
+        .unwrap()["id"]
+        .as_u64()
+        .unwrap();
+    let fake = Fake::ready(&sb, pane);
+    wait_status(&mut c, pane, PaneStatus::Idle, WAIT);
+    fake.send("session");
+    fake.send("submit 1");
+    let task = add(&mut c, ws, pane, "$review-pr");
+    changed(&mut c, task.id, TaskState::Sent);
+    changed(&mut c, task.id, TaskState::Running);
+    assert!(
+        c.wait_event(
+            TURN,
+            |e| matches!(e, Event::TaskChanged(t) if t.id == task.id && t.state == TaskState::Ended)
+        )
+        .is_some()
+    );
+    assert_eq!(typed(&sb, "codex"), ["$review-pr"]);
+}
+
+#[test]
+fn unsent_typing_blocks_the_queue_until_the_user_sends_the_task() {
+    let sb = Sandbox::new("typed-block");
+    install(&sb);
+    hook_program();
+    let _plyd = sb.start();
+    let (mut c, ws) = sb.control();
+    let pane = claude_pane(&mut c, &sb, ws, None);
+    let fake = Fake::ready(&sb, pane);
+    wait_status(&mut c, pane, PaneStatus::Idle, WAIT);
+    fake.send("submit 1");
+    let (mut d, first) = Data::attach(&sb.data_socket(), pane, 80, 24).unwrap();
+    d.apply(&first, true).unwrap();
+    d.input(b"half-").unwrap();
+
+    let task = add(&mut c, ws, pane, "typed anyway");
+    let blocked = c.wait_event(
+        WAIT,
+        |e| matches!(e, Event::QueueChanged(q) if q.pane_id == pane),
+    );
+    assert!(
+        matches!(&blocked, Some(Event::QueueChanged(q)) if q.blocked == Some(BlockReason::Typing)),
+        "{blocked:?}"
+    );
+    std::thread::sleep(Duration::from_secs(2));
+    assert!(
+        typed(&sb, "claude").is_empty(),
+        "nothing typed over the user's input"
+    );
+
+    c.call("task.send", json!({"task_id": task.id})).unwrap();
+    changed(&mut c, task.id, TaskState::Running);
+    assert!(eventually(WAIT, || !typed(&sb, "claude").is_empty()));
+    assert_eq!(
+        typed(&sb, "claude"),
+        ["half-typed anyway"],
+        "sent over the user's text, as they chose"
+    );
+}
+
+#[test]
+fn a_task_the_cli_never_acknowledges_fails_and_pauses_the_queue() {
+    let sb = Sandbox::new("typed-fail");
+    install(&sb);
+    hook_program();
+    let _plyd = sb.start();
+    let (mut c, ws) = sb.control();
+    let pane = claude_pane(&mut c, &sb, ws, None);
+    let fake = Fake::ready(&sb, pane);
+    wait_status(&mut c, pane, PaneStatus::Idle, WAIT);
+    fake.send("submit none");
+    let a = add(&mut c, ws, pane, "never acknowledged");
+    let b = add(&mut c, ws, pane, "never typed");
+    changed(&mut c, a.id, TaskState::Sent);
+    let failed = match c.wait_event(
+        TURN,
+        |e| matches!(e, Event::TaskChanged(t) if t.id == a.id && t.state == TaskState::Failed),
+    ) {
+        Some(Event::TaskChanged(t)) => *t,
+        other => panic!("task a did not fail: {other:?}"),
+    };
+    assert!(failed.detail.unwrap().starts_with("not submitted"));
+    let list = c.call("task.list", json!({"workspace_id": ws})).unwrap();
+    assert_eq!(
+        list["queues"],
+        json!([{"pane_id": pane, "paused": "failed"}])
+    );
+    std::thread::sleep(Duration::from_secs(2));
+    assert_eq!(typed(&sb, "claude"), ["never acknowledged"]);
+    let still = c.call("task.list", json!({"workspace_id": ws})).unwrap();
+    let b_state = still["tasks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["id"] == b.id)
+        .unwrap()["state"]
+        .clone();
+    assert_eq!(b_state, "queued");
 }

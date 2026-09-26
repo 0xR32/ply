@@ -38,10 +38,33 @@ notify() {
   "$hook" codex "{\"type\":\"agent-turn-complete\",\"thread-id\":\"$1\",\"turn-id\":\"00000000-0000-7000-8000-00000000ffff\",\"cwd\":\"$cwd\",\"last-assistant-message\":\"done\"}"
 }
 
+esc=$(printf '\033')
+submitter() {
+  stty sane 2>/dev/null
+  printf '%s[?2004h' "$esc"
+  pending=
+  n=0
+  while IFS= read -r got; do
+    pending="$pending$got"
+    case "$pending" in
+      *"$esc[200~"*) case "$pending" in *"$esc[201~"*) ;; *) pending="$pending\\n"; continue ;; esac ;;
+    esac
+    text=$(printf '%s' "$pending" | sed -e "s/$esc\[200~//" -e "s/$esc\[201~//")
+    pending=
+    printf '%s\n' "$text" >> "$HOME/fake-codex-typed.log"
+    [ "$1" = none ] && continue
+    n=$((n + 1))
+    record "{\"type\":\"event_msg\",\"payload\":{\"type\":\"task_started\",\"turn_id\":\"typed-$n\"}}"
+    sleep "$1"
+    record "{\"type\":\"event_msg\",\"payload\":{\"type\":\"task_complete\",\"turn_id\":\"typed-$n\"}}"
+    notify "$thread"
+  done
+}
+
 fifo="$HOME/fake-$PLY_PANE_ID.cmd"
 rm -f "$fifo"
 mkfifo "$fifo" || exit 71
-exec 3<>"$fifo"
+exec 3<>"$fifo" 4<&0
 printf 'fake codex %s in %s\r\n' "$thread" "$cwd"
 while IFS= read -r line <&3; do
   cmd=${line%% *}
@@ -53,6 +76,7 @@ while IFS= read -r line <&3; do
     record) record "$rest" ;;
     turn) record "{\"type\":\"event_msg\",\"payload\":{\"type\":\"${rest%% *}\",\"turn_id\":\"${rest#* }\"}}" ;;
     notify) notify "${rest:-$thread}" ;;
+    submit) submitter "$rest" <&4 & ;;
     osc9) printf '\033]9;%s\007' "$rest" ;;
     out) printf '%s\r\n' "$rest" ;;
     exit) rm -f "$fifo"; exit "$rest" ;;

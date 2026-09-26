@@ -19,9 +19,9 @@ use ply_proto::control::{
     TaskAddParams,
 };
 use ply_proto::pane::{
-    Cli, Layout, MAX_PANES_PER_TAB, MAX_QUEUED_TASKS, Pane, PaneId, PaneStatus, PauseReason,
-    Progress, Session, Settings, Tab, Task, TaskId, TaskList, TaskState, TaskTarget, TerminalTheme,
-    UnixSeconds, Workspace,
+    BlockReason, Cli, Layout, MAX_PANES_PER_TAB, MAX_QUEUED_TASKS, Pane, PaneId, PaneStatus,
+    PauseReason, Progress, Session, Settings, Tab, Task, TaskId, TaskList, TaskState, TaskTarget,
+    TerminalTheme, UnixSeconds, Workspace,
 };
 use tokio::sync::{broadcast, mpsc};
 
@@ -886,6 +886,118 @@ impl Registry {
         Ok(())
     }
 
+    /// The task `pane`'s queue offers now: its head while the queue runs and no task is typed there; none for a shell.
+    pub fn queue_head(&self, pane: PaneId) -> Option<TaskId> {
+        let entry = self.panes.get(&pane)?;
+        if entry.pane.cli == Cli::Shell || self.queues.active(pane).is_some() {
+            return None;
+        }
+        self.queues.head(pane).map(|t| t.id)
+    }
+
+    /// Claims `task` for typing: marks it `sent` and returns its text when `pane` is idle, has no typed task and offers
+    /// it as its head; `forced` (`task.send`) takes any queued task of the pane, past a pause. `None` otherwise.
+    pub fn take_task(
+        &mut self,
+        pane: PaneId,
+        task: TaskId,
+        forced: bool,
+        now: UnixSeconds,
+    ) -> Option<String> {
+        let entry = self.panes.get(&pane)?;
+        if entry.pane.status != PaneStatus::Idle
+            || entry.pane.cli == Cli::Shell
+            || self.queues.active(pane).is_some()
+        {
+            return None;
+        }
+        let queued = self.queues.get(task)?;
+        if queued.state != TaskState::Queued || queued.pane_id != Some(pane) {
+            return None;
+        }
+        if !forced && self.queues.head(pane).map(|h| h.id) != Some(task) {
+            return None;
+        }
+        let text = queued.text.clone();
+        let changed = self.queues.set_state(task, TaskState::Sent, None, now);
+        self.apply_tasks(changed);
+        Some(text)
+    }
+
+    /// Records a typed task's progress (`running`, `ended` or `failed`); a failure pauses its pane's queue. A task that is
+    /// no longer typed (its pane closed meanwhile) is left as it is.
+    pub fn task_progress(
+        &mut self,
+        task: TaskId,
+        state: TaskState,
+        detail: Option<String>,
+        now: UnixSeconds,
+    ) {
+        let Some(current) = self.queues.get(task) else {
+            return;
+        };
+        if !matches!(current.state, TaskState::Sent | TaskState::Running) {
+            tracing::debug!(
+                task_id = task,
+                ?state,
+                "progress for a task that is no longer typed ignored"
+            );
+            return;
+        }
+        let pane = current.pane_id;
+        let changed = self.queues.set_state(task, state, detail, now);
+        self.apply_tasks(changed);
+        if state == TaskState::Failed
+            && let Some(pane) = pane
+            && let Some(q) = self.queues.pause(pane, Some(PauseReason::Failed))
+        {
+            self.emit(Event::QueueChanged(q));
+        }
+    }
+
+    /// Blocks (`Some`) or unblocks (`None`) a pane's queue and announces a change.
+    pub fn block_queue(&mut self, pane: PaneId, reason: Option<BlockReason>) {
+        if let Some(q) = self.queues.block(pane, reason) {
+            self.emit(Event::QueueChanged(q));
+        }
+    }
+
+    /// `task.send`'s checks: a queued task on a pane that is idle with no task typed; returns the pane and its task.
+    /// Fails with `not_found` for an unknown task and `invalid_state` otherwise.
+    pub fn sendable(&self, task: TaskId) -> MethodResult<(PaneId, Option<mpsc::Sender<PaneCmd>>)> {
+        let t = self
+            .queues
+            .get(task)
+            .ok_or_else(|| refuse(ErrorCode::NotFound, format!("no task {task}")))?;
+        if t.state != TaskState::Queued {
+            return Err(refuse(
+                ErrorCode::InvalidState,
+                "the task is no longer queued",
+            ));
+        }
+        let pane = t
+            .pane_id
+            .ok_or_else(|| refuse(ErrorCode::InvalidState, "a pool task waits for a free pane"))?;
+        let entry = self.require(pane)?;
+        if entry.pane.status != PaneStatus::Idle || self.queues.active(pane).is_some() {
+            return Err(refuse(
+                ErrorCode::InvalidState,
+                "the pane is not idle; the task goes when it is your turn there",
+            ));
+        }
+        Ok((pane, entry.handle.clone()))
+    }
+
+    /// The pane a queued task waits on, for the caller to nudge after a change.
+    pub fn task_pane(&self, task: TaskId) -> Option<PaneId> {
+        self.queues.get(task).and_then(|t| t.pane_id)
+    }
+
+    /// The task channel of `pane`, when it has one.
+    pub fn handle_of(&self, pane: PaneId) -> Option<mpsc::Sender<PaneCmd>> {
+        self.panes.get(&pane).and_then(|e| e.handle.clone())
+    }
+
     /// Stores and announces changed tasks, then drops finished history past what each workspace keeps.
     fn apply_tasks(&mut self, changed: Vec<Task>) {
         let mut finished = HashSet::new();
@@ -1572,6 +1684,114 @@ mod tests {
         assert_eq!(
             reg.pause_queue(999, true).unwrap_err().code,
             ErrorCode::NotFound
+        );
+    }
+
+    #[test]
+    fn a_pane_task_takes_its_head_only_while_idle_and_its_queue_runs() {
+        let (mut reg, mut rx) = registry();
+        let pane = agent(&mut reg, "/Users/example");
+        let a = reg.add_task(&add(pane.id, "first"), 20).unwrap();
+        let b = reg.add_task(&add(pane.id, "second"), 20).unwrap();
+        assert_eq!(reg.queue_head(pane.id), Some(a.id));
+        reg.set_status(pane.id, PaneStatus::Running, None, 21);
+        assert_eq!(
+            reg.take_task(pane.id, a.id, false, 21),
+            None,
+            "never into a busy pane"
+        );
+        reg.set_status(pane.id, PaneStatus::Idle, None, 22);
+        assert_eq!(
+            reg.take_task(pane.id, b.id, false, 22),
+            None,
+            "only the head, unless sent by the user"
+        );
+        events(&mut rx);
+        assert_eq!(
+            reg.take_task(pane.id, a.id, false, 23).as_deref(),
+            Some("first")
+        );
+        let got = events(&mut rx);
+        assert!(
+            matches!(&got[0], Event::TaskChanged(t) if t.id == a.id && t.state == TaskState::Sent && t.sent_at == Some(23))
+        );
+        assert_eq!(reg.queue_head(pane.id), None, "one typed task at a time");
+        assert_eq!(reg.take_task(pane.id, b.id, true, 24), None);
+        reg.task_progress(a.id, TaskState::Running, None, 25);
+        reg.task_progress(a.id, TaskState::Ended, None, 30);
+        assert_eq!(reg.queue_head(pane.id), Some(b.id));
+        reg.pause_queue(pane.id, true).unwrap();
+        assert_eq!(reg.queue_head(pane.id), None);
+        assert_eq!(reg.take_task(pane.id, b.id, false, 31), None);
+        assert_eq!(
+            reg.take_task(pane.id, b.id, true, 31).as_deref(),
+            Some("second"),
+            "task.send passes a pause"
+        );
+    }
+
+    #[test]
+    fn a_failed_task_pauses_its_queue_and_a_block_is_announced() {
+        let (mut reg, mut rx) = registry();
+        let pane = agent(&mut reg, "/Users/example");
+        let a = reg.add_task(&add(pane.id, "first"), 20).unwrap();
+        reg.add_task(&add(pane.id, "second"), 20).unwrap();
+        reg.take_task(pane.id, a.id, false, 21).unwrap();
+        events(&mut rx);
+        reg.task_progress(a.id, TaskState::Failed, Some("not submitted".into()), 31);
+        let got = events(&mut rx);
+        assert!(
+            matches!(&got[0], Event::TaskChanged(t) if t.state == TaskState::Failed && t.detail.as_deref() == Some("not submitted"))
+        );
+        assert!(matches!(&got[1], Event::QueueChanged(q) if q.paused == Some(PauseReason::Failed)));
+        assert_eq!(
+            reg.queue_head(pane.id),
+            None,
+            "nothing more is typed until the user resumes"
+        );
+        reg.block_queue(pane.id, Some(BlockReason::Typing));
+        reg.block_queue(pane.id, Some(BlockReason::Typing));
+        let got = events(&mut rx);
+        assert_eq!(got.len(), 1);
+        assert!(
+            matches!(&got[0], Event::QueueChanged(q) if q.blocked == Some(BlockReason::Typing))
+        );
+    }
+
+    #[test]
+    fn task_send_needs_a_queued_task_of_an_idle_pane() {
+        let (mut reg, _) = registry();
+        let pane = agent(&mut reg, "/Users/example");
+        let a = reg.add_task(&add(pane.id, "first"), 20).unwrap();
+        assert_eq!(reg.sendable(a.id).map(|(p, _)| p), Ok(pane.id));
+        reg.set_status(pane.id, PaneStatus::Running, None, 21);
+        assert_eq!(
+            reg.sendable(a.id).unwrap_err().code,
+            ErrorCode::InvalidState
+        );
+        reg.set_status(pane.id, PaneStatus::Idle, None, 22);
+        reg.take_task(pane.id, a.id, false, 22).unwrap();
+        assert_eq!(
+            reg.sendable(a.id).unwrap_err().code,
+            ErrorCode::InvalidState,
+            "already typed"
+        );
+        assert_eq!(reg.sendable(999).unwrap_err().code, ErrorCode::NotFound);
+        let pooled = reg
+            .add_task(
+                &TaskAddParams {
+                    target: TaskTarget::Pool(TaskPool {
+                        cli: AgentCli::Claude,
+                        cwd: "/Users/example".into(),
+                    }),
+                    ..add(pane.id, "x")
+                },
+                23,
+            )
+            .unwrap();
+        assert_eq!(
+            reg.sendable(pooled.id).unwrap_err().code,
+            ErrorCode::InvalidState
         );
     }
 

@@ -15,7 +15,7 @@ use ply_proto::control::{
     HANDSHAKE_ID, MAX_LINE_BYTES, PaneAnswerParams, PaneCloseParams, Response, ServerMsg,
     ThemeSetParams, Welcome, encode_line,
 };
-use ply_proto::pane::{PaneStatus, Settings};
+use ply_proto::pane::{PaneId, PaneStatus, Settings};
 use ply_term::Palette;
 use serde::Serialize;
 use serde_json::Value;
@@ -328,21 +328,66 @@ async fn dispatch(shared: &Arc<Shared>, call: Call) -> Result<Value, ErrorBody> 
                 return Err(refuse(ErrorCode::ShuttingDown, "plyd is shutting down"));
             }
             let task = shared.registry().add_task(&p, unix_now())?;
+            nudge(shared, task.pane_id).await;
             ok(&task)
         }
         Call::TaskCancel(p) => {
-            shared.registry().cancel_task(p.task_id, unix_now())?;
+            let pane = {
+                let mut reg = shared.registry();
+                let pane = reg.task_pane(p.task_id);
+                reg.cancel_task(p.task_id, unix_now())?;
+                pane
+            };
+            nudge(shared, pane).await;
             ok(&Empty {})
         }
         Call::TaskMove(p) => {
-            shared.registry().move_task(p.task_id, p.position)?;
+            let pane = {
+                let mut reg = shared.registry();
+                reg.move_task(p.task_id, p.position)?;
+                reg.task_pane(p.task_id)
+            };
+            nudge(shared, pane).await;
             ok(&Empty {})
+        }
+        Call::TaskSend(p) => {
+            let (pane, handle) = shared.registry().sendable(p.task_id)?;
+            tracing::info!(
+                pane_id = pane,
+                task_id = p.task_id,
+                "sending a queued task now"
+            );
+            match handle {
+                Some(handle) if handle.send(PaneCmd::SendNow(p.task_id)).await.is_ok() => {
+                    ok(&Empty {})
+                }
+                _ => {
+                    tracing::warn!(pane_id = pane, "the pane task is gone; task.send dropped");
+                    Err(refuse(ErrorCode::Internal, "the pane task is gone"))
+                }
+            }
         }
         Call::QueuePause(p) => {
             shared.registry().pause_queue(p.pane_id, p.paused)?;
+            nudge(shared, Some(p.pane_id)).await;
             ok(&Empty {})
         }
-        Call::TaskSend(_) => Err(refuse(ErrorCode::Internal, "not in this build of plyd yet")),
+    }
+}
+
+/// Tells a pane's task its queue changed, so its dispatch looks at it again; a stopped task is skipped.
+async fn nudge(shared: &Shared, pane: Option<PaneId>) {
+    let Some(pane) = pane else {
+        return;
+    };
+    let handle = shared.registry().handle_of(pane);
+    if let Some(handle) = handle
+        && handle.send(PaneCmd::Queue).await.is_err()
+    {
+        tracing::debug!(
+            pane_id = pane,
+            "the pane task had stopped before the queue changed"
+        );
     }
 }
 
