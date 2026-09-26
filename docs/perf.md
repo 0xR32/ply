@@ -155,16 +155,23 @@ an idle pane. Each was pasted (bracketed), entered 50 ms later and acknowledged
 by UserPromptSubmit: `sent` → `running` in 0.08–0.1 s, `running` → `ended`
 (Stop) in 1.8–2.6 s; the second was typed 1 s after the first ended. So Claude
 Code takes a bracketed paste and one Enter as one prompt, slash command and
-arguments included, and fires UserPromptSubmit for a skill.
+arguments included, and fires UserPromptSubmit for a skill. Again on 0d23e7c,
+after the review's fixes (a task waits for its process's prompt; the user's
+Enter no longer clears the typing block): two plain tasks queued on a fresh
+pane, `sent` → `running` → `ended` in about 3 s and 1 s, the second typed 1 s
+after the first ended.
 
 **Codex** opened, with a first prompt, on its own "Hooks need review" screen
 (hooks in `~/.codex` had changed): three choices, Enter to confirm. plyd showed
 the pane `idle` from its first output byte, as the status machine does for
 Codex, but the pane had reported no session, so the queued task stayed queued
 and nothing was typed into the dialog (the rule of 4366b4c; before it, the
-paste and Enter would have confirmed "Review hooks"). Trusting hooks is the
-user's decision, so the run stopped there: Codex taking a queued task is shown
-by the fake-Codex tests only.
+paste and Enter would have confirmed "Review hooks"). Since the review's fixes
+the rule is per process: a Codex pane, fresh or resumed, takes tasks only after
+a turn of its own, since a resumed pane has its stored session id before its
+startup screens are answered. Trusting hooks is the user's decision, so the
+run stopped there: Codex taking a queued task is shown by the fake-Codex tests
+only.
 
 ## Soak
 
@@ -230,8 +237,8 @@ used 12.6 % of a core on average and plyd 0.8 %.
   appears, before the fake Claude Code has created it.
 - **A Codex startup screen shows as "Your turn".** Codex is `idle` from its
   first output byte, so its trust, hooks or update screens read as the user's
-  turn in the header. The task queue waits for a session there; the status
-  itself is unchanged.
+  turn in the header. The task queue waits there for the process's first turn
+  (`blocked: startup`); the status itself is unchanged.
 - **The real Codex run of the task queue** waits for the hooks review above.
 
 ## How the runs work
@@ -283,6 +290,7 @@ All on 2026-09-25, Apple M1 Pro (8 cores, 16 GB), macOS 26.6; load averages as
 | the real Claude Code and Codex runs, the live checks | 999d77f | 4–5 |
 | J1–J7 (`just e2e`) on 2026-09-26, 6 of 7 passing (J4 failing as on `main`, see **Open**) | 4366b4c | about 3 |
 | the task queue with the real Claude Code and Codex, 2026-09-26 | 4366b4c | about 3 |
+| J1–J7 again, 6 of 7 (J4 as before), and the real Claude Code run again, after the review's fixes | 0d23e7c | about 3 |
 
 Other work (cargo builds and test runs of the same checkout) ran on the machine
 throughout, so these are numbers of a busy machine. A quieter one should do
