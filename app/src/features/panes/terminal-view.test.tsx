@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import type { TestRenderer } from '@gpuix/react/testing';
 import type { ReactNode } from 'react';
 import { makePane, makeState, mountWithStore } from '../../state/test-support';
+import { MAX_FLUSH_MS } from '../../terminal/frame-scheduler';
 import { type ClientFrame, Modes, type Row, type ServerFrame } from '../../terminal/frames';
 import { TerminalHostContext } from '../../terminal/host';
 import { cellMetrics } from '../../terminal/metrics';
@@ -28,14 +29,14 @@ const SCREENS = join(
   'fixtures',
 );
 
-// Renders follow a 60 Hz frame (session.ts), so every settle spans a few frames.
+// Renders follow the shared flush scheduler (session.ts), which backs off to MAX_FLUSH_MS after a busy stretch.
 async function settle(renderer: TestRenderer, until: () => boolean = () => true, ms = 1_500) {
   const started = Date.now();
   const deadline = started + ms;
   for (;;) {
     renderer.flush();
     renderer.dispatchNativeEvents();
-    if (until() && Date.now() - started >= 50) return;
+    if (until() && Date.now() - started >= MAX_FLUSH_MS + 32) return;
     if (Date.now() > deadline) throw new Error('the view did not settle');
     await Bun.sleep(4);
   }
@@ -171,6 +172,7 @@ describe('TerminalView: data path and rendering', () => {
     const m = await mount(900, 500);
     try {
       await m.deliver([snapshotOf('claude-80x24.truth.bin')]);
+      await settle(m.renderer, () => m.renderer.getPaintedText().includes('b.txt'));
       const expected = readFileSync(join(SCREENS, 'claude-session.screen'), 'utf8')
         .split('\n')
         .flatMap((l) => /^\d\d\|(.*)$/.exec(l)?.slice(1) ?? []);
@@ -220,11 +222,11 @@ describe('TerminalView: data path and rendering', () => {
         reason: 'plyd is not running',
         retryInMs: 100,
       });
-      await settle(m.renderer);
+      await settle(m.renderer, () => m.renderer.findByTestId('terminal-1-overlay') !== undefined);
       expect(m.renderer.findByTestId('terminal-1-overlay')).toBeDefined();
       expect(m.renderer.getAllText().join(' ')).toContain('Reconnecting to plyd');
       m.fake.connections[0]?.setState({ kind: 'attached' });
-      await settle(m.renderer);
+      await settle(m.renderer, () => m.renderer.findByTestId('terminal-1-overlay') === undefined);
       expect(m.renderer.findByTestId('terminal-1-overlay')).toBeUndefined();
     } finally {
       m.unmount();

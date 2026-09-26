@@ -13,7 +13,8 @@ export interface SchedulerClock {
 
 const FRAME_MS = 16;
 const BACKGROUND_MS = 50;
-const MAX_MS = 100;
+/** The longest the scheduler waits between two flushes of a pane, after backing off from a busy main thread (ms). */
+export const MAX_FLUSH_MS = 100;
 const LATE_MS = 8;
 const RECOVER_MS = 4;
 
@@ -68,7 +69,7 @@ export class FlushScheduler {
     );
     this.interval =
       now - this.timerAt >= LATE_MS
-        ? Math.min(MAX_MS, this.interval * 2)
+        ? Math.min(MAX_FLUSH_MS, this.interval * 2)
         : Math.max(FRAME_MS, this.interval - RECOVER_MS);
     for (const item of due) {
       this.pending.delete(item);
