@@ -406,7 +406,7 @@ describe.if(hasNativeTestRenderer)('PaneGrid', () => {
         queues: [{ pane_id: 2, paused: 'user' }],
       },
     });
-    const { store, renderer, unmount } = mountWithStore(grid, state);
+    const { store, renderer, unmount } = mountWithStore(grid, state, { width: W, height: H });
     const seen: Action[] = [];
     store.addEffect((a) => seen.push(a));
     try {
@@ -454,7 +454,7 @@ describe.if(hasNativeTestRenderer)('PaneGrid', () => {
         },
       },
     );
-    const { store, renderer, unmount } = mountWithStore(grid, state);
+    const { store, renderer, unmount } = mountWithStore(grid, state, { width: W, height: H });
     const seen: Action[] = [];
     store.addEffect((a) => seen.push(a));
     try {
@@ -467,6 +467,16 @@ describe.if(hasNativeTestRenderer)('PaneGrid', () => {
       expect(renderer.findByTestId('pane-2-queued')).toBeUndefined();
       expect(renderer.findByTestId('pane-2-waiting')).toBeDefined();
       expect(textOf(renderer, 'pane-3-queued')).toContain('was not submitted');
+      for (const [pane, button] of [
+        [1, 'queue-send-1'],
+        [1, 'queue-hold-1'],
+        [3, 'queue-show-3'],
+        [3, 'queue-resume-3'],
+      ] as const) {
+        const box = bounds(renderer, `pane-${pane}`);
+        const b = bounds(renderer, button);
+        expect(b.x + b.width, `${button} fits its pane`).toBeLessThanOrEqual(box.x + box.width);
+      }
       const resume = bounds(renderer, 'queue-resume-3');
       renderer.nativeSimulateClick(resume.x + resume.width / 2, resume.y + resume.height / 2);
       expect(seen).toEqual([
@@ -474,6 +484,33 @@ describe.if(hasNativeTestRenderer)('PaneGrid', () => {
         { type: 'queue/pause', paneId: 1, paused: true },
         { type: 'queue/pause', paneId: 3, paused: false },
       ]);
+    } finally {
+      unmount();
+    }
+  });
+
+  test('in a narrow pane the held strip keeps its label short and its button inside the pane', () => {
+    const base = demo();
+    const panes = {
+      ...base.panes,
+      1: { ...(base.panes[1] as PaneState), status: 'idle' as const },
+    };
+    const state = reduce(
+      { ...base, panes },
+      {
+        type: 'tasks/loaded',
+        list: {
+          tasks: [makeTask({ id: 1, pane_id: 1, text: '/review-pr 212 and then the summary' })],
+          queues: [{ pane_id: 1, paused: 'restored' }],
+        },
+      },
+    );
+    const { renderer, unmount } = mountWithStore(grid, state, { width: W, height: H });
+    try {
+      expect(textOf(renderer, 'pane-1-queued')).toContain('Held after plyd restarted');
+      const box = bounds(renderer, 'pane-1');
+      const b = bounds(renderer, 'queue-resume-1');
+      expect(b.x + b.width).toBeLessThanOrEqual(box.x + box.width);
     } finally {
       unmount();
     }
@@ -495,7 +532,7 @@ describe.if(hasNativeTestRenderer)('PaneGrid', () => {
         },
       },
     );
-    const { store, renderer, unmount } = mountWithStore(grid, state);
+    const { store, renderer, unmount } = mountWithStore(grid, state, { width: W, height: H });
     const seen: Action[] = [];
     store.addEffect((a) => seen.push(a));
     try {

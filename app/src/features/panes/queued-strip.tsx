@@ -35,7 +35,7 @@ function StripBody({ paneId, strip }: { paneId: number; strip: QueueStrip }) {
     </Text>
   );
   const note = (value: string) => (
-    <Text color={tokens.text2} variant="small" weight={400}>
+    <Text color={tokens.text2} variant="small" weight={400} ellipsis>
       {value}
     </Text>
   );
@@ -121,7 +121,7 @@ function StripBody({ paneId, strip }: { paneId: number; strip: QueueStrip }) {
       ) : (
         <>
           <Icon name="pause" size={12} color={tokens.text2} />
-          <Text color={tokens.textSoft} variant="small" weight={500}>
+          <Text color={tokens.textSoft} variant="small" weight={500} ellipsis>
             {strip.kind === 'restored' ? 'Held after plyd restarted' : 'Queue paused'}
           </Text>
           {note(`· ${plural(strip.count)} · next`)}
