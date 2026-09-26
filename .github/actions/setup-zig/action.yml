@@ -1,0 +1,37 @@
+name: Zig
+description: Installs the pinned Zig for Apple silicon from ziglang.org, checked against its SHA-256, and caches it with Zig's package cache.
+inputs:
+  version:
+    description: Zig version, e.g. 0.16.0.
+    required: true
+  sha256:
+    description: SHA-256 of that version's zig-aarch64-macos tarball, from ziglang.org/download/index.json.
+    required: true
+runs:
+  using: composite
+  steps:
+    # mlugg/setup-zig still runs on Node 20; a composite action needs no Node at all.
+    - name: Cache Zig and its package cache
+      uses: actions/cache@v6
+      with:
+        path: |
+          ~/zig
+          ~/.cache/zig
+        key: zig-${{ inputs.version }}-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('crates/ghostty-sys/build.rs') }}
+        restore-keys: zig-${{ inputs.version }}-${{ runner.os }}-${{ runner.arch }}-
+    - name: Install Zig ${{ inputs.version }}
+      shell: bash
+      env:
+        VERSION: ${{ inputs.version }}
+        SHA256: ${{ inputs.sha256 }}
+      run: |
+        dir="$HOME/zig/$VERSION"
+        if [ ! -x "$dir/zig" ]; then
+          tmp=$(mktemp -d)
+          curl -fsSL --retry 3 -o "$tmp/zig.tar.xz" "https://ziglang.org/download/$VERSION/zig-aarch64-macos-$VERSION.tar.xz"
+          echo "$SHA256  $tmp/zig.tar.xz" | shasum -a 256 -c -
+          mkdir -p "$dir"
+          tar -xJf "$tmp/zig.tar.xz" -C "$dir" --strip-components 1
+        fi
+        echo "$dir" >> "$GITHUB_PATH"
+        "$dir/zig" version

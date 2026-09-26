@@ -16,24 +16,25 @@ env:
   CARGO_TERM_COLOR: always
   RUST_VERSION: "1.97.1"
   ZIG_VERSION: "0.16.0"
+  ZIG_SHA256: "b23d70deaa879b5c2d486ed3316f7eaa53e84acf6fc9cc747de152450d401489"
   BUN_VERSION: "1.3.10"
 
 jobs:
   rust:
     runs-on: macos-15
     steps:
-      - uses: actions/checkout@v4
-      # use-cache keeps Zig's global cache, where build.rs has `zig fetch` put libghostty-vt's packages, between runs.
-      - uses: mlugg/setup-zig@v2
+      - uses: actions/checkout@v7
+      # Its cache keeps Zig's global cache, where build.rs has `zig fetch` put libghostty-vt's packages, between runs.
+      - uses: ./.github/actions/setup-zig
         with:
           version: ${{ env.ZIG_VERSION }}
-          use-cache: true
+          sha256: ${{ env.ZIG_SHA256 }}
       - name: Pinned ghostty commit
         id: ghostty
         run: |
           echo "commit=$(sed -n 's/^const GHOSTTY_COMMIT: &str = "\([0-9a-f]*\)";$/\1/p' crates/ghostty-sys/build.rs)" >> "$GITHUB_OUTPUT"
       - name: Cache the ghostty source build.rs downloads
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/Library/Caches/ply/ghostty
           key: ghostty-src-${{ steps.ghostty.outputs.commit }}
@@ -63,13 +64,13 @@ jobs:
     # input.test.ts reads key/event.h from the ghostty source the rust job downloads and caches.
     needs: rust
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Pinned ghostty commit
         id: ghostty
         run: |
           echo "commit=$(sed -n 's/^const GHOSTTY_COMMIT: &str = "\([0-9a-f]*\)";$/\1/p' crates/ghostty-sys/build.rs)" >> "$GITHUB_OUTPUT"
       - name: Restore the ghostty source
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v6
         with:
           path: ~/Library/Caches/ply/ghostty
           key: ghostty-src-${{ steps.ghostty.outputs.commit }}
@@ -88,10 +89,11 @@ jobs:
   rules:
     runs-on: macos-15
     steps:
-      - uses: actions/checkout@v4
-      - uses: mlugg/setup-zig@v2
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/setup-zig
         with:
           version: ${{ env.ZIG_VERSION }}
+          sha256: ${{ env.ZIG_SHA256 }}
       - name: Install Rust ${{ env.RUST_VERSION }}
         run: rustup toolchain install "$RUST_VERSION" --profile minimal
       - uses: Swatinem/rust-cache@v2
