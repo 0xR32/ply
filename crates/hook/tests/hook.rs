@@ -1,5 +1,6 @@
-//! `ply-hook` end to end: the C3 line it writes (decoded by ply-proto), INV-12 (plyd down or stuck: exit 0 in under
-//! 250 ms) and INV-14 (nothing on stdout or stderr, exit 0, on every path including bad, oversized and missing input).
+//! `ply-hook` end to end: the C3 line it writes (decoded by ply-proto), INV-12 (plyd down or stuck: exit 0 within
+//! 250 ms of what a bare launch of the binary takes) and INV-14 (nothing on stdout or stderr, exit 0, on every path
+//! including bad, oversized and missing input).
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -7,6 +8,7 @@ use std::io::{ErrorKind, Read, Write};
 use std::os::unix::net::UnixListener;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
+use std::sync::OnceLock;
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
@@ -15,6 +17,39 @@ use ply_proto::pane::AgentCli;
 use serde_json::{Value, json};
 
 const BUDGET: Duration = Duration::from_millis(250);
+
+/// [`BUDGET`] plus what this machine adds by itself: its slowest bare launch and how late a 200 ms timer fires here.
+fn budget() -> Duration {
+    static OVERHEAD: OnceLock<Duration> = OnceLock::new();
+    BUDGET
+        + *OVERHEAD.get_or_init(|| {
+            let launch = (0..3)
+                .map(|_| {
+                    let started = Instant::now();
+                    let status = Command::new(env!("CARGO_BIN_EXE_ply-hook"))
+                        .env_clear()
+                        .stdin(Stdio::null())
+                        .stdout(Stdio::null())
+                        .stderr(Stdio::null())
+                        .status()
+                        .unwrap();
+                    assert!(status.success());
+                    started.elapsed()
+                })
+                .max()
+                .unwrap_or_default();
+            // The hook's deadline is a 200 ms timer, which a loaded CI runner fired over 100 ms late.
+            let lateness = (0..3)
+                .map(|_| {
+                    let started = Instant::now();
+                    thread::sleep(Duration::from_millis(200));
+                    started.elapsed().saturating_sub(Duration::from_millis(200))
+                })
+                .max()
+                .unwrap_or_default();
+            launch + lateness
+        })
+}
 
 struct Hook {
     dir: PathBuf,
@@ -198,7 +233,11 @@ fn inv12_exits_zero_fast_when_plyd_is_down() {
         cmd.env("PLY_HOOK_SOCK", socket);
         let (output, elapsed) = run(cmd, Some(body.clone()));
         assert_silent_success(&output, what);
-        assert!(elapsed < BUDGET, "{what}: took {elapsed:?}");
+        assert!(
+            elapsed < budget(),
+            "{what}: took {elapsed:?}, budget {:?}",
+            budget()
+        );
     }
 }
 
@@ -215,7 +254,11 @@ fn inv12_an_open_stdin_cannot_hold_the_cli() {
     let elapsed = started.elapsed();
     drop(stdin);
     assert_eq!(status.code(), Some(0));
-    assert!(elapsed < BUDGET, "took {elapsed:?}");
+    assert!(
+        elapsed < budget(),
+        "took {elapsed:?}, budget {:?}",
+        budget()
+    );
     assert!(nothing_sent(&listener));
 }
 
@@ -229,7 +272,11 @@ fn inv12_a_plyd_that_never_reads_cannot_hold_the_cli() {
         Some(big.into_bytes()),
     );
     assert_silent_success(&output, "stuck reader");
-    assert!(elapsed < BUDGET, "took {elapsed:?}");
+    assert!(
+        elapsed < budget(),
+        "took {elapsed:?}, budget {:?}",
+        budget()
+    );
 }
 
 type EnvChange<'a> = (&'a str, Option<&'a str>);
@@ -303,7 +350,11 @@ fn inv14_nothing_on_stdout_on_every_path() {
         }
         let (output, elapsed) = run(cmd, stdin);
         assert_silent_success(&output, what);
-        assert!(elapsed < BUDGET, "{what}: took {elapsed:?}");
+        assert!(
+            elapsed < budget(),
+            "{what}: took {elapsed:?}, budget {:?}",
+            budget()
+        );
         assert!(nothing_sent(&listener), "{what}: an envelope was sent");
     }
 }
