@@ -401,13 +401,18 @@ across the pane, mint for an added line and red for a removed one
 (`tokens.diffAdd`, `tokens.diffRemove`, 20 % over the terminal). A row counts
 when it opens with an optional line number and then a `+` drawn green (ANSI 2
 or 10, or an RGB green) or a `-` drawn red (ANSI 1 or 9, or an RGB red), set
-against the line or not, and that marker has no background of its own
-(`diffKind` in `app/src/terminal/diff.ts`). That is how Claude Code draws its
-edits under ply's `dark-ansi` theme (`      22 +changed line 22`, the marker
-in bright green or red), which paints no row background itself, and how Codex
-draws its diffs. The colour check keeps a list item, "12 - 4" or a plain `+1`
-plain, and a theme that already paints its diff rows keeps its own colours. A diff
-line the CLI wrapped onto a second row tints only its first.
+against the line or not, and that marker sits on the ground: no background, or
+ANSI black, which ply draws as the ground (`diffKind` in
+`app/src/terminal/diff.ts`). That is how Claude Code draws its edits under
+ply's `dark-ansi` theme (`      22 +changed line 22`, the marker in bright green
+or red), how its expanded diff draws them (every cell on ANSI black, so on a
+diff row ply leaves ANSI-black cells unpainted and the band shows), and how
+Codex draws its diffs. The 16-colour theme has no dim green or red to paint a
+row with, so Claude Code paints none. The colour check keeps a list item,
+"12 - 4" or a plain `+1` plain, and a theme that already paints its diff rows,
+such as Claude Code's own `dark` with "Use ply colours in Claude Code" off,
+keeps its own colours. A diff line the CLI wrapped onto a second row tints only
+its first.
 
 **IME** is not implemented: every KEY frame carries `composing` 0 and the text
 GPUIX reports for the key, so dead keys and CJK composition do not work in a

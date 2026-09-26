@@ -46,6 +46,12 @@ describe('diffKind', () => {
     expect(diffKind(bright.r, bright.styleOf)).toBe('add');
     const rgb = row('  3 - gone', 4, { kind: 'rgb', r: 230, g: 90, b: 80 });
     expect(diffKind(rgb.r, rgb.styleOf)).toBe('remove');
+    const black: Color = { kind: 'indexed', index: 0 };
+    const expanded = row('      5 -const value5 = 5;', 8, { kind: 'indexed', index: 9 }, black);
+    expect(
+      diffKind(expanded.r, expanded.styleOf),
+      "Claude Code's expanded diff, on ANSI black",
+    ).toBe('remove');
   });
 
   test('a marker in any other colour, with a background of its own, or where no marker belongs is plain', () => {

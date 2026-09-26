@@ -532,6 +532,55 @@ describe('TerminalView: diff rows', () => {
       m.unmount();
     }
   });
+
+  test("Claude Code's expanded diff, drawn on ANSI black, gets the band and paints no black over it", async () => {
+    const m = await mount();
+    try {
+      const black = { kind: 'indexed', index: 0 } as const;
+      const diff = textRow(0, '      5 -const value5 = 5;');
+      diff.styles.fill(1);
+      diff.styles.fill(2, 5, 9);
+      await m.deliver([
+        screen(['      5 -const value5 = 5;'], {
+          styles: [
+            {
+              id: 1,
+              style: {
+                fg: { kind: 'default' },
+                bg: black,
+                underlineColor: { kind: 'default' },
+                attrs: 0,
+              },
+            },
+            {
+              id: 2,
+              style: {
+                fg: { kind: 'indexed', index: 9 },
+                bg: black,
+                underlineColor: { kind: 'default' },
+                attrs: 0,
+              },
+            },
+          ],
+          lines: [diff],
+        }),
+      ]);
+      expect(m.renderer.findByTestId('terminal-diff-remove')).toBeDefined();
+      const painted: string[] = [];
+      const walk = (id: number) => {
+        const el = m.renderer.getElement(id);
+        if (!el) return;
+        if (el.type === 'text' && el.style.backgroundColor)
+          painted.push(String(el.style.backgroundColor));
+        for (const child of el.children) walk(child);
+      };
+      const root = m.renderer.getRoot();
+      if (root) walk(root.id);
+      expect(painted).not.toContain(terminalTheme.ansi[0]);
+    } finally {
+      m.unmount();
+    }
+  });
 });
 
 describe('TerminalView: find (⌘F)', () => {

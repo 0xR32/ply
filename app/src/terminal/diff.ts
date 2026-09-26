@@ -22,7 +22,12 @@ function hue(c: Color): 'green' | 'red' | null {
   return null;
 }
 
-/** Whether `row` is a diff line: a line number or nothing, then a `+` drawn green or a `-` drawn red with no background of its own; the colour check keeps "12 - 4", "- item" and "+1" in prose plain. */
+/** Whether `bg` leaves the cell on the pane's ground: the default, or ANSI black, which ply draws as the ground and Claude Code's expanded diff sets on every cell. */
+function onGround(bg: Color): boolean {
+  return bg.kind === 'default' || (bg.kind === 'indexed' && bg.index === 0);
+}
+
+/** Whether `row` is a diff line: a line number or nothing, then a `+` drawn green or a `-` drawn red on the ground; the colour check keeps "12 - 4", "- item" and "+1" in prose plain. */
 export function diffKind(row: Row, styleOf: (id: number) => Style): DiffKind {
   const n = Math.min(row.codepoints.length, LEAD);
   let text = '';
@@ -35,7 +40,7 @@ export function diffKind(row: Row, styleOf: (id: number) => Style): DiffKind {
   if (!m?.[1]) return null;
   const col = m[0].length - 1;
   const style = styleOf(row.styles[col] as number);
-  if (style.bg.kind !== 'default') return null;
+  if (!onGround(style.bg)) return null;
   const shade = hue(style.fg);
   if (m[1] === '+' && shade === 'green') return 'add';
   if (m[1] === '-' && shade === 'red') return 'remove';

@@ -43,6 +43,8 @@ export const TerminalRow = memo(function TerminalRow({
 }: TerminalRowProps) {
   const runs = rowRuns(row.row, cols, styleOf, resolver, selection);
   const diff = diffKind(row.row, styleOf);
+  // An opaque ANSI-black run would hide the band.
+  const ground = diff ? resolver.theme.ansi[0] : undefined;
   return (
     <div style={{ position: 'relative', height: cellHeight, flexShrink: 0 }}>
       {diff ? (
@@ -61,6 +63,7 @@ export const TerminalRow = memo(function TerminalRow({
       ) : null}
       {runs.map((run) => {
         const left = Math.round(run.col * cellWidth);
+        const bg = run.style.backgroundColor;
         return (
           <text
             key={run.col}
@@ -72,7 +75,7 @@ export const TerminalRow = memo(function TerminalRow({
               height: cellHeight,
               pointerEvents: 'none',
               color: run.style.color,
-              ...(run.style.backgroundColor ? { backgroundColor: run.style.backgroundColor } : {}),
+              ...(bg && bg !== ground ? { backgroundColor: bg } : {}),
               ...(run.style.bold ? { fontWeight: 600 } : {}),
               ...(run.style.decoration ? { textDecoration: run.style.decoration } : {}),
             }}
