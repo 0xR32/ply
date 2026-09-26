@@ -87,12 +87,7 @@ export function mountWithStore(
   );
   const wrap = (child: ReactNode) => {
     const s = store.getState();
-    const theme = createChromeTheme(
-      s.settings.accent,
-      s.settings.font_size,
-      chromeFonts(false),
-      true,
-    );
+    const theme = createChromeTheme(s.settings.accent, s.settings.font_size, chromeFonts(false));
     return (
       <StoreContext.Provider value={store}>
         <ChromeThemeContext.Provider value={theme}>{child}</ChromeThemeContext.Provider>

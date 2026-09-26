@@ -26,7 +26,6 @@ export interface ChromeTheme {
   accent: AccentPalette;
   fonts: ChromeFonts;
   scale: number;
-  reducedMotion: boolean;
   type: Record<keyof typeof tokens.type, TypeStyle>;
   z: (length: number) => number;
 }
@@ -43,7 +42,6 @@ export function createChromeTheme(
   accent: AccentName,
   fontSize: number,
   fonts: ChromeFonts,
-  reducedMotion: boolean,
 ): ChromeTheme {
   const scale = Number.isFinite(fontSize) && fontSize > 0 ? fontSize / baseFontSize : 1;
   const z = (length: number) => Math.round(length * scale * 2) / 2;
@@ -51,12 +49,12 @@ export function createChromeTheme(
   for (const [name, t] of Object.entries(tokens.type) as [keyof typeof tokens.type, TypeStyle][]) {
     type[name] = { fontSize: z(t.fontSize), fontWeight: t.fontWeight, lineHeight: z(t.lineHeight) };
   }
-  return { accent: accentPalette(accent), fonts, scale, reducedMotion, type, z };
+  return { accent: accentPalette(accent), fonts, scale, type, z };
 }
 
 /** Provides the chrome theme to every component below it; the default is blue at scale 1 with Geist. */
 export const ChromeThemeContext = createContext<ChromeTheme>(
-  createChromeTheme('blue', baseFontSize, chromeFonts(true), false),
+  createChromeTheme('blue', baseFontSize, chromeFonts(true)),
 );
 
 /** The chrome theme of the nearest provider. */

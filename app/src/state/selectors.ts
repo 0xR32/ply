@@ -16,11 +16,10 @@ export type StatusTone =
   | 'failed'
   | 'lost';
 
-/** The header chip of one pane: tone, label and whether its dot pulses (running only). */
+/** The header chip of one pane: its tone and label. */
 export interface StatusView {
   tone: StatusTone;
   label: string;
-  pulse: boolean;
 }
 
 /** A pane that needs the user: the CLI shows a permission dialog or asks a question. */
@@ -63,26 +62,24 @@ export function formatElapsed(seconds: number): string {
 export function statusView(pane: PaneState, shellName: string, nowSeconds: number): StatusView {
   if (pane.status === 'exited') {
     const code = pane.exit_code ?? 0;
-    return { tone: code === 0 ? 'exited' : 'failed', label: `Exited ${code}`, pulse: false };
+    return { tone: code === 0 ? 'exited' : 'failed', label: `Exited ${code}` };
   }
-  if (pane.status === 'lost') return { tone: 'lost', label: 'Lost', pulse: false };
-  if (pane.cli === 'shell') return { tone: 'shell', label: shellName, pulse: false };
+  if (pane.status === 'lost') return { tone: 'lost', label: 'Lost' };
+  if (pane.cli === 'shell') return { tone: 'shell', label: shellName };
   switch (pane.status) {
     case 'starting':
-      return { tone: 'starting', label: 'Starting', pulse: false };
+      return { tone: 'starting', label: 'Starting' };
     case 'running': {
       const since = pane.statusSince;
       const label =
         since === undefined ? 'Running' : `Running ${formatElapsed(nowSeconds - since)}`;
-      return { tone: 'running', label, pulse: true };
+      return { tone: 'running', label };
     }
     case 'waiting_permission':
     case 'waiting_input':
-      return { tone: 'waiting', label: 'Needs you', pulse: false };
+      return { tone: 'waiting', label: 'Needs you' };
     default:
-      return isDone(pane)
-        ? { tone: 'done', label: 'Done', pulse: false }
-        : { tone: 'idle', label: 'Your turn', pulse: false };
+      return isDone(pane) ? { tone: 'done', label: 'Done' } : { tone: 'idle', label: 'Your turn' };
   }
 }
 

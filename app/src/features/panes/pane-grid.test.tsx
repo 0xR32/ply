@@ -310,6 +310,27 @@ describe.if(hasNativeTestRenderer)('PaneGrid', () => {
     }
   });
 
+  // Any running motion makes GPUIX redraw the whole window every frame, which pinned the main thread while an agent ran.
+  test('a running pane’s status dot does not animate, even with motion allowed', () => {
+    const { renderer, unmount } = mountWithStore(grid, { ...demo(), reducedMotion: false });
+    try {
+      const status = renderer.findByTestId('pane-1-status');
+      if (!status) throw new Error('no pane-1-status');
+      const animated: number[] = [];
+      const walk = (id: number) => {
+        const el = renderer.getElement(id);
+        if (!el) return;
+        if (el.customProps && 'motion' in el.customProps) animated.push(el.id);
+        for (const child of el.children) walk(child);
+      };
+      walk(status.id);
+      expect(textOf(renderer, 'pane-1-status')).toBe('Running');
+      expect(animated).toEqual([]);
+    } finally {
+      unmount();
+    }
+  });
+
   test("headers name the project, git's when plyd sent it and the folder's before, and git's linked worktree", () => {
     const state = makeState([
       makePane({ id: 1, project: 'agentmon', git_worktree: 'agentmon-side', branch: 'side' }),

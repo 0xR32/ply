@@ -272,7 +272,6 @@ export function PaneHeader({ pane, position, focused, onActivate }: PaneHeaderPr
         label={view.label}
         color={colours.color}
         background={colours.background}
-        pulse={view.pulse}
       />
     </div>
   );

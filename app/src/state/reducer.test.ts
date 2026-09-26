@@ -450,7 +450,6 @@ describe('selectors', () => {
     ).toEqual({
       tone: 'running',
       label: 'Running 04:12',
-      pulse: true,
     });
     expect(statusView(makePane({ id: 1, status: 'running' }), 'zsh', now).label).toBe('Running');
     expect(statusView(makePane({ id: 1, status: 'waiting_input' }), 'zsh', now).label).toBe(

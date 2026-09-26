@@ -10,11 +10,10 @@ import { TopBar } from './top-bar';
 function Shell() {
   const accent = useAppSelector((s) => s.settings.accent);
   const fontSize = useAppSelector((s) => s.settings.font_size);
-  const reducedMotion = useAppSelector((s) => s.reducedMotion);
   const geist = useAppSelector((s) => s.env.geistAvailable);
   const theme = useMemo(
-    () => createChromeTheme(accent, fontSize, chromeFonts(geist), reducedMotion),
-    [accent, fontSize, geist, reducedMotion],
+    () => createChromeTheme(accent, fontSize, chromeFonts(geist)),
+    [accent, fontSize, geist],
   );
   return (
     <ChromeThemeContext.Provider value={theme}>
