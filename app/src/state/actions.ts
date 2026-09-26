@@ -1,6 +1,8 @@
 import type {
   AccentName,
+  AgentCli,
   Answer,
+  BlockReason,
   Cli,
   CliUsage,
   Event,
@@ -8,9 +10,17 @@ import type {
   OptionAsMeta,
   Pane,
   PaneStatus,
+  PauseReason,
   Progress,
+  QueueState,
   Settings,
+  Skill,
+  SkillList,
+  SkillSource,
   Tab,
+  Task,
+  TaskList,
+  TaskState,
   TerminalTheme,
   Usage,
   UsageWindow,
@@ -20,7 +30,9 @@ import type {
 /** ply-proto wire types, re-exported so features reach them through state (they never import ipc, spec 8.2). */
 export type {
   AccentName,
+  AgentCli,
   Answer,
+  BlockReason,
   Cli,
   CliUsage,
   Event,
@@ -28,9 +40,17 @@ export type {
   OptionAsMeta,
   Pane,
   PaneStatus,
+  PauseReason,
   Progress,
+  QueueState,
   Settings,
+  Skill,
+  SkillList,
+  SkillSource,
   Tab,
+  Task,
+  TaskList,
+  TaskState,
   TerminalTheme,
   Usage,
   UsageWindow,
@@ -69,7 +89,9 @@ export type CommandId =
   | 'font.down'
   | 'font.reset'
   | 'settings.open'
-  | 'usage.show';
+  | 'usage.show'
+  | 'task.dispatch'
+  | 'task.queue';
 
 /** The one overlay that may be open; while any is open, global key bindings do nothing (spec 7.4). */
 export type Overlay =
@@ -77,7 +99,11 @@ export type Overlay =
   | { kind: 'new-pane'; target: 'pane' | 'tab' }
   | { kind: 'settings' }
   | { kind: 'close-confirm'; paneId: number }
-  | { kind: 'quit-confirm' };
+  | { kind: 'quit-confirm' }
+  /** The ⌘E form (Ruling R60), opened on the focused agent pane when there is one. */
+  | { kind: 'dispatch'; paneId?: number }
+  /** The ⌘⇧E task queue. */
+  | { kind: 'queue' };
 
 /** macOS's key-repeat timing in ms (`InitialKeyRepeat`, `KeyRepeat`): how long a held key waits to repeat, then between repeats. */
 export interface KeyRepeat {
@@ -93,6 +119,12 @@ export interface NewPaneRequest {
   worktree?: string;
   prompt?: string;
 }
+
+/** Where the dispatch form sends a task: a pane's queue, the next free pane of a CLI in a folder, or a new pane. */
+export type DispatchTarget =
+  | { kind: 'pane'; paneId: number }
+  | { kind: 'pool'; cli: AgentCli; cwd: string }
+  | { kind: 'new'; cli: AgentCli; cwd: string };
 
 /** A tab's pane sizes: the share of its width each column takes and of its height each row takes, each list summing to 1. */
 export interface Split {
@@ -161,4 +193,25 @@ export type Action =
   | { type: 'env/keyRepeat'; value: Partial<KeyRepeat> }
   | { type: 'env/reducedMotion'; value: boolean }
   /** The app's own build id (`<version>+<commit>`), compared with `welcome.daemon_version`; `null` when unknown. */
-  | { type: 'env/buildId'; value: string | null };
+  | { type: 'env/buildId'; value: string | null }
+  /** plyd's `task.list` answer on load; `null` when plyd predates the task queue. */
+  | { type: 'tasks/loaded'; list: TaskList | null }
+  /** The dispatch form's submit: effects send `task.add`, or `pane.create` with the text as first prompt for a new pane. */
+  | { type: 'task/add'; target: DispatchTarget; text: string; skill?: string }
+  /** `task.add` answered with the queued task. */
+  | { type: 'task/added'; task: Task }
+  /** A new pane opened with the task as its first prompt. */
+  | { type: 'task/opened' }
+  /** `task.add` or the new pane failed; the form shows why. */
+  | { type: 'task/addFailed'; message: string }
+  | { type: 'task/cancel'; taskId: number }
+  /** Moves a queued task to `position` in its queue. */
+  | { type: 'task/move'; taskId: number; position: number }
+  /** Types a queued task now, over the user's unsent typing (`task.send`). */
+  | { type: 'task/send'; taskId: number }
+  | { type: 'queue/pause'; paneId: number; paused: boolean }
+  /** Asks plyd for the skills of `cli` in `cwd` (`skill.list`). */
+  | { type: 'skills/query'; cli: AgentCli; cwd: string }
+  /** `skill.list` answered for `key`, the `cli cwd` it was asked for. */
+  | { type: 'skills/loaded'; key: string; list: SkillList }
+  | { type: 'skills/failed'; key: string; message: string };

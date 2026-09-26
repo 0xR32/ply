@@ -1,19 +1,25 @@
 import { describe, expect, test } from 'bun:test';
-import type { Action, Event } from './actions';
-import { type AppState, reduce } from './reducer';
+import type { Action, Event, Skill, Task } from './actions';
+import { type AppState, type PaneState, reduce } from './reducer';
 import {
   FULL_TAB_NOTICE,
   formatElapsed,
   gridShape,
   isLost,
   isTabFull,
+  matchSkills,
   nextWaitingPane,
   paneNeighbour,
+  queueStripView,
   resumeHow,
+  selectActiveTask,
   selectCliCounts,
+  selectPaneQueue,
+  selectQueueCounts,
   selectWaitingCount,
   statusView,
   tabDot,
+  taskView,
   visiblePaneIds,
 } from './selectors';
 import { makePane, makeState, testWorkspace } from './test-support';
@@ -584,5 +590,173 @@ describe('the usage view (R59)', () => {
   test('the key-repeat timing is kept as far as macOS sets it', () => {
     const next = run(makeState([]), { type: 'env/keyRepeat', value: { intervalMs: 30 } });
     expect(next.env.keyRepeat).toEqual({ intervalMs: 30 });
+  });
+});
+
+describe('task queue (R60)', () => {
+  const task = (fields: Partial<Task> & { id: number }): Task => ({
+    workspace_id: testWorkspace.id,
+    pane_id: 1,
+    text: `task ${fields.id}`,
+    state: 'queued',
+    position: 0,
+    created_at: 1_790_000_000,
+    ...fields,
+  });
+
+  test('task.changed adds and replaces tasks of this workspace; queue.changed sets and clears flags', () => {
+    let state = run(
+      threePanes(),
+      evt({ e: 'task.changed', p: task({ id: 7 }) }),
+      evt({ e: 'task.changed', p: task({ id: 8, workspace_id: 99 }) }),
+    );
+    expect(Object.keys(state.tasks.tasks)).toEqual(['7']);
+    state = run(state, evt({ e: 'task.changed', p: task({ id: 7, state: 'running' }) }));
+    expect(state.tasks.tasks[7]?.state).toBe('running');
+    state = run(state, evt({ e: 'queue.changed', p: { pane_id: 1, paused: 'user' } }));
+    expect(state.tasks.queues[1]).toEqual({ pane_id: 1, paused: 'user' });
+    state = run(state, evt({ e: 'queue.changed', p: { pane_id: 1 } }));
+    expect(state.tasks.queues[1]).toBeUndefined();
+  });
+
+  test('tasks/loaded replaces the queue; a plyd without task.list leaves it unavailable', () => {
+    const loaded = run(threePanes(), {
+      type: 'tasks/loaded',
+      list: {
+        tasks: [task({ id: 1 }), task({ id: 2, position: 1 })],
+        queues: [{ pane_id: 1, blocked: 'typing' }],
+      },
+    });
+    expect(loaded.tasks.available).toBe(true);
+    expect(Object.keys(loaded.tasks.tasks)).toEqual(['1', '2']);
+    expect(loaded.tasks.queues[1]?.blocked).toBe('typing');
+    const old = run(threePanes(), { type: 'tasks/loaded', list: null });
+    expect(old.tasks.available).toBe(false);
+  });
+
+  test('⌘E opens the dispatch form on the focused agent pane and ⌘⇧E the queue', () => {
+    const state = run(
+      threePanes(),
+      { type: 'pane/focus', paneId: 2 },
+      { type: 'command', id: 'task.dispatch' },
+    );
+    expect(state.overlay).toEqual({ kind: 'dispatch', paneId: 2 });
+    const onShell = run(
+      threePanes(),
+      { type: 'pane/focus', paneId: 3 },
+      { type: 'command', id: 'task.dispatch' },
+    );
+    expect(onShell.overlay).toEqual({ kind: 'dispatch' });
+    expect(run(threePanes(), { type: 'command', id: 'task.queue' }).overlay).toEqual({
+      kind: 'queue',
+    });
+  });
+
+  test('task/add waits for the answer; task/added closes the form; task/addFailed keeps it with the error', () => {
+    let state = run(threePanes(), { type: 'command', id: 'task.dispatch' });
+    state = run(state, {
+      type: 'task/add',
+      target: { kind: 'pane', paneId: 1 },
+      text: '/review-pr',
+    });
+    expect(state.taskForm).toEqual({ pending: true, error: null });
+    const failed = run(state, {
+      type: 'task/addFailed',
+      message: 'the queue already holds 32 tasks',
+    });
+    expect(failed.overlay?.kind).toBe('dispatch');
+    expect(failed.taskForm).toEqual({ pending: false, error: 'the queue already holds 32 tasks' });
+    const added = run(state, { type: 'task/added', task: task({ id: 9 }) });
+    expect(added.overlay).toBeNull();
+    expect(added.tasks.tasks[9]?.id).toBe(9);
+  });
+
+  test('skills are kept for the CLI and directory they were asked for', () => {
+    let state = run(threePanes(), {
+      type: 'skills/query',
+      cli: 'claude',
+      cwd: '/Users/example/code/ply',
+    });
+    expect(state.skills).toMatchObject({ key: 'claude /Users/example/code/ply', loading: true });
+    const skill = { name: 'review-pr', invocation: '/review-pr', source: 'user' as const };
+    const stale = run(state, {
+      type: 'skills/loaded',
+      key: 'codex /Users/example',
+      list: { skills: [skill] },
+    });
+    expect(stale.skills.list).toEqual([]);
+    state = run(state, {
+      type: 'skills/loaded',
+      key: 'claude /Users/example/code/ply',
+      list: { skills: [skill] },
+    });
+    expect(state.skills).toMatchObject({ loading: false, list: [skill], error: null });
+    state = run(state, {
+      type: 'skills/failed',
+      key: 'claude /Users/example/code/ply',
+      message: 'no plyd',
+    });
+    expect(state.skills.error).toBe('no plyd');
+  });
+
+  test('selectors: a pane queue in order, counts, and what a task and a strip show', () => {
+    let state = run(
+      threePanes(),
+      {
+        type: 'tasks/loaded',
+        list: {
+          tasks: [
+            task({ id: 1, state: 'running', position: 0 }),
+            task({ id: 3, position: 1 }),
+            task({ id: 2, position: 0 }),
+            task({ id: 4, pane_id: 2 }),
+            task({ id: 5, pane_id: undefined, pool: { cli: 'claude', cwd: '/Users/example' } }),
+            task({ id: 6, state: 'ended', ended_at: 1_790_000_100 }),
+          ],
+          queues: [{ pane_id: 2, paused: 'restored' }],
+        },
+      },
+      evt({ e: 'pane.status', p: { pane_id: 1, status: 'waiting_permission', at: 5 } }),
+    );
+    expect(selectPaneQueue(state, 1).map((t) => t.id)).toEqual([2, 3]);
+    expect(selectActiveTask(state, 1)?.id).toBe(1);
+    expect(selectQueueCounts(state)).toEqual({ queued: 4, held: 1, running: 1, needsYou: 1 });
+    const pane1 = state.panes[1] as PaneState;
+    expect(taskView(state.tasks.tasks[1] as Task, pane1, undefined).tone).toBe('waiting');
+    expect(taskView(state.tasks.tasks[2] as Task, pane1, undefined).label).toBe('next');
+    expect(taskView(state.tasks.tasks[3] as Task, pane1, undefined).label).toBe('2nd');
+    expect(
+      taskView(state.tasks.tasks[4] as Task, state.panes[2], { pane_id: 2, paused: 'restored' })
+        .label,
+    ).toBe('held');
+    expect(taskView(state.tasks.tasks[5] as Task, undefined, undefined).label).toBe(
+      'waits for a free pane',
+    );
+    expect(queueStripView(state, 2)).toMatchObject({ kind: 'restored', count: 1 });
+    expect(queueStripView(state, 1)).toBeNull();
+    state = run(state, evt({ e: 'queue.changed', p: { pane_id: 1, blocked: 'typing' } }));
+    expect(queueStripView(state, 1)).toMatchObject({ kind: 'typing', next: { id: 2 } });
+  });
+
+  test('matchSkills finds a query in the invocation, name or description, ignoring case', () => {
+    const skills: Skill[] = [
+      { name: 'review-pr', invocation: '/review-pr', description: 'Full review', source: 'user' },
+      {
+        name: 'brainstorming',
+        invocation: '/superpowers:brainstorming',
+        source: 'plugin',
+        plugin: 'superpowers',
+      },
+      {
+        name: 'audit',
+        invocation: '$audit',
+        description: 'Security AUDIT of a diff',
+        source: 'user',
+      },
+    ];
+    expect(matchSkills(skills, 'REVIEW').map((s) => s.name)).toEqual(['review-pr']);
+    expect(matchSkills(skills, 'audit').map((s) => s.name)).toEqual(['audit']);
+    expect(matchSkills(skills, 'superpowers').map((s) => s.name)).toEqual(['brainstorming']);
+    expect(matchSkills(skills, '  ')).toHaveLength(3);
   });
 });

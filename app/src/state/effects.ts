@@ -41,6 +41,14 @@ function message(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+/** What the task form says for a failed request; a plyd from before the queue answers `unknown_method`. */
+function queueMessage(error: unknown): string {
+  if (error instanceof RequestError && error.code === 'unknown_method') {
+    return 'This plyd predates the task queue: rebuild it, then Restart plyd';
+  }
+  return message(error);
+}
+
 function pickWorkspace(list: Workspace[], home: string): Workspace | undefined {
   return (
     list.find((w) => w.path === home) ?? [...list].sort((a, b) => b.opened_at - a.opened_at)[0]
@@ -128,12 +136,20 @@ export function startEffects(store: Store, options: EffectsOptions): () => void 
       // An event read with the pane.list answer is applied before the await resumes, so it is replayed after the load.
       events = [];
       loadEvents = events;
-      const [layout, panes] = await Promise.all([
+      const [layout, panes, tasks] = await Promise.all([
         client.request('layout.get', ref),
         client.request('pane.list', ref),
+        client.request('task.list', ref).catch((error) => {
+          if (error instanceof RequestError && error.code === 'unknown_method') {
+            log('info', 'this plyd predates the task queue');
+            return null;
+          }
+          throw error;
+        }),
       ]);
       if (generation !== loadGeneration) return;
       dispatch({ type: 'session/loaded', workspace, panes, layout, settings });
+      dispatch({ type: 'tasks/loaded', list: tasks });
       for (const event of events) dispatch({ type: 'daemon/event', event });
     } catch (error) {
       failed('Loading the session', error);
@@ -276,6 +292,63 @@ export function startEffects(store: Store, options: EffectsOptions): () => void 
     usageTimer = null;
   }
 
+  /** The dispatch form's submit: `task.add` for a pane or a pool, `pane.create` with the text as first prompt for a new pane. */
+  function addTask(state: AppState, action: Extract<Action, { type: 'task/add' }>): void {
+    const workspace = state.workspace;
+    if (!workspace) {
+      dispatch({ type: 'task/addFailed', message: 'plyd has not loaded a workspace yet' });
+      return;
+    }
+    const target = action.target;
+    if (target.kind === 'new') {
+      const tab = selectActiveTab(state);
+      const params = createParams(state, {
+        target: tab && !isTabFull(tab) ? 'pane' : 'tab',
+        cli: target.cli,
+        cwd: target.cwd,
+        prompt: action.text,
+      });
+      if (!params) return;
+      client
+        .request('pane.create', params)
+        .then((pane) => {
+          dispatch({ type: 'pane/created', pane });
+          dispatch({ type: 'task/opened' });
+        })
+        .catch((error) => {
+          log('warn', 'pane.create for a task failed', { error: message(error) });
+          dispatch({ type: 'task/addFailed', message: message(error) });
+        });
+      return;
+    }
+    client
+      .request('task.add', {
+        workspace_id: workspace.id,
+        target:
+          target.kind === 'pane'
+            ? { pane: target.paneId }
+            : { pool: { cli: target.cli, cwd: target.cwd } },
+        text: action.text,
+        ...(action.skill ? { skill: action.skill } : {}),
+      })
+      .then((task) => dispatch({ type: 'task/added', task }))
+      .catch((error) => {
+        log('warn', 'task.add failed', { error: message(error) });
+        dispatch({ type: 'task/addFailed', message: queueMessage(error) });
+      });
+  }
+
+  function askSkills(action: Extract<Action, { type: 'skills/query' }>): void {
+    const key = `${action.cli} ${action.cwd}`;
+    client
+      .request('skill.list', { cli: action.cli, cwd: action.cwd })
+      .then((list) => dispatch({ type: 'skills/loaded', key, list }))
+      .catch((error) => {
+        log('warn', 'skill.list failed', { error: message(error) });
+        dispatch({ type: 'skills/failed', key, message: queueMessage(error) });
+      });
+  }
+
   function closeFocused(prev: AppState): void {
     const pane = selectFocusedPane(prev);
     if (!pane || isAlive(pane)) return;
@@ -310,6 +383,34 @@ export function startEffects(store: Store, options: EffectsOptions): () => void 
         break;
       case 'dirs/browse':
         browse();
+        break;
+      case 'task/add':
+        addTask(next, action);
+        break;
+      case 'task/cancel':
+        client
+          .request('task.cancel', { task_id: action.taskId })
+          .catch((error) => failed('Cancelling the task', error));
+        break;
+      case 'task/move':
+        client
+          .request('task.move', { task_id: action.taskId, position: action.position })
+          .catch((error) => failed('Moving the task', error));
+        break;
+      case 'task/send':
+        client
+          .request('task.send', { task_id: action.taskId })
+          .catch((error) => failed('Sending the task', error));
+        break;
+      case 'queue/pause':
+        client
+          .request('queue.pause', { pane_id: action.paneId, paused: action.paused })
+          .catch((error) =>
+            failed(action.paused ? 'Pausing the queue' : 'Resuming the queue', error),
+          );
+        break;
+      case 'skills/query':
+        askSkills(action);
         break;
       case 'pane/closeConfirmed':
         client

@@ -1,6 +1,6 @@
 import { basename, resolve } from 'node:path';
 import { MAX_PANES_PER_TAB } from '../ipc/proto.gen';
-import type { Cli, Pane, Split, Tab } from './actions';
+import type { Cli, Pane, QueueState, Skill, SkillSource, Split, Tab, Task } from './actions';
 import { type DirCandidate, type DirSuggestion, rankDirs } from './dir-match';
 import type { AppState, DirSearch, PaneState } from './reducer';
 
@@ -324,3 +324,167 @@ export function selectDirSuggestions(state: AppState): readonly DirSuggestion[] 
   lastSuggestions = { dirs, home, rows };
   return rows;
 }
+
+/** A pane's queued tasks in the order they will be typed. */
+export function selectPaneQueue(state: AppState, paneId: number): Task[] {
+  return Object.values(state.tasks.tasks)
+    .filter((t) => t.pane_id === paneId && t.state === 'queued')
+    .sort((a, b) => a.position - b.position || a.id - b.id);
+}
+
+/** The pane's task that was typed and has not finished, if any. */
+export function selectActiveTask(state: AppState, paneId: number): Task | undefined {
+  return Object.values(state.tasks.tasks).find(
+    (t) => t.pane_id === paneId && (t.state === 'sent' || t.state === 'running'),
+  );
+}
+
+/** Pool tasks that wait for a free pane, oldest first. */
+export function selectPoolTasks(state: AppState): Task[] {
+  return Object.values(state.tasks.tasks)
+    .filter((t) => t.pane_id === undefined && t.state === 'queued')
+    .sort((a, b) => a.position - b.position || a.id - b.id);
+}
+
+/** Finished tasks, newest first. */
+export function selectFinishedTasks(state: AppState): Task[] {
+  return Object.values(state.tasks.tasks)
+    .filter((t) => t.state === 'ended' || t.state === 'failed' || t.state === 'cancelled')
+    .sort((a, b) => (b.ended_at ?? 0) - (a.ended_at ?? 0) || b.id - a.id);
+}
+
+/** The queue's totals for the top bar and the queue's subtitle: `held` counts queued tasks of paused queues. */
+export interface QueueCounts {
+  queued: number;
+  held: number;
+  running: number;
+  needsYou: number;
+}
+
+/** Totals over every task of the workspace. */
+export function selectQueueCounts(state: AppState): QueueCounts {
+  const counts: QueueCounts = { queued: 0, held: 0, running: 0, needsYou: 0 };
+  for (const t of Object.values(state.tasks.tasks)) {
+    if (t.state === 'queued') {
+      counts.queued++;
+      if (t.pane_id !== undefined && state.tasks.queues[t.pane_id]?.paused) counts.held++;
+    } else if (t.state === 'sent' || t.state === 'running') {
+      counts.running++;
+      const pane = t.pane_id === undefined ? undefined : state.panes[t.pane_id];
+      if (pane && needsYou(pane)) counts.needsYou++;
+    }
+  }
+  return counts;
+}
+
+/** How a task row shows its state; `waiting` is a running task whose pane needs the user. */
+export type TaskTone =
+  | 'queued'
+  | 'held'
+  | 'typing'
+  | 'sending'
+  | 'running'
+  | 'waiting'
+  | 'ended'
+  | 'failed'
+  | 'cancelled';
+
+/** One task row's tone and label. */
+export interface TaskView {
+  tone: TaskTone;
+  label: string;
+}
+
+function ordinal(n: number): string {
+  if (n === 1) return 'next';
+  const tens = n % 100;
+  const suffix =
+    tens >= 11 && tens <= 13
+      ? 'th'
+      : n % 10 === 1
+        ? 'st'
+        : n % 10 === 2
+          ? 'nd'
+          : n % 10 === 3
+            ? 'rd'
+            : 'th';
+  return `${n}${suffix}`;
+}
+
+/** What a task row says, given its pane and that pane's queue flags. */
+export function taskView(
+  task: Task,
+  pane: Pick<Pane, 'status'> | undefined,
+  queue: QueueState | undefined,
+): TaskView {
+  switch (task.state) {
+    case 'queued':
+      if (task.pane_id === undefined) return { tone: 'queued', label: 'waits for a free pane' };
+      if (queue?.paused) return { tone: 'held', label: 'held' };
+      if (queue?.blocked === 'typing' && task.position === 0) {
+        return { tone: 'typing', label: 'waits · you typed here' };
+      }
+      return { tone: 'queued', label: ordinal(task.position + 1) };
+    case 'sent':
+      return { tone: 'sending', label: 'sending' };
+    case 'running':
+      return pane && needsYou(pane)
+        ? { tone: 'waiting', label: 'needs you' }
+        : { tone: 'running', label: 'running' };
+    case 'ended':
+      return { tone: 'ended', label: 'ended' };
+    case 'failed':
+      return {
+        tone: 'failed',
+        label: task.detail?.startsWith('not submitted') ? 'not submitted' : 'failed',
+      };
+    case 'cancelled':
+      return { tone: 'cancelled', label: 'cancelled' };
+  }
+}
+
+/** Why a pane's next task cannot go by itself, for the strip under the pane; `null` when it can or there is none. */
+export interface QueueStrip {
+  kind: 'typing' | 'restored' | 'failed' | 'paused';
+  count: number;
+  next: Task;
+  /** The task whose failure paused the queue, for `failed`. */
+  failed?: Task;
+}
+
+/** The strip under a pane whose queue is blocked or paused while it holds tasks. */
+export function queueStripView(state: AppState, paneId: number): QueueStrip | null {
+  const queued = selectPaneQueue(state, paneId);
+  const next = queued[0];
+  if (!next) return null;
+  const q = state.tasks.queues[paneId];
+  const count = queued.length;
+  if (q?.paused === 'failed') {
+    const failed = Object.values(state.tasks.tasks)
+      .filter((t) => t.pane_id === paneId && t.state === 'failed')
+      .sort((a, b) => (b.ended_at ?? 0) - (a.ended_at ?? 0))[0];
+    return failed ? { kind: 'failed', count, next, failed } : { kind: 'failed', count, next };
+  }
+  if (q?.paused === 'restored') return { kind: 'restored', count, next };
+  if (q?.paused === 'user') return { kind: 'paused', count, next };
+  if (q?.blocked === 'typing') return { kind: 'typing', count, next };
+  return null;
+}
+
+/** The skills whose invocation, name, plugin or description holds `query`, ignoring case; all of them for a blank query. */
+export function matchSkills(skills: readonly Skill[], query: string): Skill[] {
+  const q = query.trim().toLowerCase();
+  if (!q) return [...skills];
+  return skills.filter((s) =>
+    `${s.invocation} ${s.name} ${s.plugin ?? ''} ${s.description ?? ''}`.toLowerCase().includes(q),
+  );
+}
+
+/** Labels of the skill groups, in the order `skill.list` returns them. */
+export const SKILL_GROUPS: readonly { source: SkillSource; label: string }[] = [
+  { source: 'project', label: 'Project' },
+  { source: 'user', label: 'User' },
+  { source: 'plugin', label: 'Plugins' },
+  { source: 'system', label: 'Built into the CLI' },
+  { source: 'prompt', label: 'Prompts' },
+];

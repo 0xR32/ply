@@ -64,6 +64,7 @@ describe('effects', () => {
       'workspace.list',
       'layout.get',
       'pane.list',
+      'task.list',
     ]);
     expect(server.palette?.cursor).toBe(accentAlternatives.blue);
     expect(state().tabs.map((t) => t.pane_ids)).toEqual([[1, 2, 3], [4]]);
@@ -372,5 +373,105 @@ describe('the directory search’s sources', () => {
     store.dispatch({ type: 'dirs/browse' });
     await until(() => dirs().query === '~/notes', 'the picked folder');
     expect(dirs().open).toBe(false);
+  });
+});
+
+describe('the task queue', () => {
+  test('a plyd from before the task queue still loads the session, with the queue unavailable', async () => {
+    const { state } = await setup((server) =>
+      server.refuseNext('task.list', 'unknown_method', 'unknown method "task.list"'),
+    );
+    expect(state().tabs.length).toBe(2);
+    expect(state().tasks.available).toBe(false);
+  });
+
+  test('the queue loads with the session and task/add queues on a pane and closes the form', async () => {
+    const { server, store, state, until } = await setup();
+    await until(() => state().tasks.available, 'the queue');
+    store.dispatch({ type: 'overlay/open', overlay: { kind: 'dispatch', paneId: 1 } });
+    store.dispatch({
+      type: 'task/add',
+      target: { kind: 'pane', paneId: 1 },
+      text: '/review-pr 212',
+      skill: '/review-pr',
+    });
+    await until(() => state().overlay === null, 'the form to close');
+    const add = server.requests.find((r) => r.m === 'task.add');
+    expect(add?.p).toEqual({
+      workspace_id: 1,
+      target: { pane: 1 },
+      text: '/review-pr 212',
+      skill: '/review-pr',
+    });
+    const task = Object.values(state().tasks.tasks)[0];
+    expect(task).toMatchObject({ pane_id: 1, text: '/review-pr 212', state: 'queued' });
+  });
+
+  test("a refused task keeps the form open with plyd's reason", async () => {
+    const { server, store, state, until } = await setup();
+    server.refuseNext('task.add', 'invalid_state', 'the queue already holds 32 tasks');
+    store.dispatch({ type: 'overlay/open', overlay: { kind: 'dispatch', paneId: 1 } });
+    store.dispatch({ type: 'task/add', target: { kind: 'pane', paneId: 1 }, text: 'x' });
+    await until(() => state().taskForm.error !== null, 'the error');
+    expect(state().taskForm.error).toContain('32 tasks');
+    expect(state().overlay?.kind).toBe('dispatch');
+  });
+
+  test('a pool target goes to task.add; a new-pane target opens a pane with the text as its first prompt', async () => {
+    const { server, store, state, until } = await setup();
+    store.dispatch({
+      type: 'task/add',
+      target: { kind: 'pool', cli: 'codex', cwd: '/Users/example/code/ply' },
+      text: '$audit',
+    });
+    await until(() => server.requests.some((r) => r.m === 'task.add'), 'task.add');
+    expect(server.requests.find((r) => r.m === 'task.add')?.p).toMatchObject({
+      target: { pool: { cli: 'codex', cwd: '/Users/example/code/ply' } },
+    });
+    store.dispatch({ type: 'overlay/open', overlay: { kind: 'dispatch' } });
+    store.dispatch({
+      type: 'task/add',
+      target: { kind: 'new', cli: 'claude', cwd: '/Users/example/code/ply' },
+      text: 'plan the queue',
+    });
+    await until(() => state().overlay === null, 'the form to close');
+    expect(server.requests.find((r) => r.m === 'pane.create')?.p).toMatchObject({
+      cli: 'claude',
+      cwd: '/Users/example/code/ply',
+      prompt: 'plan the queue',
+    });
+  });
+
+  test('cancel, move, send and pause reach plyd; skills are asked for and kept', async () => {
+    const { server, store, state, until } = await setup();
+    server.skills = { skills: [{ name: 'review-pr', invocation: '/review-pr', source: 'user' }] };
+    store.dispatch({ type: 'task/add', target: { kind: 'pane', paneId: 1 }, text: 'a' });
+    store.dispatch({ type: 'task/add', target: { kind: 'pane', paneId: 1 }, text: 'b' });
+    await until(() => Object.keys(state().tasks.tasks).length === 2, 'two tasks');
+    const [a, b] = Object.values(state().tasks.tasks).sort((x, y) => x.id - y.id);
+    store.dispatch({ type: 'task/move', taskId: b?.id ?? 0, position: 0 });
+    store.dispatch({ type: 'queue/pause', paneId: 1, paused: true });
+    store.dispatch({ type: 'task/send', taskId: a?.id ?? 0 });
+    store.dispatch({ type: 'task/cancel', taskId: a?.id ?? 0 });
+    store.dispatch({ type: 'skills/query', cli: 'claude', cwd: '/Users/example/code/ply' });
+    await until(() => state().skills.list.length === 1, 'the skills');
+    await until(() => state().tasks.queues[1]?.paused === 'user', 'the pause');
+    const sent = server.requests
+      .map((r) => r.m)
+      .filter((m) => m.startsWith('task.') || m.startsWith('queue.') || m === 'skill.list');
+    expect(sent).toEqual([
+      'task.list',
+      'task.add',
+      'task.add',
+      'task.move',
+      'queue.pause',
+      'task.send',
+      'task.cancel',
+      'skill.list',
+    ]);
+    expect(server.requests.find((r) => r.m === 'skill.list')?.p).toEqual({
+      cli: 'claude',
+      cwd: '/Users/example/code/ply',
+    });
   });
 });
