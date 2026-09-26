@@ -32,6 +32,7 @@ hash. Never run `zig build` by hand inside the cached source: without the flags 
 | `just dev` | `bun --hot app/src/main.tsx` |
 | `just fmt` | `cargo fmt --all` and `biome check --write` |
 | `just fonts` | copies `app/assets/fonts/*.ttf` into `~/Library/Fonts`, the only place the app finds Geist (GPUIX loads no font file); run it once yourself, nothing else does |
+| `just icon` | renders `app/assets/icon/ply.svg`, the app icon, at every size macOS asks for with `resvg` (`brew install resvg`) and packs them with `iconutil` into `app/assets/icon/ply.icns`, which is committed, so nothing else needs either tool |
 
 `bun run dev`, `bun run check`, `bun run test` and `bun run gen` are the same entry points for the TypeScript side.
 `PLY_WINDOW_FOCUS=0 bun run dev` opens the window without taking focus, which keeps scripted or agent-driven runs from
