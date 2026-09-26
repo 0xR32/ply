@@ -8,7 +8,7 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
-use ply_proto::control::ErrorCode;
+use ply_proto::control::{ErrorCode, MAX_LINE_BYTES};
 use ply_proto::pane::{
     AgentCli, BlockReason, MAX_TASK_TEXT_BYTES, PaneId, PauseReason, QueueState, Task, TaskId,
     TaskList, TaskState, UnixSeconds,
@@ -18,6 +18,9 @@ use crate::panes::registry::{MethodResult, refuse};
 
 /// Finished tasks kept per workspace; older ones are deleted.
 pub const KEEP_FINISHED: usize = 200;
+
+/// Most bytes of tasks `task.list` answers with, leaving room in the C1 line for the response and the queues' flags.
+pub const LIST_BYTES: usize = MAX_LINE_BYTES - 64 * 1024;
 
 /// Detail of a task whose pane closed before or while it ran.
 pub const PANE_CLOSED: &str = "the pane was closed";
@@ -177,7 +180,8 @@ impl Queues {
         self.tasks.get(&id)
     }
 
-    /// The tasks of `workspace_id` as `task.list` returns them, with the flags of those `panes` that are paused or blocked.
+    /// The tasks of `workspace_id` as `task.list` returns them, with the flags of those `panes` that are paused or blocked:
+    /// every open task, then the finished ones newest first while the tasks fit in [`LIST_BYTES`] as JSON.
     pub fn list(&self, workspace_id: u64, panes: &HashSet<PaneId>) -> TaskList {
         let mut open: Vec<Task> = Vec::new();
         let mut finished: Vec<Task> = Vec::new();
@@ -201,7 +205,17 @@ impl Queues {
             )
         });
         finished.sort_by_key(|t| std::cmp::Reverse((t.ended_at, t.id)));
-        open.extend(finished);
+        let mut used = open
+            .iter()
+            .map(encoded_len)
+            .fold(0usize, usize::saturating_add);
+        for task in finished {
+            used = used.saturating_add(encoded_len(&task));
+            if used > LIST_BYTES {
+                break;
+            }
+            open.push(task);
+        }
         let mut queues: Vec<QueueState> = self
             .flags
             .iter()
@@ -217,6 +231,15 @@ impl Queues {
             tasks: open,
             queues,
         }
+    }
+
+    /// Bytes of text the queued, sent and running tasks of `workspace_id` hold together.
+    pub fn open_text_bytes(&self, workspace_id: u64) -> usize {
+        self.tasks
+            .values()
+            .filter(|t| t.workspace_id == workspace_id && !is_finished(t.state))
+            .map(|t| t.text.len())
+            .sum()
     }
 
     /// How many queued tasks `key` holds, which is also the next task's position.
@@ -452,6 +475,11 @@ impl Queues {
         }
         changed
     }
+}
+
+/// Bytes `task` takes in a JSON array; a task that cannot be encoded never fits.
+fn encoded_len(task: &Task) -> usize {
+    serde_json::to_vec(task).map_or(usize::MAX, |v| v.len() + 1)
 }
 
 /// Sets `task`'s state, the time that state stamps, and `detail`.
@@ -734,6 +762,41 @@ mod tests {
         assert_eq!(q.head(7).map(|t| t.id), Some(2));
         let codex = q.claim(8, 1, AgentCli::Codex, "/Users/example/project");
         assert_eq!(codex[0].id, 1);
+    }
+
+    #[test]
+    fn the_list_fits_one_c1_line_and_drops_the_oldest_history_first() {
+        use ply_proto::control::{MAX_LINE_BYTES, Response, ServerMsg, encode_line};
+        let mut q = Queues::default();
+        let big = "x\n".repeat(MAX_TASK_TEXT_BYTES / 2);
+        for i in 0..KEEP_FINISHED {
+            let id = TaskId::try_from(i).unwrap() + 1;
+            let mut t = queued(id, Some(7), 0);
+            t.text = big.clone();
+            q.insert(t);
+            q.set_state(id, TaskState::Ended, None, 1000 + id);
+        }
+        let mut open = queued(9999, Some(7), 0);
+        open.text = big;
+        q.insert(open);
+        let list = q.list(1, &HashSet::new());
+        let res = Response {
+            id: u64::MAX,
+            outcome: Ok(serde_json::to_value(&list).unwrap()),
+        };
+        let line = encode_line(&ServerMsg::Res(res)).expect("one line");
+        assert!(line.len() <= MAX_LINE_BYTES);
+        assert_eq!(list.tasks[0].id, 9999, "open tasks are always listed");
+        let ids: Vec<TaskId> = list.tasks[1..].iter().map(|t| t.id).collect();
+        assert_eq!(
+            ids[0],
+            TaskId::try_from(KEEP_FINISHED).unwrap(),
+            "newest first"
+        );
+        assert!(
+            ids.windows(2).all(|w| w[0] == w[1] + 1),
+            "a run of the newest, none skipped"
+        );
     }
 
     #[test]

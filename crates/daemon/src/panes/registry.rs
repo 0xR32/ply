@@ -19,9 +19,9 @@ use ply_proto::control::{
     TaskAddParams,
 };
 use ply_proto::pane::{
-    AgentCli, BlockReason, Cli, Layout, MAX_PANES_PER_TAB, MAX_QUEUED_TASKS, Pane, PaneId,
-    PaneStatus, PauseReason, Progress, Session, Settings, Tab, Task, TaskId, TaskList, TaskState,
-    TaskTarget, TerminalTheme, UnixSeconds, Workspace,
+    AgentCli, BlockReason, Cli, Layout, MAX_OPEN_TASK_TEXT_BYTES, MAX_PANES_PER_TAB,
+    MAX_QUEUED_TASKS, Pane, PaneId, PaneStatus, PauseReason, Progress, Session, Settings, Tab,
+    Task, TaskId, TaskList, TaskState, TaskTarget, TerminalTheme, UnixSeconds, Workspace,
 };
 use tokio::sync::{broadcast, mpsc};
 
@@ -851,6 +851,17 @@ impl Registry {
             return Err(refuse(
                 ErrorCode::InvalidState,
                 format!("the queue already holds {MAX_QUEUED_TASKS} tasks"),
+            ));
+        }
+        let open = self.queues.open_text_bytes(task.workspace_id);
+        if open + task.text.len() > MAX_OPEN_TASK_TEXT_BYTES {
+            return Err(refuse(
+                ErrorCode::InvalidState,
+                format!(
+                    "the workspace's waiting tasks already hold {} KiB of text; the limit is {} KiB",
+                    open / 1024,
+                    MAX_OPEN_TASK_TEXT_BYTES / 1024
+                ),
             ));
         }
         task.position = count(queued);
@@ -1741,6 +1752,25 @@ mod tests {
         }
         assert_eq!(
             code(&mut reg, add(pane.id, "one too many")),
+            ErrorCode::InvalidState
+        );
+    }
+
+    #[test]
+    fn a_workspaces_open_tasks_hold_at_most_the_text_limit() {
+        use ply_proto::pane::MAX_OPEN_TASK_TEXT_BYTES;
+        let (mut reg, _) = registry();
+        let one = agent(&mut reg, "/Users/example");
+        let two = agent(&mut reg, "/Users/example/other");
+        let text = "x".repeat(MAX_TASK_TEXT_BYTES);
+        for i in 0..MAX_OPEN_TASK_TEXT_BYTES / MAX_TASK_TEXT_BYTES {
+            let pane = if i % 2 == 0 { one.id } else { two.id };
+            reg.add_task(&add(pane, &text), 20).unwrap();
+        }
+        assert_eq!(
+            reg.add_task(&add(two.id, "one byte too many"), 20)
+                .unwrap_err()
+                .code,
             ErrorCode::InvalidState
         );
     }

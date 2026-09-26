@@ -385,6 +385,18 @@ describe('the task queue', () => {
     expect(state().tasks.available).toBe(false);
   });
 
+  test('a task.list that fails leaves the session loading and says the queue could not be read', async () => {
+    const { state, seen } = await setup((server) =>
+      server.refuseNext('task.list', 'internal', 'the answer does not fit in one C1 line'),
+    );
+    expect(state().tabs.length).toBe(2);
+    expect(state().tasks.available).toBe(false);
+    expect(seen).toContainEqual({
+      type: 'notice/show',
+      text: 'Loading the task queue failed: the answer does not fit in one C1 line',
+    });
+  });
+
   test('the queue loads with the session and task/add queues on a pane and closes the form', async () => {
     const { server, store, state, until } = await setup();
     await until(() => state().tasks.available, 'the queue');

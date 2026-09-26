@@ -41,7 +41,8 @@ stop it removes the socket again.
 UTF-8 JSON, one object per line, each line ending in `\n`. A line is at most
 1 MiB (`MAX_LINE_BYTES`, newline included). plyd closes a connection whose line
 passes the cap without answering it; the app's client drops a connection whose
-line from plyd does.
+line from plyd does. An answer of plyd's that would pass the cap is sent as an
+`internal` error instead, so no request goes unanswered.
 
 Every message is an object tagged by `"t"`:
 
@@ -377,8 +378,9 @@ a queue's pause lives in memory.
 
 **`task.list`** returns the workspace's `TaskList`: queued, sent and running
 tasks first (queued ones by queue and position), then the finished ones newest
-first, and every queue that is paused or blocked. `not_found` for an unknown
-workspace.
+first, as many as keep the tasks within 960 KiB of JSON (`LIST_BYTES`, so the
+answer fits one line; older ones stay in `ply.db` until pruned), and every
+queue that is paused or blocked. `not_found` for an unknown workspace.
 
 **`task.add`** queues a task and returns it, announced with `task.changed`.
 
@@ -393,8 +395,9 @@ In order, plyd refuses with `shutting_down` once a shutdown was requested;
 `bad_request` for text that is empty, too long or holds a control character, a
 pool directory that is not absolute, and a pane that runs a shell; `not_found`
 for an unknown workspace or a pane outside it; `invalid_state` for a pane that
-has exited, and for a queue or pool that already holds 32 queued tasks
-(`MAX_QUEUED_TASKS`). A pane that is `lost` takes the task; it waits until the
+has exited, for a queue or pool that already holds 32 queued tasks
+(`MAX_QUEUED_TASKS`), and for text that would take the workspace's queued, sent
+and running tasks past 256 KiB of text together (`MAX_OPEN_TASK_TEXT_BYTES`). A pane that is `lost` takes the task; it waits until the
 pane is resumed and its turn comes. A lost pane that reopens as a shell (Ruling
 R50) cancels its queued tasks ("the pane reopened as a shell"), and closing a
 pane cancels its queued tasks and fails the one it was running ("the pane was

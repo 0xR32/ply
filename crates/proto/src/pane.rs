@@ -397,6 +397,9 @@ pub const MAX_TASK_TEXT_BYTES: usize = 16 * 1024;
 /// Most queued tasks one pane's queue, or one workspace's pool, holds; `task.add` beyond it is `invalid_state`.
 pub const MAX_QUEUED_TASKS: usize = 32;
 
+/// Most task text in bytes a workspace's queued, sent and running tasks hold together, so `task.list` fits one C1 line; `task.add` beyond it is `invalid_state`.
+pub const MAX_OPEN_TASK_TEXT_BYTES: usize = 256 * 1024;
+
 /// Where a task stands (Ruling R60); `ended` means the turn it started ended, which ply cannot tell from an interrupt.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]

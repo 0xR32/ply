@@ -147,12 +147,8 @@ async fn connection(stream: UnixStream, shared: Arc<Shared>) {
                 }
             },
         };
-        let bytes = match encode_line(&ServerMsg::Res(response)) {
-            Ok(bytes) => bytes,
-            Err(e) => {
-                tracing::error!(conn, error = %e, "cannot encode a response");
-                continue;
-            }
+        let Some(bytes) = response_line(conn, response) else {
+            continue;
         };
         if tx.send(bytes).await.is_err() {
             break;
@@ -529,9 +525,47 @@ async fn settings_set(shared: &Shared, settings: Settings) -> Result<Value, Erro
     ok(&Empty {})
 }
 
+/// The line answering a request; an answer that does not fit in one line becomes an `internal` error, so the client is
+/// never left waiting.
+fn response_line(conn: u64, response: Response) -> Option<Vec<u8>> {
+    let id = response.id;
+    let err = match encode_line(&ServerMsg::Res(response)) {
+        Ok(bytes) => return Some(bytes),
+        Err(e) => e,
+    };
+    tracing::error!(conn, id, error = %err, "cannot encode a response; answering with an error");
+    let fallback = Response {
+        id,
+        outcome: Err(ErrorBody {
+            code: ErrorCode::Internal,
+            msg: format!("the answer does not fit in one C1 line: {err}"),
+        }),
+    };
+    match encode_line(&ServerMsg::Res(fallback)) {
+        Ok(bytes) => Some(bytes),
+        Err(e) => {
+            tracing::error!(conn, id, error = %e, "cannot encode an error response");
+            None
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_answer_too_long_for_one_line_is_answered_with_an_error() {
+        let big = Response {
+            id: 7,
+            outcome: Ok(serde_json::Value::String("x".repeat(MAX_LINE_BYTES))),
+        };
+        let line = response_line(1, big).expect("an answer, not silence");
+        let msg: serde_json::Value = serde_json::from_slice(&line).unwrap();
+        assert_eq!(msg["id"], 7);
+        assert_eq!(msg["ok"], false);
+        assert_eq!(msg["err"]["code"], "internal");
+    }
 
     #[tokio::test]
     async fn lines_are_capped_and_split_at_newlines() {

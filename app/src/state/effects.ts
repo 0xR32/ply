@@ -144,7 +144,9 @@ export function startEffects(store: Store, options: EffectsOptions): () => void 
             log('info', 'this plyd predates the task queue');
             return null;
           }
-          throw error;
+          if (error instanceof RequestError && error.code === 'disconnected') throw error;
+          failed('Loading the task queue', error);
+          return null;
         }),
       ]);
       if (generation !== loadGeneration) return;
