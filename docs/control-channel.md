@@ -411,8 +411,8 @@ announced with `task.changed`. `invalid_state` for a task that is not queued.
 
 **`task.send`** types a queued task of a pane now, ahead of its queue: the one
 way past the typing block (see **Records**, `QueueState`). The pane must be
-`idle` with nothing else sent or running, and the task must be on a pane's
-queue, else `invalid_state`. A pause does not stop it either: `task.send` is
+`idle` with nothing else sent or running and its CLI must have reported a
+session, and the task must be on a pane's queue, else `invalid_state`. A pause does not stop it either: `task.send` is
 the user's own instruction for that one task.
 
 **`queue.pause`** pauses (`paused: true`, reason `user`) or resumes

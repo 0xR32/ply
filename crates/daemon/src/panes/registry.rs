@@ -886,10 +886,14 @@ impl Registry {
         Ok(())
     }
 
-    /// The task `pane`'s queue offers now: its head while the queue runs and no task is typed there; none for a shell.
+    /// The task `pane`'s queue offers now: its head while the queue runs and no task is typed there; none for a shell,
+    /// or for a pane whose CLI has not reported a session yet (a startup screen must never get a queued Enter).
     pub fn queue_head(&self, pane: PaneId) -> Option<TaskId> {
         let entry = self.panes.get(&pane)?;
-        if entry.pane.cli == Cli::Shell || self.queues.active(pane).is_some() {
+        if entry.pane.cli == Cli::Shell
+            || entry.pane.session_ref.is_none()
+            || self.queues.active(pane).is_some()
+        {
             return None;
         }
         self.queues.head(pane).map(|t| t.id)
@@ -908,6 +912,7 @@ impl Registry {
             Cli::Shell => return None,
         };
         if !claim_pool
+            || entry.pane.session_ref.is_none()
             || entry.pane.status != PaneStatus::Idle
             || self.queues.active(pane).is_some()
             || self.queues.state_of(pane).paused.is_some()
@@ -955,6 +960,7 @@ impl Registry {
         let entry = self.panes.get(&pane)?;
         if entry.pane.status != PaneStatus::Idle
             || entry.pane.cli == Cli::Shell
+            || entry.pane.session_ref.is_none()
             || self.queues.active(pane).is_some()
         {
             return None;
@@ -1027,6 +1033,12 @@ impl Registry {
             .pane_id
             .ok_or_else(|| refuse(ErrorCode::InvalidState, "a pool task waits for a free pane"))?;
         let entry = self.require(pane)?;
+        if entry.pane.session_ref.is_none() {
+            return Err(refuse(
+                ErrorCode::InvalidState,
+                "the pane's CLI has not started its session yet",
+            ));
+        }
         if entry.pane.status != PaneStatus::Idle || self.queues.active(pane).is_some() {
             return Err(refuse(
                 ErrorCode::InvalidState,
@@ -1594,7 +1606,15 @@ mod tests {
         assert_eq!(stored(&reg), "vim notes.txt");
     }
 
+    /// An agent pane whose CLI has started its session (it reported a session id).
     fn agent(reg: &mut Registry, cwd: &str) -> Pane {
+        let pane = fresh_agent(reg, cwd);
+        reg.panes.get_mut(&pane.id).unwrap().pane.session_ref = Some("s".into());
+        pane
+    }
+
+    /// An agent pane whose CLI has not reported a session yet, as during Codex's startup screens.
+    fn fresh_agent(reg: &mut Registry, cwd: &str) -> Pane {
         let pane = reg
             .insert_pane(
                 &NewPane {
@@ -1607,6 +1627,26 @@ mod tests {
             .unwrap();
         reg.panes.get_mut(&pane.id).unwrap().announced = true;
         pane
+    }
+
+    #[test]
+    fn a_pane_whose_cli_has_not_started_a_session_takes_no_task() {
+        let (mut reg, _) = registry();
+        let pane = fresh_agent(&mut reg, "/Users/example");
+        let task = reg.add_task(&add(pane.id, "not yet"), 20).unwrap();
+        assert_eq!(
+            reg.queue_head(pane.id),
+            None,
+            "a startup screen must never get a queued Enter"
+        );
+        assert_eq!(reg.next_task(pane.id, true), None);
+        assert_eq!(reg.take_task(pane.id, task.id, true, 21), None);
+        assert_eq!(
+            reg.sendable(task.id).unwrap_err().code,
+            ErrorCode::InvalidState
+        );
+        reg.panes.get_mut(&pane.id).unwrap().pane.session_ref = Some("thread".into());
+        assert_eq!(reg.queue_head(pane.id), Some(task.id));
     }
 
     fn add(pane: PaneId, text: &str) -> TaskAddParams {

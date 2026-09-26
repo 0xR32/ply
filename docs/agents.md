@@ -622,9 +622,14 @@ else: it never answers a dialog, passes an option or changes a prompt. Each
 agent process's `Agent` owns a small clocked machine for it
 (`crates/daemon/src/panes/dispatch.rs`); the registry holds the queue.
 
-**When a task is typed.** Only into an agent pane that has been `idle` for 1 s
-(`SETTLE`), has no other task typed, and whose queue is not paused, and only
-the queue's first task. The user's own input comes first:
+**When a task is typed.** Only into an agent pane whose CLI has reported a
+session (`session_ref`: Claude Code's SessionStart, Codex's bound rollout),
+that has been `idle` for 1 s (`SETTLE`), has no other task typed, and whose
+queue is not paused, and only the queue's first task. The session rule keeps a
+queued Enter away from a CLI's startup screens: a Codex pane counts as `idle`
+from its first output byte, which may be its folder-trust or update prompt, so
+a fresh Codex pane takes tasks once its first turn has bound its rollout (open
+it with a first prompt, or type one). The user's own input comes first:
 
 - any key, raw input or paste of the user's marks the pane's input as typed,
   since the CLI may be holding text the task would be appended to; Enter,
