@@ -304,3 +304,67 @@ fn a_task_the_cli_never_acknowledges_fails_and_pauses_the_queue() {
         .clone();
     assert_eq!(b_state, "queued");
 }
+
+#[test]
+fn a_pool_task_goes_to_the_free_pane_of_its_cli_in_its_folder() {
+    let sb = Sandbox::new("typed-pool");
+    install(&sb);
+    hook_program();
+    let project = sb.home.join("project");
+    let inside = project.join("sub");
+    let elsewhere = sb.home.join("elsewhere");
+    for dir in [&inside, &elsewhere] {
+        std::fs::create_dir_all(dir).unwrap();
+    }
+    let _plyd = sb.start();
+    let (mut c, ws) = sb.control();
+    let open = |c: &mut Control, cli: &str, cwd: &std::path::Path| {
+        c.call(
+            "pane.create",
+            json!({"workspace_id": ws, "cli": cli, "cwd": cwd}),
+        )
+        .unwrap()["id"]
+            .as_u64()
+            .unwrap()
+    };
+    let mut panes = Vec::new();
+    for (cli, cwd) in [
+        ("claude", &elsewhere),
+        ("codex", &project),
+        ("claude", &inside),
+    ] {
+        let pane = open(&mut c, cli, cwd);
+        let fake = Fake::ready(&sb, pane);
+        wait_status(&mut c, pane, PaneStatus::Idle, WAIT);
+        if cli == "codex" {
+            fake.send("session");
+        }
+        fake.send("submit 1");
+        panes.push(pane);
+    }
+    let near = panes[2];
+    let task = task_of(
+        c.call(
+            "task.add",
+            json!({"workspace_id": ws, "target": {"pool": {"cli": "claude", "cwd": project}}, "text": "/triage"}),
+        )
+        .unwrap(),
+    );
+    assert_eq!(task.pane_id, None);
+    let running = changed(&mut c, task.id, TaskState::Running);
+    assert_eq!(
+        running.pane_id,
+        Some(near),
+        "the Claude pane in the folder, not the one elsewhere or Codex"
+    );
+    assert!(running.pool.is_some());
+    assert!(
+        c.wait_event(
+            TURN,
+            |e| matches!(e, Event::TaskChanged(t) if t.id == task.id && t.state == TaskState::Ended)
+        )
+        .is_some()
+    );
+    assert_eq!(typed(&sb, "claude"), ["/triage"], "typed once");
+    assert!(typed(&sb, "codex").is_empty());
+}

@@ -637,6 +637,12 @@ the queue's first task. The user's own input comes first:
   pane for 3 s (`SETTLE_AFTER_ENTER`), so their own prompt reaches the CLI
   before a task can.
 
+**A pool task** (sent to "the next free pane") goes to the first pane that
+asks for its next task with its own queue empty and running, no unsent typing,
+the pool's CLI, and a directory at or below the pool's. The pane takes it at the
+moment it would type it, under the registry's lock, so one task is never typed
+twice; a new pool task nudges every live pane of its CLI in the workspace.
+
 **How it is typed.** The registry marks the task `sent` and hands over its
 text; the pane task writes it as one paste encoded against the pane's modes
 (bracketed when the CLI enabled bracketed paste, as both do), and 50 ms later
@@ -789,7 +795,8 @@ terminal and the CLI repaints it.
   `crates/daemon/tests/dispatch.rs`: a real plyd typing two tasks into a
   fake Claude Code one per turn, a Codex task confirmed by its rollout, the
   typing block and `task.send`, a task never acknowledged failing and pausing
-  its queue, and the queue over C1 and across a restart. The fakes' `submit`
+  its queue, a pool task going to the one free Claude Code pane in its folder,
+  and the queue over C1 and across a restart. The fakes' `submit`
   command reads what the pane submits (`crates/daemon/tests/common/fake.rs`).
 - `crates/agents/tests/skills.rs`: front matter (plain, quoted, folded,
   nested, CRLF), names and invocations, opting out, the plugin registry;

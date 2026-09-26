@@ -110,6 +110,11 @@ impl Dispatch {
         }
     }
 
+    /// Whether the user typed into the pane since their last prompt; a pane with unsent typing takes no pool task.
+    pub fn typed(&self) -> bool {
+        self.typed
+    }
+
     /// The pane's queue changed: look at it again once the pane is settled.
     pub fn nudge(&mut self, now: Instant) -> Vec<Action> {
         self.check = true;

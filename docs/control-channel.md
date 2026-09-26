@@ -364,8 +364,13 @@ and never changes its text.
 
 Every pane has a queue; tasks leave it in `position` order. A workspace also has
 pools, one per CLI and directory: a pool task waits until an idle pane of that
-CLI, in that directory or below it, with an empty and running queue of its own,
-takes it (the oldest pool task first). Tasks, not queues, are stored:
+CLI, in that directory or below it, with an empty and running queue of its own
+and no unsent typing, takes it (the oldest pool task first). The pane takes it
+onto its own queue (`task.changed` with its `pane_id`) at the moment it would
+type it, so two free panes never take the same task. plyd resolves a pool's
+directory through symlinks when the task is added, as the CLIs report their
+own (`/var` is `/private/var` on macOS). A pool cannot be paused; its tasks are
+cancelled one by one. Tasks, not queues, are stored:
 `ply.db` keeps every task (the 200 most recent finished ones per workspace), and
 a queue's pause lives in memory.
 

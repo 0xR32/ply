@@ -19,9 +19,9 @@ use ply_proto::control::{
     TaskAddParams,
 };
 use ply_proto::pane::{
-    BlockReason, Cli, Layout, MAX_PANES_PER_TAB, MAX_QUEUED_TASKS, Pane, PaneId, PaneStatus,
-    PauseReason, Progress, Session, Settings, Tab, Task, TaskId, TaskList, TaskState, TaskTarget,
-    TerminalTheme, UnixSeconds, Workspace,
+    AgentCli, BlockReason, Cli, Layout, MAX_PANES_PER_TAB, MAX_QUEUED_TASKS, Pane, PaneId,
+    PaneStatus, PauseReason, Progress, Session, Settings, Tab, Task, TaskId, TaskList, TaskState,
+    TaskTarget, TerminalTheme, UnixSeconds, Workspace,
 };
 use tokio::sync::{broadcast, mpsc};
 
@@ -895,6 +895,54 @@ impl Registry {
         self.queues.head(pane).map(|t| t.id)
     }
 
+    /// The task `pane` may type next: its own head, else, with `claim_pool`, the oldest pool task of its CLI for its
+    /// directory, which it takes onto its queue (announced). None while the queue is paused or a task is typed there.
+    pub fn next_task(&mut self, pane: PaneId, claim_pool: bool) -> Option<TaskId> {
+        if let Some(head) = self.queue_head(pane) {
+            return Some(head);
+        }
+        let entry = self.panes.get(&pane)?;
+        let cli = match entry.pane.cli {
+            Cli::Claude => AgentCli::Claude,
+            Cli::Codex => AgentCli::Codex,
+            Cli::Shell => return None,
+        };
+        if !claim_pool
+            || entry.pane.status != PaneStatus::Idle
+            || self.queues.active(pane).is_some()
+            || self.queues.state_of(pane).paused.is_some()
+        {
+            return None;
+        }
+        let (workspace_id, cwd) = (entry.pane.workspace_id, entry.pane.cwd.clone());
+        let claimed = self.queues.claim(pane, workspace_id, cli, &cwd);
+        if claimed.is_empty() {
+            return None;
+        }
+        tracing::info!(
+            pane_id = pane,
+            task_id = claimed[0].id,
+            "the pane took a pool task"
+        );
+        self.apply_tasks(claimed);
+        self.queue_head(pane)
+    }
+
+    /// The agent panes of `workspace_id` running `cli`, which a new pool task may go to.
+    pub fn pool_panes(&self, workspace_id: u64, cli: AgentCli) -> Vec<PaneId> {
+        let want = match cli {
+            AgentCli::Claude => Cli::Claude,
+            AgentCli::Codex => Cli::Codex,
+        };
+        self.panes
+            .values()
+            .filter(|e| {
+                e.pane.workspace_id == workspace_id && e.pane.cli == want && is_live(e.pane.status)
+            })
+            .map(|e| e.pane.id)
+            .collect()
+    }
+
     /// Claims `task` for typing: marks it `sent` and returns its text when `pane` is idle, has no typed task and offers
     /// it as its head; `forced` (`task.send`) takes any queued task of the pane, past a pause. `None` otherwise.
     pub fn take_task(
@@ -1284,7 +1332,7 @@ fn count(n: usize) -> u32 {
 
 #[cfg(test)]
 mod tests {
-    use ply_proto::pane::{AgentCli, MAX_TASK_TEXT_BYTES, TaskPool};
+    use ply_proto::pane::{MAX_TASK_TEXT_BYTES, TaskPool};
 
     use super::*;
 
@@ -1728,6 +1776,65 @@ mod tests {
             Some("second"),
             "task.send passes a pause"
         );
+    }
+
+    #[test]
+    fn an_idle_pane_with_an_empty_running_queue_takes_a_pool_task() {
+        let (mut reg, mut rx) = registry();
+        let pane = agent(&mut reg, "/Users/example/project/sub");
+        let pool = |cli: AgentCli, cwd: &str| TaskAddParams {
+            target: TaskTarget::Pool(TaskPool {
+                cli,
+                cwd: cwd.to_owned(),
+            }),
+            ..add(pane.id, "pooled")
+        };
+        let codex = reg
+            .add_task(&pool(AgentCli::Codex, "/Users/example"), 20)
+            .unwrap();
+        let task = reg
+            .add_task(&pool(AgentCli::Claude, "/Users/example/project"), 20)
+            .unwrap();
+        events(&mut rx);
+        assert_eq!(
+            reg.next_task(pane.id, false),
+            None,
+            "no claim while the user's input is typed"
+        );
+        reg.pause_queue(pane.id, true).unwrap();
+        assert_eq!(
+            reg.next_task(pane.id, true),
+            None,
+            "a paused queue takes nothing"
+        );
+        reg.pause_queue(pane.id, false).unwrap();
+        events(&mut rx);
+        assert_eq!(reg.next_task(pane.id, true), Some(task.id));
+        let got = events(&mut rx);
+        assert!(
+            matches!(&got[0], Event::TaskChanged(t) if t.id == task.id && t.pane_id == Some(pane.id))
+        );
+        let stored = reg.db.tasks().unwrap();
+        assert_eq!(
+            stored.iter().find(|t| t.id == task.id).unwrap().pane_id,
+            Some(pane.id)
+        );
+        assert_eq!(
+            reg.next_task(pane.id, true),
+            Some(task.id),
+            "its own head first"
+        );
+        let list = reg.tasks_of(1).unwrap();
+        assert_eq!(
+            list.tasks
+                .iter()
+                .find(|t| t.id == codex.id)
+                .unwrap()
+                .pane_id,
+            None
+        );
+        assert_eq!(reg.pool_panes(1, AgentCli::Claude), vec![pane.id]);
+        assert!(reg.pool_panes(1, AgentCli::Codex).is_empty());
     }
 
     #[test]

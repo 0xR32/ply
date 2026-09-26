@@ -314,7 +314,8 @@ impl Agent {
         while let Some(action) = queue.pop_front() {
             match action {
                 Action::Check => {
-                    let head = shared.registry().queue_head(self.pane_id);
+                    let claim_pool = !self.dispatch.typed();
+                    let head = shared.registry().next_task(self.pane_id, claim_pool);
                     queue.extend(self.dispatch.offer(head, now));
                 }
                 Action::Take(task) => {

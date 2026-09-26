@@ -347,6 +347,48 @@ impl Queues {
         changed
     }
 
+    /// Moves the oldest pool task of `workspace_id` for `cli` whose directory is `cwd` or above it onto `pane`'s queue;
+    /// returns the tasks that changed (none when no pool task fits).
+    pub fn claim(
+        &mut self,
+        pane: PaneId,
+        workspace_id: u64,
+        cli: AgentCli,
+        cwd: &str,
+    ) -> Vec<Task> {
+        let dir = std::path::Path::new(cwd);
+        let candidate = self
+            .tasks
+            .values()
+            .filter(|t| {
+                t.state == TaskState::Queued
+                    && t.pane_id.is_none()
+                    && t.workspace_id == workspace_id
+            })
+            .filter(|t| {
+                t.pool
+                    .as_ref()
+                    .is_some_and(|p| p.cli == cli && dir.starts_with(&p.cwd))
+            })
+            .min_by_key(|t| (t.position, t.id))
+            .map(|t| t.id);
+        let Some(id) = candidate else {
+            return Vec::new();
+        };
+        let position = u32::try_from(self.queued_len(&QueueKey::Pane(pane))).unwrap_or(u32::MAX);
+        let Some(task) = self.tasks.get_mut(&id) else {
+            return Vec::new();
+        };
+        let pool = QueueKey::of(task);
+        task.pane_id = Some(pane);
+        task.position = position;
+        let mut changed = vec![task.clone()];
+        if let Some(pool) = pool {
+            changed.extend(self.renumber(&pool));
+        }
+        changed
+    }
+
     /// Removes the finished tasks of `workspace_id` beyond the newest [`KEEP_FINISHED`] and returns their ids.
     pub fn prune(&mut self, workspace_id: u64) -> Vec<TaskId> {
         let mut finished: Vec<(Option<UnixSeconds>, TaskId)> = self
@@ -646,6 +688,52 @@ mod tests {
                 blocked: Some(BlockReason::Typing)
             }]
         );
+    }
+
+    fn pooled(id: TaskId, cli: AgentCli, cwd: &str, position: u32) -> Task {
+        Task {
+            pool: Some(TaskPool {
+                cli,
+                cwd: cwd.to_owned(),
+            }),
+            ..queued(id, None, position)
+        }
+    }
+
+    #[test]
+    fn a_pane_claims_the_oldest_pool_task_of_its_cli_for_its_folder_or_above() {
+        let mut q = with(vec![
+            pooled(1, AgentCli::Codex, "/Users/example/project", 0),
+            pooled(2, AgentCli::Claude, "/Users/example/project", 0),
+            pooled(3, AgentCli::Claude, "/Users/example/project", 1),
+            pooled(4, AgentCli::Claude, "/Users/example/other", 0),
+        ]);
+        assert!(
+            q.claim(7, 1, AgentCli::Claude, "/Users/example/projectile")
+                .is_empty(),
+            "a sibling folder is not below"
+        );
+        assert!(
+            q.claim(7, 2, AgentCli::Claude, "/Users/example/project")
+                .is_empty(),
+            "another workspace"
+        );
+        let changed = q.claim(
+            7,
+            1,
+            AgentCli::Claude,
+            "/Users/example/project/.claude/worktrees/x",
+        );
+        assert_eq!(changed[0].id, 2);
+        assert_eq!((changed[0].pane_id, changed[0].position), (Some(7), 0));
+        assert!(changed[0].pool.is_some(), "the pool it came from is kept");
+        assert!(
+            changed.iter().any(|t| t.id == 3 && t.position == 0),
+            "the pool renumbers"
+        );
+        assert_eq!(q.head(7).map(|t| t.id), Some(2));
+        let codex = q.claim(8, 1, AgentCli::Codex, "/Users/example/project");
+        assert_eq!(codex[0].id, 1);
     }
 
     #[test]

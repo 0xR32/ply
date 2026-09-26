@@ -15,7 +15,7 @@ use ply_proto::control::{
     HANDSHAKE_ID, MAX_LINE_BYTES, PaneAnswerParams, PaneCloseParams, Response, ServerMsg,
     ThemeSetParams, Welcome, encode_line,
 };
-use ply_proto::pane::{PaneId, PaneStatus, Settings};
+use ply_proto::pane::{PaneId, PaneStatus, Settings, TaskPool, TaskTarget};
 use ply_term::Palette;
 use serde::Serialize;
 use serde_json::Value;
@@ -323,12 +323,26 @@ async fn dispatch(shared: &Arc<Shared>, call: Call) -> Result<Value, ErrorBody> 
             ok(&shared.skills.get(sources, p.cli, cwd).await)
         }
         Call::TaskList(p) => ok(&shared.registry().tasks_of(p.workspace_id)?),
-        Call::TaskAdd(p) => {
+        Call::TaskAdd(mut p) => {
             if shared.is_stopping() {
                 return Err(refuse(ErrorCode::ShuttingDown, "plyd is shutting down"));
             }
-            let task = shared.registry().add_task(&p, unix_now())?;
-            nudge(shared, task.pane_id).await;
+            if let TaskTarget::Pool(pool) = &mut p.target {
+                resolve_pool_dir(pool);
+            }
+            let (task, candidates) = {
+                let mut reg = shared.registry();
+                let task = reg.add_task(&p, unix_now())?;
+                let candidates = match (&task.pane_id, &task.pool) {
+                    (Some(pane), _) => vec![*pane],
+                    (None, Some(pool)) => reg.pool_panes(task.workspace_id, pool.cli),
+                    (None, None) => Vec::new(),
+                };
+                (task, candidates)
+            };
+            for pane in candidates {
+                nudge(shared, Some(pane)).await;
+            }
             ok(&task)
         }
         Call::TaskCancel(p) => {
@@ -371,6 +385,19 @@ async fn dispatch(shared: &Arc<Shared>, call: Call) -> Result<Value, ErrorBody> 
             shared.registry().pause_queue(p.pane_id, p.paused)?;
             nudge(shared, Some(p.pane_id)).await;
             ok(&Empty {})
+        }
+    }
+}
+
+/// Resolves a pool's absolute directory through symlinks, as the CLIs report their own (`/var` is `/private/var`); a directory that cannot be resolved stays as given.
+fn resolve_pool_dir(pool: &mut TaskPool) {
+    if !std::path::Path::new(&pool.cwd).is_absolute() {
+        return;
+    }
+    match std::fs::canonicalize(&pool.cwd) {
+        Ok(real) => pool.cwd = real.to_string_lossy().into_owned(),
+        Err(e) => {
+            tracing::debug!(dir = %pool.cwd, error = %e, "cannot resolve a pool directory; keeping it as given")
         }
     }
 }
