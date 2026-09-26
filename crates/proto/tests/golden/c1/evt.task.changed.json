@@ -1,0 +1,17 @@
+{
+  "t": "evt",
+  "e": "task.changed",
+  "p": {
+    "id": 7,
+    "workspace_id": 1,
+    "pane_id": 2,
+    "text": "/review-pr #212",
+    "skill": "/review-pr",
+    "state": "ended",
+    "position": 0,
+    "created_at": 1790276000,
+    "sent_at": 1790276100,
+    "started_at": 1790276101,
+    "ended_at": 1790276400
+  }
+}

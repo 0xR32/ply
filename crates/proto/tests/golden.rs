@@ -17,7 +17,9 @@ use ply_proto::data::{
     Style, StyleEntry, Underline, kind,
 };
 use ply_proto::hook::HookEnvelope;
-use ply_proto::pane::{Layout, Pane, Session, Settings, Usage, Workspace};
+use ply_proto::pane::{
+    Layout, Pane, Session, Settings, SkillList, Task, TaskList, Usage, Workspace,
+};
 use ply_proto::{C2_VERSION, Error, PROTOCOL_VERSION, version};
 use serde_json::Value;
 
@@ -111,6 +113,8 @@ fn c1_goldens_cover_every_method_and_event() {
         "pane.meta",
         "pane.exit",
         "daemon.stopping",
+        "task.changed",
+        "queue.changed",
     ] {
         assert!(
             names.contains(&format!("evt.{e}.json")),
@@ -150,6 +154,9 @@ fn c1_results_decode_into_their_method_types() {
         result_of::<Settings>(&read("res.ok.settings.json")),
         result_of::<Usage>(&read("res.ok.usage.json")),
         result_of::<Usage>(&read("res.ok.usage.none.json")),
+        result_of::<Task>(&read("res.ok.task.json")),
+        result_of::<TaskList>(&read("res.ok.tasks.json")),
+        result_of::<SkillList>(&read("res.ok.skills.json")),
         result_of::<control::Empty>(&read("res.ok.empty.json")),
     ];
     for (typed, raw) in pairs {
@@ -256,6 +263,22 @@ fn c1_invalid_values_are_rejected() {
         ClientMsg::decode(lower.as_bytes()).is_ok(),
         "lower-case hex rejected"
     );
+    for target in [
+        r#"{"pane":2,"pool":{"cli":"claude","cwd":"/Users/example"}}"#,
+        r#"{}"#,
+        r#"{"pool":{"cli":"shell","cwd":"/Users/example"}}"#,
+        r#"{"pane":"2"}"#,
+    ] {
+        let line = format!(
+            r#"{{"t":"req","id":30,"m":"task.add","p":{{"workspace_id":1,"target":{target},"text":"x"}}}}"#
+        );
+        let r = ClientMsg::decode(line.as_bytes()).unwrap_err();
+        assert_eq!(
+            (r.id, r.error.code),
+            (Some(30), ErrorCode::BadRequest),
+            "a task goes to exactly one pane or one agent pool: {target}"
+        );
+    }
     let both = br#"{"t":"res","id":1,"ok":true,"r":{},"err":{"code":"internal","msg":"x"}}"#;
     assert!(
         decode_line::<ServerMsg>(both).is_err(),

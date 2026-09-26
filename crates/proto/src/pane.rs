@@ -1,5 +1,5 @@
-//! Domain records C1 carries: panes, workspaces, tabs, layouts, sessions, the terminal palette, settings and the
-//! CLIs' plan usage.
+//! Domain records C1 carries: panes, workspaces, tabs, layouts, sessions, the terminal palette, settings, the
+//! CLIs' plan usage, the task queue (Ruling R60) and the skills installed for each CLI (Ruling R61).
 
 use std::fmt;
 
@@ -386,4 +386,182 @@ pub struct UsageWindow {
     pub resets_at: Option<UnixSeconds>,
     /// The models the sessions behind this record used, sorted (Codex's `turn_context.model`); empty when unknown.
     pub models: Vec<String>,
+}
+
+/// Id of a queued task (its `tasks` row id); an id that was ever announced is never reused.
+pub type TaskId = u64;
+
+/// Longest task text in bytes; `task.add` refuses a longer one with `bad_request`.
+pub const MAX_TASK_TEXT_BYTES: usize = 16 * 1024;
+
+/// Most queued tasks one pane's queue, or one workspace's pool, holds; `task.add` beyond it is `invalid_state`.
+pub const MAX_QUEUED_TASKS: usize = 32;
+
+/// Where a task stands (Ruling R60); `ended` means the turn it started ended, which ply cannot tell from an interrupt.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum TaskState {
+    /// Waiting in its pane's queue or its pool for the pane to be free.
+    Queued,
+    /// Typed into the pane; the CLI has not acknowledged the prompt yet.
+    Sent,
+    /// The CLI acknowledged the prompt and is working on it (it may be waiting for the user meanwhile).
+    Running,
+    /// The turn the task started ended.
+    Ended,
+    /// Never acknowledged, or the pane's process or plyd stopped while it ran; `detail` says which.
+    Failed,
+    /// Removed before it was typed: by `task.cancel` or because its pane closed.
+    Cancelled,
+}
+
+/// The next-free-pane target: the first idle pane of `cli` whose directory is `cwd` or inside it takes the task.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+pub struct TaskPool {
+    /// The CLI the pane must run.
+    pub cli: AgentCli,
+    /// Absolute directory the pane must be in, or below.
+    pub cwd: String,
+}
+
+/// Where `task.add` sends a task: one pane's queue, or a pool that the next free matching pane takes from.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum TaskTarget {
+    /// The queue of this agent pane.
+    Pane(PaneId),
+    /// The workspace's pool for this CLI and directory.
+    Pool(TaskPool),
+}
+
+/// One task: text the user wrote or picked, typed verbatim into a pane when it is the user's turn (Ruling R60).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+#[ts(optional_fields)]
+pub struct Task {
+    /// Task id.
+    pub id: TaskId,
+    /// Workspace the task belongs to.
+    pub workspace_id: u64,
+    /// The pane it is queued on or ran in; absent while a pool task waits for a pane.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pane_id: Option<PaneId>,
+    /// The pool it was added to, kept after a pane took it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pool: Option<TaskPool>,
+    /// Exactly what is typed, at most [`MAX_TASK_TEXT_BYTES`]; ply never changes it.
+    pub text: String,
+    /// The skill's invocation when the user picked one from `skill.list`; display only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skill: Option<String>,
+    /// Current state.
+    pub state: TaskState,
+    /// 0-based place among the queued tasks of its queue; kept as it was once the task leaves `queued`.
+    pub position: u32,
+    /// Why a task failed or was cancelled, one line.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+    /// When it was added.
+    pub created_at: UnixSeconds,
+    /// When plyd typed it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sent_at: Option<UnixSeconds>,
+    /// When the CLI acknowledged it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub started_at: Option<UnixSeconds>,
+    /// When it ended, failed or was cancelled.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ended_at: Option<UnixSeconds>,
+}
+
+/// Why a pane's queue holds its tasks back until the user resumes it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum PauseReason {
+    /// The user paused it (`queue.pause`).
+    User,
+    /// plyd restarted with tasks still queued; they wait for the user.
+    Restored,
+    /// The last task failed; nothing more is typed until the user resumes.
+    Failed,
+}
+
+/// Why the next task of an unpaused queue cannot be typed right now.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum BlockReason {
+    /// The user typed into the pane since its last prompt, so its input may hold unsent text; `task.send` overrides.
+    Typing,
+}
+
+/// The state of one pane's queue beyond its tasks; `queue.changed` carries it, and a queue with neither field is running.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+#[ts(optional_fields)]
+pub struct QueueState {
+    /// The pane.
+    pub pane_id: PaneId,
+    /// Set while the queue is paused.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub paused: Option<PauseReason>,
+    /// Set while the next task waits for something other than the pane's turn.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub blocked: Option<BlockReason>,
+}
+
+/// What `task.list` returns: the open tasks and the most recent finished ones, and every queue that is paused or blocked.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+pub struct TaskList {
+    /// Queued, sent and running tasks, then finished ones newest first.
+    pub tasks: Vec<Task>,
+    /// Queues that are paused or blocked; every other queue runs.
+    pub queues: Vec<QueueState>,
+}
+
+/// Where a skill was found (Ruling R61).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum SkillSource {
+    /// The project: `.claude/` of the pane's directory for Claude Code, `.agents/` or `.codex/` for Codex.
+    Project,
+    /// The user's own: `~/.claude` (or `CLAUDE_CONFIG_DIR`), `$CODEX_HOME/skills` or `~/.agents/skills`.
+    User,
+    /// An enabled Claude Code plugin; `Skill::plugin` names it.
+    Plugin,
+    /// Skills the CLI installs itself (Codex's `$CODEX_HOME/skills/.system`).
+    System,
+    /// A Codex custom prompt (`$CODEX_HOME/prompts`).
+    Prompt,
+}
+
+/// One skill or command a CLI offers, as its files on this machine describe it; ply only reads them.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+#[ts(optional_fields)]
+pub struct Skill {
+    /// The skill's name.
+    pub name: String,
+    /// What the user types to run it, e.g. `/superpowers:brainstorming` or `$review-pr`.
+    pub invocation: String,
+    /// The front matter's `description`, when it has one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// The front matter's `argument-hint`, when it has one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub argument_hint: Option<String>,
+    /// Where it was found.
+    pub source: SkillSource,
+    /// The plugin it comes from, for `source: plugin`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plugin: Option<String>,
+}
+
+/// What `skill.list` returns: the CLI's skills, project first, then user, plugins, system and prompts.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+pub struct SkillList {
+    /// The skills, each invocation once.
+    pub skills: Vec<Skill>,
 }

@@ -1,0 +1,9 @@
+{
+  "t": "req",
+  "id": 27,
+  "m": "skill.list",
+  "p": {
+    "cli": "codex",
+    "cwd": "/Users/example/project"
+  }
+}

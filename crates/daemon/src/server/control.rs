@@ -310,6 +310,13 @@ async fn dispatch(shared: &Arc<Shared>, call: Call) -> Result<Value, ErrorBody> 
             let sources = UsageSources::from_env(&shared.login.base);
             ok(&shared.usage.get(sources).await)
         }
+        Call::TaskList(_)
+        | Call::TaskAdd(_)
+        | Call::TaskCancel(_)
+        | Call::TaskMove(_)
+        | Call::TaskSend(_)
+        | Call::QueuePause(_)
+        | Call::SkillList(_) => Err(refuse(ErrorCode::Internal, "not in this build of plyd yet")),
     }
 }
 

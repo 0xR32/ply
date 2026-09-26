@@ -1,0 +1,13 @@
+{
+  "t": "req",
+  "id": 21,
+  "m": "task.add",
+  "p": {
+    "workspace_id": 1,
+    "target": {
+      "pane": 2
+    },
+    "text": "/review-pr #212",
+    "skill": "/review-pr"
+  }
+}

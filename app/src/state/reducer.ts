@@ -306,6 +306,9 @@ function applyEvent(state: AppState, event: Event): AppState {
         state,
         event.p.kill_panes ? 'plyd is stopping its sessions' : 'plyd is restarting',
       );
+    case 'task.changed':
+    case 'queue.changed':
+      return state;
   }
 }
 

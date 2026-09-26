@@ -1,0 +1,9 @@
+{
+  "t": "req",
+  "id": 24,
+  "m": "task.move",
+  "p": {
+    "task_id": 7,
+    "position": 0
+  }
+}

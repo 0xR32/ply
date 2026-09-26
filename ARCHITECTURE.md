@@ -31,9 +31,10 @@ recorded on disk (`usage.get`).
 line, `#[serde(deny_unknown_fields)]` on every struct, `PROTOCOL_VERSION = 1`
 checked at `hello`. Requests carry an id and a method (`workspace.*`, `pane.*`,
 `session.list`, `theme.set`, `layout.*`, `settings.*`, `daemon.shutdown`,
-`usage.get`);
+`usage.get`, and the task queue's `task.*`, `queue.pause` and `skill.list`);
 plyd broadcasts events (`pane.added`, `pane.removed`, `pane.status`,
-`pane.progress`, `pane.meta`, `pane.exit`, `daemon.stopping`) to every client.
+`pane.progress`, `pane.meta`, `pane.exit`, `daemon.stopping`, `task.changed`,
+`queue.changed`) to every client.
 The Rust types in `crates/proto/src/control.rs` and `pane.rs` are the single
 source; `bun run gen` writes `app/src/ipc/proto.gen.ts` from them with ts-rs, and
 `check-rules` fails when that file is stale. C1 carries no pty bytes (INV-2).
@@ -69,7 +70,7 @@ crates/proto/src
 ├── lib.rs           the three protocols and their versions
 ├── control.rs       C1: ClientMsg, ServerMsg, every request and event, ErrorCode, MAX_LINE_BYTES
 ├── pane.rs          Pane, PaneStatus, Progress, Workspace, Tab, Layout, Session, TerminalTheme, Settings,
-│                    Usage (the CLIs' plan usage)
+│                    Usage (the CLIs' plan usage), Task, QueueState, Skill (the task queue, R60/R61)
 ├── data.rs          C2: Frame, the hand-written little-endian codec, FrameReader, cells, styles, input payloads
 ├── hook.rs          C3: HookEnvelope
 └── version.rs       PROTOCOL_VERSION, C2_VERSION, HOOK_VERSION and the one comparison

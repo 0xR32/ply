@@ -1,0 +1,8 @@
+{
+  "t": "req",
+  "id": 23,
+  "m": "task.cancel",
+  "p": {
+    "task_id": 7
+  }
+}

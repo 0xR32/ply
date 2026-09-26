@@ -1,0 +1,15 @@
+{
+  "t": "req",
+  "id": 22,
+  "m": "task.add",
+  "p": {
+    "workspace_id": 1,
+    "target": {
+      "pool": {
+        "cli": "claude",
+        "cwd": "/Users/example/project"
+      }
+    },
+    "text": "Find what makes the resume test flaky.\nStart with the lost-pane path."
+  }
+}
