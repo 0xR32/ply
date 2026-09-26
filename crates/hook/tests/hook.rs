@@ -392,3 +392,110 @@ fn the_payload_cap_is_c3s() {
     assert_silent_success(&output, "over cap");
     assert!(nothing_sent(&listener));
 }
+
+fn status_payload() -> Value {
+    json!({
+        "model": {"display_name": "Opus"},
+        "rate_limits": {"five_hour": {"used_percentage": 42, "resets_at": 1_790_409_600}}
+    })
+}
+
+#[test]
+fn the_status_line_reports_its_payload_and_prints_only_the_users_own_output() {
+    let hook = Hook::new("status-own");
+    let received = receive(hook.listen());
+    let seen = hook.dir.join("seen.json");
+    let own = format!(
+        "cat > '{}'; printf 'mine %s' \"$PLY_PANE_ID\"",
+        seen.display()
+    );
+    let body = serde_json::to_vec(&status_payload()).unwrap();
+    let (output, elapsed) = run(
+        hook.command(&["statusline", own.as_str()]),
+        Some(body.clone()),
+    );
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "mine 7");
+    assert!(output.stderr.is_empty());
+    assert!(
+        elapsed < budget(),
+        "took {elapsed:?}, budget {:?}",
+        budget()
+    );
+    assert_eq!(
+        std::fs::read(&seen).unwrap(),
+        body,
+        "the user's command reads the same payload"
+    );
+
+    let line = received.join().unwrap().expect("no connection");
+    let envelope = HookEnvelope::decode_line(&line).unwrap();
+    assert_eq!(
+        (envelope.pane_id, envelope.cli, envelope.event.as_deref()),
+        (7, AgentCli::Claude, Some("StatusLine"))
+    );
+    assert_eq!(envelope.payload, status_payload());
+}
+
+#[test]
+fn a_status_line_without_a_command_of_its_own_prints_nothing_and_still_reports() {
+    let hook = Hook::new("status-bare");
+    let received = receive(hook.listen());
+    let body = serde_json::to_vec(&status_payload()).unwrap();
+    let (output, _) = run(hook.command(&["statusline"]), Some(body));
+    assert_silent_success(&output, "bare status line");
+    let line = received.join().unwrap().expect("no connection");
+    assert_eq!(
+        HookEnvelope::decode_line(&line).unwrap().event.as_deref(),
+        Some("StatusLine")
+    );
+}
+
+#[test]
+fn the_status_line_exits_with_the_users_command_and_works_with_plyd_down() {
+    let hook = Hook::new("status-down");
+    let body = serde_json::to_vec(&status_payload()).unwrap();
+    let (output, elapsed) = run(
+        hook.command(&["statusline", "printf still; exit 3"]),
+        Some(body),
+    );
+    assert_eq!(output.status.code(), Some(3));
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "still");
+    assert!(
+        elapsed < budget(),
+        "took {elapsed:?}, budget {:?}",
+        budget()
+    );
+}
+
+#[test]
+fn a_status_line_outside_ply_reports_as_pane_0_to_the_named_or_default_socket() {
+    let hook = Hook::new("status-out");
+    let received = receive(hook.listen());
+    let body = serde_json::to_vec(&status_payload()).unwrap();
+    let mut cmd = hook.command(&["statusline"]);
+    cmd.env_remove("PLY_PANE_ID");
+    let (output, _) = run(cmd, Some(body.clone()));
+    assert_silent_success(&output, "status line outside ply");
+    let line = received.join().unwrap().expect("no connection");
+    assert_eq!(HookEnvelope::decode_line(&line).unwrap().pane_id, 0);
+
+    let home = hook.dir.join("h");
+    let socket = home.join("Library/Application Support/ply/run/hook.sock");
+    std::fs::create_dir_all(socket.parent().unwrap()).unwrap();
+    let listener = UnixListener::bind(&socket).unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let received = receive(listener);
+    let mut cmd = hook.command(&["statusline"]);
+    cmd.env_remove("PLY_PANE_ID")
+        .env_remove("PLY_HOOK_SOCK")
+        .env("HOME", &home);
+    let (output, _) = run(cmd, Some(body));
+    assert_silent_success(&output, "status line with plyd's default socket");
+    let line = received.join().unwrap().expect("no connection");
+    let envelope = HookEnvelope::decode_line(&line).unwrap();
+    assert_eq!(
+        (envelope.pane_id, envelope.event.as_deref()),
+        (0, Some("StatusLine"))
+    );
+}

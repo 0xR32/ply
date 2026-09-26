@@ -1,3 +1,4 @@
+import { StatusBar } from '../features/statusbar/statusbar';
 import { TabBar } from '../features/tabs/tab-bar';
 import { commandKeyLabel } from '../keymap/keymap';
 import { selectWaitingCount } from '../state/selectors';
@@ -51,14 +52,14 @@ function NeedsYouPill() {
       role="button"
       onClick={() => dispatch({ type: 'command', id: 'pane.nextWaiting' })}
       style={{
-        height: z(30),
+        height: z(26),
         flexShrink: 0,
         display: 'flex',
         alignItems: 'center',
         gap: z(8),
         paddingLeft: z(10),
         paddingRight: z(12),
-        borderRadius: z(15),
+        borderRadius: z(13),
         backgroundColor: tokens.amberA[10],
         borderWidth: 1,
         borderColor: tokens.amberA[35],
@@ -87,15 +88,15 @@ function PaletteButton() {
       aria-label="Open the command palette"
       onClick={() => dispatch({ type: 'command', id: 'palette.open' })}
       style={{
-        width: z(300),
-        height: z(32),
+        width: z(260),
+        height: z(28),
         flexShrink: 0,
         display: 'flex',
         alignItems: 'center',
         gap: z(10),
         paddingLeft: z(12),
         paddingRight: z(8),
-        borderRadius: z(9),
+        borderRadius: z(8),
         backgroundColor: tokens.white[4],
         borderWidth: 1,
         borderColor: tokens.white[8],
@@ -118,7 +119,7 @@ function PaletteButton() {
   );
 }
 
-/** The 52 px title bar beside the traffic lights: wordmark, tabs, the needs-you pill and the palette button. */
+/** The 40 px title bar beside the traffic lights: wordmark, tabs, the status and pane counts, the needs-you pill and the palette button. */
 export function TopBar() {
   const { z } = useChrome();
   return (
@@ -137,6 +138,7 @@ export function TopBar() {
       <Wordmark />
       <TabBar />
       <div style={{ flexGrow: 1 }} />
+      <StatusBar />
       <NeedsYouPill />
       <PaletteButton />
     </div>

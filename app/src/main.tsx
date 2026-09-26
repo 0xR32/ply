@@ -58,6 +58,8 @@ render(
     minWidth: 720,
     minHeight: 480,
     titlebarTransparent: true,
+    // Liquid glass: macOS blurs what is behind the window, and the translucent ground (tokens.glass) lets it show.
+    windowBackground: 'blurred',
     trafficLightX: tokens.layout.trafficLightX,
     trafficLightY: tokens.layout.trafficLightY,
     focus: takeFocus,

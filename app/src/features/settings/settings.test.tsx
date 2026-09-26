@@ -31,6 +31,8 @@ describe.if(hasNativeTestRenderer)('Settings', () => {
         'space',
         'tab',
         'enter',
+        'tab',
+        'space',
         'shift-tab',
         'escape',
       );
@@ -40,8 +42,9 @@ describe.if(hasNativeTestRenderer)('Settings', () => {
         option_as_meta: 'right',
         keep_awake_while_running: false,
         use_ply_colours_in_claude: false,
+        resume_sessions_on_start: false,
       });
-      expect(seen.filter((a) => a.type === 'settings/change')).toHaveLength(5);
+      expect(seen.filter((a) => a.type === 'settings/change')).toHaveLength(6);
       expect(seen.at(-1)).toEqual({ type: 'overlay/close' });
     } finally {
       m.unmount();

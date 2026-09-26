@@ -31,8 +31,9 @@ hash. Never run `zig build` by hand inside the cached source: without the flags 
 | `just gen` | `bun scripts/gen.ts`: runs ply-proto's `export_bindings` test with `PLY_GEN_OUT`, formats the ts-rs output with Biome and writes `app/src/ipc/proto.gen.ts` (`--check` compares instead) |
 | `just dev` | `bun --hot app/src/main.tsx` |
 | `just fmt` | `cargo fmt --all` and `biome check --write` |
-| `just fonts` | copies `app/assets/fonts/*.ttf` into `~/Library/Fonts`, the only place the app finds Geist (GPUIX loads no font file); run it once yourself, nothing else does |
-| `just icon` | renders `app/assets/icon/ply.svg`, the app icon, at every size macOS asks for with `resvg` (`brew install resvg`) and packs them with `iconutil` into `app/assets/icon/ply.icns`, which is committed, so nothing else needs either tool |
+| `just fonts` | copies `app/assets/fonts/*.ttf` into `~/Library/Fonts`, where the app run from the checkout finds Geist (GPUIX loads no font file; the bundle carries its own); run it once yourself, nothing else does |
+| `just dmg` | `bun scripts/dmg.ts`: builds `dist/ply.app` and `dist/ply-<version>.dmg` (**The app bundle**, below) |
+| `just icon` | renders `app/assets/icon/ply.svg` at every size macOS asks for with `resvg` (`brew install resvg`) and packs them with `iconutil` into `app/assets/icon/ply.icns`, which is committed, so `just dmg` needs neither tool |
 
 `bun run dev`, `bun run check`, `bun run test` and `bun run gen` are the same entry points for the TypeScript side.
 `PLY_WINDOW_FOCUS=0 bun run dev` opens the window without taking focus, which keeps scripted or agent-driven runs from
@@ -79,9 +80,9 @@ database written by a newer plyd (also with status 0, so launchd does not restar
 exit: it stops only on `daemon.shutdown`, SIGTERM, SIGINT or SIGHUP. Panes whose process ran when plyd stopped come
 back as `lost` and can be relaunched with `pane.resume`.
 
-How the app finds plyd (`app/src/ipc/daemon-launcher.ts`): it uses the cargo-built plyd — `$PLY_PLYD`, else
-`target/release/plyd`, else `target/debug/plyd` (the release build wins when both exist; ply runs from this
-checkout, there is no bundle). With `PLY_HOME` set it spawns that binary as `plyd --foreground`,
+How the app finds plyd (`app/src/ipc/daemon-launcher.ts`): `$PLY_PLYD`, else a `plyd` beside the app's own
+executable (the bundle's, in `ply.app/Contents/MacOS`), else `target/release/plyd`, else `target/debug/plyd` (the
+release build wins when both exist). With `PLY_HOME` set it spawns that binary as `plyd --foreground`,
 detached; otherwise it runs `plyd install-agent` with it, so `bun run dev` without `PLY_HOME` installs a LaunchAgent
 pointing at the cargo-built plyd. plyd is the only writer of that plist. `docs/configuration.md` lists everything a
 run writes to the machine.
@@ -101,6 +102,9 @@ comparison is with the commit, not with the binary on disk: after a commit, or a
   lose their pty with the old plyd and come back `lost`, to be resumed, and shells reopen by themselves.
 - **"Quit ply and stop sessions"** asks first, sends `daemon.shutdown {kill_panes:true}` and quits the app; the next
   `bun run dev` starts the new plyd.
+
+A newly installed bundle is the same case: its app and plyd share one build id, so while the previous build's plyd
+still runs the status bar says it is from another build, and "Restart plyd" hands the LaunchAgent to the bundle's.
 - **From a shell**, with the app open or not: `launchctl kill TERM gui/$(id -u)/dev.ply.app.plyd` stops the
   LaunchAgent's plyd cleanly (a SIGTERM stop exits 0, so launchd does not restart it), and
   `kill $(cat "$PLY_HOME/plyd.lock")` one under `PLY_HOME`. `install-agent` names the palette commands and the
@@ -130,6 +134,48 @@ with a cleared environment, a temporary `HOME` and `PLY_HOME`, and `/bin/sh` as 
 install the fake CLIs of `crates/daemon/tests/fake/` as `claude` and `codex` on that shell's `PATH`; they run the
 `ply-hook` cargo built beside plyd, which `cargo nextest run --workspace` builds (run `cargo build -p ply-hook` before
 `cargo nextest run -p ply-daemon`).
+
+## The app bundle
+
+`just dmg` (`scripts/dmg.ts`) builds `dist/ply.app` and packs it with an `Applications` link into
+`dist/ply-<version>.dmg`. Install it by dragging `ply.app` to `/Applications`; run it from there, never from the
+mounted image, because the LaunchAgent will name the plyd inside whichever copy started it.
+
+```
+ply.app/Contents/
+├── Info.plist                  dev.ply.app, the minimum macOS of the binaries, ATSApplicationFontsPath = Fonts
+├── MacOS/ply                   the app: Bun's runtime with the bundled app compiled in (bun build --compile)
+├── MacOS/plyd, MacOS/ply-hook  cargo profile dist; plyd finds ply-hook beside itself
+├── Frameworks/gpuix-native.darwin-arm64.node   GPUIX's addon, as released on npm
+├── Resources/ply.icns          the icon, CFBundleIconFile
+└── Resources/Fonts/            Geist and Geist Mono (SIL OFL)
+```
+
+What makes it faster than `bun run dev`:
+
+- **React's production build.** The app is compiled with `process.env.NODE_ENV` defined as `"production"`, which drops
+  React's development checks and warnings from every render.
+- **Bytecode.** `--bytecode` ships JavaScriptCore bytecode, so the app is not parsed and compiled from source at
+  launch, and `--minify` shrinks what is loaded. Bytecode needs CommonJS output, which has no top-level await, so
+  `app/src/bundle.ts` loads `main.tsx` with a dynamic import.
+- **plyd at `[profile.dist]`**: the release profile with fat LTO and one codegen unit, whole-program optimisation
+  across ply's crates. libghostty-vt is Zig's `ReleaseFast` in every build.
+- **The addon loads in place.** napi-rs's loader cannot find a `.node` file inside a compiled executable, and
+  embedding it would extract 23 MB to a temporary directory on every launch; `bundle.ts` sets
+  `NAPI_RS_NATIVE_LIBRARY_PATH` to the copy in `Contents/Frameworks` before GPUIX loads.
+
+The script checks that `plyd --version` names the same `<version>+<commit>` it compiles into the app as
+`PLY_BUILD_ID` (a bundle has no checkout for `git rev-parse`), so the status bar's "another build" check works in the
+bundle too; it warns when the tree has uncommitted changes, which the id does not show. The Geist fonts work without
+`just fonts`: `ATSApplicationFontsPath` registers them with CoreText for the bundle's own process only, and
+`fontDirs` in `app/src/ipc/os.ts` looks in `Contents/Resources/Fonts`.
+
+Every Mach-O file is signed ad hoc (nested code first, then the bundle) and `codesign --verify --strict` must pass;
+nothing is notarised, so a copy downloaded from elsewhere carries the quarantine flag and Gatekeeper refuses it until
+`xattr -dr com.apple.quarantine /Applications/ply.app`. An ad-hoc signature changes with every build, so macOS asks
+again for any permission it granted plyd's panes, as it does after every cargo build today. The image is LZFSE
+(`ULFO`), which opens faster than zlib's `UDZO` at a similar size; `hdiutil verify` checks it. Apple-silicon Macs
+only, like the addon.
 
 ## The terminal view on its own
 

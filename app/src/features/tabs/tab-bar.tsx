@@ -34,7 +34,7 @@ function TabButton({ tab, index, active }: { tab: Tab; index: number; active: bo
       aria-label={`Tab ${index + 1}, ${tab.name}, ${tab.pane_ids.length} panes`}
       onClick={() => dispatch({ type: 'tab/select', tabId: tab.id })}
       style={{
-        height: z(30),
+        height: z(26),
         flexShrink: 0,
         display: 'flex',
         alignItems: 'center',
@@ -114,8 +114,8 @@ export function TabBar() {
         aria-label="New tab"
         onClick={() => dispatch({ type: 'command', id: 'tab.new' })}
         style={{
-          width: z(30),
-          height: z(30),
+          width: z(26),
+          height: z(26),
           flexShrink: 0,
           display: 'flex',
           alignItems: 'center',

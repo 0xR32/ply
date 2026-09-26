@@ -60,6 +60,7 @@ const DEFAULT_SETTINGS: Settings = {
   accent: 'blue',
   option_as_meta: 'off',
   keep_awake_while_running: true,
+  resume_sessions_on_start: true,
   use_ply_colours_in_claude: true,
   codex_plan_tool: true,
   scrollback_lines: 10_000,

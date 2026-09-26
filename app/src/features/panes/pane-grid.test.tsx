@@ -4,6 +4,7 @@ import type { ReactNode } from 'react';
 import type { Action } from '../../state/actions';
 import type { PaneState } from '../../state/reducer';
 import { makePane, makeState, mountWithStore } from '../../state/test-support';
+import { tokens } from '../../theme/tokens';
 import { PaneGrid } from './pane-grid';
 
 function bounds(renderer: TestRenderer, testId: string) {
@@ -88,11 +89,15 @@ const demo = () =>
   );
 
 describe.if(hasNativeTestRenderer)('PaneGrid', () => {
-  // On the CI runner a 1440 × 812 test window came out 1024 × 653, its usable screen; these fit, and 996 divides by 6.
-  const W = 996;
+  // On the CI runner a 1440 × 812 test window came out 1024 × 653, its usable screen; these fit, at whole-pixel columns.
+  const W = 998;
   const H = 600;
-  const PAD = { x: 14, top: 2, bottom: 10 };
-  const GAP = 10;
+  const PAD = {
+    x: tokens.layout.gridPaddingX,
+    top: tokens.layout.gridPaddingTop,
+    bottom: tokens.layout.gridPaddingBottom,
+  };
+  const GAP = tokens.layout.gap;
   const inner = { width: W - 2 * PAD.x, height: H - PAD.top - PAD.bottom };
   const panesIn = (n: number) =>
     makeState(
@@ -194,6 +199,81 @@ describe.if(hasNativeTestRenderer)('PaneGrid', () => {
     }
   });
 
+  test('dragging the gutter resizes the columns and the minimum holds', async () => {
+    const { renderer, unmount } = mountWithStore(grid, panesIn(2), { width: W, height: H });
+    const settle = async () => {
+      for (let i = 0; i < 10; i++) {
+        renderer.flush();
+        await Bun.sleep(20);
+      }
+      renderer.flush();
+    };
+    try {
+      await settle();
+      const gutter = renderer.findByTestId('pane-grid-gutter-column-0');
+      const g = gutter ? renderer.getElementBounds(gutter.id) : null;
+      if (!g) throw new Error('no gutter once the grid was measured');
+      const width = (inner.width - GAP) / 2;
+      expect(frame(renderer, 'pane-1').x).toBeCloseTo(PAD.x, 0);
+      expect(frame(renderer, 'pane-1').width).toBeCloseTo(width, 0);
+      const x = g.x + g.width / 2;
+      const y = g.y + g.height / 2;
+      const dragTo = async (to: number) => {
+        renderer.nativeSimulateMouseDown(x, y, 0);
+        renderer.nativeSimulateMouseMove(to, y, 0);
+        renderer.nativeSimulateMouseUp(to, y, 0);
+        await settle();
+      };
+      await dragTo(x + 150);
+      expect(frame(renderer, 'pane-1').width).toBeCloseTo(width + 150, 0);
+      expect(frame(renderer, 'pane-2').width).toBeCloseTo(width - 150, 0);
+      expect(frame(renderer, 'pane-2').x + frame(renderer, 'pane-2').width).toBeCloseTo(
+        W - PAD.x,
+        0,
+      );
+      const moved = renderer.findByTestId('pane-grid-gutter-column-0');
+      const m = moved ? renderer.getElementBounds(moved.id) : null;
+      if (!m) throw new Error('the gutter went away');
+      renderer.nativeSimulateMouseDown(m.x + m.width / 2, y, 0);
+      renderer.nativeSimulateMouseMove(W - 2, y, 0);
+      renderer.nativeSimulateMouseUp(W - 2, y, 0);
+      await settle();
+      expect(frame(renderer, 'pane-2').width).toBeCloseTo(200, 0);
+      expect(renderer.findByTestId('pane-grid-drag'), 'the release ends the drag').toBeUndefined();
+    } finally {
+      unmount();
+    }
+  });
+
+  test('in quadrants the row gutter resizes both rows of panes together', async () => {
+    const { renderer, unmount } = mountWithStore(grid, panesIn(4), { width: W, height: H });
+    try {
+      for (let i = 0; i < 10; i++) {
+        renderer.flush();
+        await Bun.sleep(20);
+      }
+      const gutter = renderer.findByTestId('pane-grid-gutter-row-0');
+      const g = gutter ? renderer.getElementBounds(gutter.id) : null;
+      if (!g) throw new Error('no row gutter');
+      const height = (inner.height - GAP) / 2;
+      const y = g.y + g.height / 2;
+      renderer.nativeSimulateMouseDown(g.x + 40, y, 0);
+      renderer.nativeSimulateMouseMove(g.x + 40, y - 60, 0);
+      renderer.nativeSimulateMouseUp(g.x + 40, y - 60, 0);
+      for (let i = 0; i < 5; i++) {
+        renderer.flush();
+        await Bun.sleep(20);
+      }
+      for (const id of [1, 2])
+        expect(frame(renderer, `pane-${id}`).height).toBeCloseTo(height - 60, 0);
+      for (const id of [3, 4])
+        expect(frame(renderer, `pane-${id}`).height).toBeCloseTo(height + 60, 0);
+      expect(renderer.findByTestId('pane-grid-gutter-column-1')).toBeUndefined();
+    } finally {
+      unmount();
+    }
+  });
+
   test('the second tab is not painted', () => {
     const { renderer, unmount } = mountWithStore(grid, demo(), { width: W, height: H });
     try {
@@ -230,6 +310,21 @@ describe.if(hasNativeTestRenderer)('PaneGrid', () => {
     }
   });
 
+  test("headers name the project, git's when plyd sent it and the folder's before, and git's linked worktree", () => {
+    const state = makeState([
+      makePane({ id: 1, project: 'agentmon', git_worktree: 'agentmon-side', branch: 'side' }),
+      makePane({ id: 2, position: 1, cwd: '/Users/example/notes' }),
+    ]);
+    const { renderer, unmount } = mountWithStore(grid, state);
+    try {
+      expect(textOf(renderer, 'pane-1-project')).toBe('agentmon');
+      expect(textOf(renderer, 'pane-2-project')).toBe('notes');
+      expect(renderer.getAllText()).toContain('side · worktree agentmon-side');
+    } finally {
+      unmount();
+    }
+  });
+
   test('zoom shows only the focused pane and mounts only its terminal', () => {
     const state = demo();
     const zoomed = {
@@ -240,7 +335,7 @@ describe.if(hasNativeTestRenderer)('PaneGrid', () => {
     try {
       expect(renderer.findByTestId('terminal-2')).toBeDefined();
       for (const id of [1, 3, 4]) expect(renderer.findByTestId(`terminal-${id}`)).toBeUndefined();
-      expect(frame(renderer, 'pane-2').width).toBe(W - 28);
+      expect(frame(renderer, 'pane-2').width).toBe(W - 2 * PAD.x);
     } finally {
       unmount();
     }

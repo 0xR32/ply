@@ -78,6 +78,8 @@ pub struct Shared {
     pub palette: watch::Sender<Option<Palette>>,
     /// The last `usage.get` answer, reused for a few seconds.
     pub usage: UsageCache,
+    /// The git `HEAD` of each pane, watched for branch switches.
+    pub heads: crate::branch::HeadWatches,
     registry: Mutex<Registry>,
     geometry: Mutex<Geometry>,
     power: KeepAwake,
@@ -220,6 +222,7 @@ pub async fn run(options: Options) -> Result<()> {
         events,
         palette: watch::Sender::new(palette),
         usage: UsageCache::default(),
+        heads: crate::branch::HeadWatches::default(),
         registry: Mutex::new(registry),
         geometry: Mutex::new(DEFAULT_GEOMETRY),
         power: KeepAwake::new(options.keep_awake),
@@ -238,7 +241,8 @@ pub async fn run(options: Options) -> Result<()> {
         hooks = %shared.paths.hook_socket().display(),
         "plyd is serving"
     );
-    tokio::spawn(launch::reopen_sessionless(Arc::clone(&shared)));
+    tokio::spawn(launch::reopen_lost(Arc::clone(&shared)));
+    tokio::spawn(crate::branch::watch_heads(Arc::clone(&shared)));
     let control_task = tokio::spawn(control::serve(control_listener, Arc::clone(&shared)));
     let data_task = tokio::spawn(data::serve(data_listener, Arc::clone(&shared)));
     let hook_task = tokio::spawn(hooks::serve(hook_listener, Arc::clone(&shared)));

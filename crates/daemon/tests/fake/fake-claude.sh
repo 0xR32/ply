@@ -27,6 +27,10 @@ hook() {
   cmd=$(sed -n "s/^ *\"command\": \"\(.* claude $1\)\",\{0,1\}\$/\1/p" "$settings")
   printf '%s' "$2" | sh -c "$cmd"
 }
+statusline() {
+  cmd=$(sed -n 's/^ *"command": "\(.* statusline.*\)",\{0,1\}$/\1/p' "$settings")
+  printf '%s' "$1" | sh -c "$cmd" > "$HOME/fake-statusline.out"
+}
 
 fifo="$HOME/fake-$PLY_PANE_ID.cmd"
 rm -f "$fifo"
@@ -51,6 +55,7 @@ while IFS= read -r line <&3; do
   case "$cmd" in
     start) start ;;
     hook) hook "${rest%% *}" "${rest#* }" ;;
+    statusline) statusline "$rest" ;;
     out) printf '%s\r\n' "$rest" ;;
     spin) rm -f "$HOME/fake-spin.done"; i=0; while [ "$i" -lt "$rest" ]; do printf '.'; sleep 0.1; i=$((i + 1)); done; printf '\r\n'; : > "$HOME/fake-spin.done" ;;
     keys) stty raw -echo; : > "$HOME/fake-keys.ready"; dd bs=1 count="$rest" 2>/dev/null | od -An -tx1 | tr -d ' \n' >> "$HOME/fake-keys.log"; stty sane; rm -f "$HOME/fake-keys.ready" ;;

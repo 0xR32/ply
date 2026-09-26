@@ -1,6 +1,6 @@
 import { basename, resolve } from 'node:path';
 import { MAX_PANES_PER_TAB } from '../ipc/proto.gen';
-import type { Cli, Pane, Tab } from './actions';
+import type { Cli, Pane, Split, Tab } from './actions';
 import { type DirCandidate, type DirSuggestion, rankDirs } from './dir-match';
 import type { AppState, DirSearch, PaneState } from './reducer';
 
@@ -116,6 +116,24 @@ export function visiblePaneIds(tab: Tab | undefined): readonly number[] {
 export function gridShape(count: number): { columns: number; rows: number } {
   if (count <= 3) return { columns: Math.max(count, 1), rows: 1 };
   return { columns: 2, rows: Math.ceil(count / 2) };
+}
+
+/** `count` equal shares summing to 1. */
+export function equalShares(count: number): number[] {
+  return Array.from({ length: count }, () => 1 / count);
+}
+
+/** The tab's dragged split when it fits `shape` (one share per column and per row), else equal shares. */
+export function paneSplit(
+  state: AppState,
+  tabId: number | undefined,
+  shape: { columns: number; rows: number },
+): Split {
+  const split = tabId === undefined ? undefined : state.splits[tabId];
+  const fits = split?.columns.length === shape.columns && split.rows.length === shape.rows;
+  return fits && split
+    ? split
+    : { columns: equalShares(shape.columns), rows: equalShares(shape.rows) };
 }
 
 /** A direction ⌘← ⌘→ ⌘↑ ⌘↓ moves focus in (Ruling R58). */

@@ -396,6 +396,19 @@ the last mouse move: it appears when the pointer moves with ⌘ down, and goes o
 the next move without ⌘, a key or a blur. OSC 8 hyperlinks are not read: panes
 run with `TERM=xterm-256color` and no `TERM_PROGRAM`, so neither CLI sends them.
 
+**Diff rows.** A row a CLI draws as a diff line gets a low-contrast band
+across the pane, mint for an added line and red for a removed one
+(`tokens.diffAdd`, `tokens.diffRemove`, 20 % over the terminal). A row counts
+when it opens with an optional line number and then a `+` drawn green (ANSI 2
+or 10, or an RGB green) or a `-` drawn red (ANSI 1 or 9, or an RGB red), set
+against the line or not, and that marker has no background of its own
+(`diffKind` in `app/src/terminal/diff.ts`). That is how Claude Code draws its
+edits under ply's `dark-ansi` theme (`      22 +changed line 22`, the marker
+in bright green or red), which paints no row background itself, and how Codex
+draws its diffs. The colour check keeps a list item, "12 - 4" or a plain `+1`
+plain, and a theme that already paints its diff rows keeps its own colours. A diff
+line the CLI wrapped onto a second row tints only its first.
+
 **IME** is not implemented: every KEY frame carries `composing` 0 and the text
 GPUIX reports for the key, so dead keys and CJK composition do not work in a
 pane.

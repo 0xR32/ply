@@ -81,7 +81,11 @@ fn a_claude_and_a_codex_session_leave_the_users_cli_config_byte_identical() {
         .keys()
         .map(String::as_str)
         .collect();
-    assert_eq!(keys, BTreeSet::from(["hooks", "theme"]), "spec 6.1");
+    assert_eq!(
+        keys,
+        BTreeSet::from(["hooks", "statusLine", "theme"]),
+        "spec 6.1"
+    );
     let hook = |event: &str, extra: Value| {
         fake.hook(event, &claude_payload(claude, &sb.home, event, extra));
     };

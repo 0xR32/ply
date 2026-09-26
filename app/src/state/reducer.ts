@@ -9,6 +9,7 @@ import type {
   Overlay,
   Pane,
   Settings,
+  Split,
   Tab,
   Usage,
   Workspace,
@@ -96,6 +97,8 @@ export interface AppState {
   dirs: DirSearch;
   settings: Settings;
   notice: Notice | null;
+  /** Pane sizes dragged per tab, kept in memory; one that no longer fits the tab's shape is ignored (`paneSplit`). */
+  splits: Readonly<Record<number, Split>>;
   usage: UsageView;
   reducedMotion: boolean;
   env: Environment;
@@ -106,6 +109,7 @@ export const defaultSettings: Settings = {
   accent: 'blue',
   option_as_meta: 'off',
   keep_awake_while_running: true,
+  resume_sessions_on_start: true,
   use_ply_colours_in_claude: true,
   codex_plan_tool: true,
   scrollback_lines: 10_000,
@@ -125,6 +129,7 @@ export function initialState(env: Environment): AppState {
     dirs: { query: '', base: env.home, open: false, recent: [], repos: [], completion: null },
     settings: defaultSettings,
     notice: null,
+    splits: {},
     usage: { shown: false, usage: null, error: null },
     reducedMotion: false,
     env,
@@ -261,17 +266,29 @@ function applyEvent(state: AppState, event: Event): AppState {
       });
     }
     case 'pane.meta': {
-      const { pane_id, model, worktree, cwd, branch } = event.p;
+      const { pane_id, model, worktree, cwd, branch, project, git_worktree } = event.p;
       return updatePane(state, pane_id, (p) => {
         // plyd sends the live worktree with every pane.meta, so its absence means the pane left the worktree.
-        const { branch: oldBranch, worktree_seen: _left, ...rest } = p;
-        const keptBranch = branch ?? (cwd === p.cwd ? oldBranch : undefined);
+        const {
+          branch: oldBranch,
+          project: oldProject,
+          git_worktree: oldGitWorktree,
+          worktree_seen: _left,
+          ...rest
+        } = p;
+        // git's labels arrive a moment after a directory change, so in the same directory the old ones stand.
+        const same = cwd === p.cwd;
+        const keptBranch = branch ?? (same ? oldBranch : undefined);
+        const keptProject = project ?? (same ? oldProject : undefined);
+        const keptGitWorktree = git_worktree ?? (same ? oldGitWorktree : undefined);
         return {
           ...rest,
           cwd,
           ...(model !== undefined ? { model_seen: model } : {}),
           ...(worktree !== undefined ? { worktree_seen: worktree } : {}),
           ...(keptBranch !== undefined ? { branch: keptBranch } : {}),
+          ...(keptProject !== undefined ? { project: keptProject } : {}),
+          ...(keptGitWorktree !== undefined ? { git_worktree: keptGitWorktree } : {}),
         };
       });
     }
@@ -522,6 +539,8 @@ function reduceAction(state: AppState, action: Action): AppState {
         : { ...state, overlay: action.overlay };
     case 'overlay/close':
       return state.overlay === null ? state : { ...state, overlay: null };
+    case 'grid/split':
+      return { ...state, splits: { ...state.splits, [action.tabId]: action.split } };
     case 'settings/change':
       return { ...state, settings: action.settings };
     case 'notice/show':

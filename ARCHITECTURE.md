@@ -21,8 +21,9 @@ sessions") stops a process, and a rebuilt plyd replaces the running one after
 ply makes no network request (INV-1). It never calls a model, holds a key,
 rewrites a prompt or picks a model; everything it knows about a session comes
 from the CLI's own hooks, notify payloads, OSC 9 notifications and Codex's
-rollout files, and the plan usage ⌘U shows is what the CLIs last recorded on
-disk (`usage.get`).
+rollout files, and the plan usage ⌘U shows is what the CLIs last reported:
+Claude Code's status line payload in any Claude pane, else what the CLIs
+recorded on disk (`usage.get`).
 
 ## Three boundaries
 
@@ -86,7 +87,7 @@ crates/term/src      (feature `engine` = plyd only)
 crates/agents/src
 ├── adapter.rs       Adapter and AgentSession: launch specs and signals, the contract plyd drives
 ├── claude/          mod.rs (launch, hook payloads → signals) · settings.rs (the hooks-only --settings file) ·
-│                    progress.rs (TodoWrite and Task tools) · usage.rs (the usage cache in .claude.json)
+│                    progress.rs (TodoWrite and Task tools) · usage.rs (status line rate limits, the .claude.json cache)
 ├── codex/           mod.rs (launch, -c overrides, thread binding) · notify.rs · osc9.rs (classification) ·
 │                    rollout.rs (records, update_plan, discovery) · literal.rs (code-mode JS literals) ·
 │                    usage.rs (token_count rate limits)
@@ -105,7 +106,7 @@ crates/daemon/src
 │                    process's session, status machine, progress limit and tailer) · state.rs (the spec 6.3
 │                    machine) · launch.rs (create, resume, restore) · mod.rs
 ├── tail.rs          C4: finding and tailing a Codex pane's rollout
-├── usage.rs         usage.get: the CLIs' plan usage read from their own files, bounded, cached 5 s
+├── usage.rs         usage.get: Claude panes' status line reports, else the CLIs' own files, bounded, cached 5 s
 ├── osc.rs · branch.rs   OSC 7/9 and typed input; the git branch label
 ├── publisher.rs     the C2 delivery rules as small clocked state machines
 ├── pty.rs           rustix pty + Command, setsid/TIOCSCTTY in the one audited pre_exec block
@@ -116,7 +117,7 @@ crates/daemon/src
 └── power.rs         prevent idle sleep while a pane is running (caffeinate -i -w)
 
 app/src
-├── main.tsx · app/  render(), window options, App, top bar, overlays
+├── main.tsx · app/  render(), window options, App, top bar, overlays; bundle.ts (the .app's entry)
 ├── state/           store.ts (useSyncExternalStore) · actions.ts · reducer.ts (pure) · selectors.ts ·
 │                    effects.ts (the only ipc caller)
 ├── ipc/             control-client.ts (C1, reconnect 100 ms → 2 s) · daemon-launcher.ts (dev plyd or the
@@ -165,8 +166,11 @@ cargo-built `plyd --foreground` against that directory; without it, it calls
 and kickstarts it. plyd takes the single-instance lock, opens `ply.db`, restores
 tabs and panes (a pane whose process is gone becomes `lost` and can be resumed
 with the CLI's own resume), binds its sockets under `run/` (mode 0700), reopens
-the lost panes that have no session to resume as fresh shells, and serves until
-`daemon.shutdown`.
+the lost panes that have no session to resume as fresh shells and, with
+`resume_sessions_on_start` (the default), resumes the others, and serves until
+`daemon.shutdown`. The bundle that `just dmg` builds starts the same way, except
+that `daemon-launcher.ts` finds its plyd beside the app's own executable in
+`ply.app/Contents/MacOS`, so the LaunchAgent names the bundle's plyd.
 
 ## Layering rules
 

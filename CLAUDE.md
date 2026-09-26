@@ -22,11 +22,12 @@ map. `docs/` has one document per subject (see the doc map below).
 |---|---|
 | the app | `app/` — Bun + React on GPUIX (`@gpuix/react` and `@gpuix/native` 0.10.0 from npm, used as released). `app/src/main.tsx` is the entry, `app/src/theme/tokens.ts` the only palette |
 | the terminal view | `app/src/terminal/` (C2 codec, replica, runs, input, selection) and `app/src/features/panes/terminal-view.tsx` |
-| the daemon | `crates/daemon` (`plyd`): ptys, one libghostty-vt terminal per pane, the C1 and C2 servers, SQLite, the LaunchAgent, `usage.get` (the CLIs' own usage records, read-only) |
+| the daemon | `crates/daemon` (`plyd`): ptys, one libghostty-vt terminal per pane, the C1 and C2 servers, SQLite, the LaunchAgent, `usage.get` (Claude panes' status line reports and the CLIs' own usage records, read-only) |
 | the terminal engine | `crates/term` (`ply-term`) over `crates/ghostty-sys`, whose `build.rs` downloads pristine ghostty 44f2a44 (SHA-256-verified) and builds libghostty-vt from it with Zig |
 | the agent adapters | `crates/agents` (`ply-agents`): launch specs, the Claude hooks file, hook/notify/OSC 9/rollout parsing, progress, the version check, the plan-usage parsers |
-| the hook helper | `crates/hook` (`ply-hook`): one hook or notify payload → one C3 line to plyd |
+| the hook helper | `crates/hook` (`ply-hook`): one hook or notify payload → one C3 line to plyd; as `ply-hook statusline`, Claude Code's status line in a pane |
 | the wire types | `crates/proto` (`ply-proto`): C1, C2, C3; `app/src/ipc/proto.gen.ts` is generated from it |
+| the bundle | `scripts/dmg.ts` (`just dmg`) → `dist/ply.app` and `dist/ply-<version>.dmg`; `app/src/bundle.ts` is the bundled app's entry |
 | the gates | `scripts/check-rules.ts` (the invariants and layers), `scripts/check-deps.ts` + `deps.allow.toml` (dependency admission), `deny.toml` |
 | tests | `#[cfg(test)]` inline, `crates/*/tests/` (golden frames, fake CLIs, replays), `*.test.ts(x)` beside the app code |
 
@@ -49,10 +50,11 @@ commit, its archive URL and the archive's SHA-256, rejects a download that
 differs, and applies no local patches (`checkInv17Ghostty`).
 
 **ply never decides for a CLI and never writes its config.** `ply-hook` prints
-nothing and exits 0 on every path within 200 ms, with plyd up or down
+nothing and exits 0 on every path within 200 ms, with plyd up or down; as the
+status line it prints only what the user's own status line prints
 (`crates/hook/tests/hook.rs`). Claude Code gets a per-pane `--settings` file
-holding only `hooks` (plus the optional theme), never WorktreeCreate or
-WorktreeRemove; Codex gets only `notify`, the two OSC 9 options and
+holding only `hooks`, the `statusLine` (`ply-hook statusline` in front of the
+user's own) and the optional theme, never WorktreeCreate or WorktreeRemove; Codex gets only `notify`, the two OSC 9 options and
 `tools.update_plan.enabled` (`crates/agents/tests/launch.rs`). The user's
 `~/.claude/settings.json`, `~/.claude.json` and `~/.codex/config.toml` are never
 written (INV-8).
@@ -160,19 +162,21 @@ just e2e        # journeys J1–J6 on the full app and the release plyd (opens w
 just deny       # licences, advisories, the HTTP-client and gpui bans
 just gen        # regenerate app/src/ipc/proto.gen.ts
 just fonts      # copy the Geist TTFs into ~/Library/Fonts (writes outside the checkout)
+just dmg        # dist/ply.app and dist/ply-<version>.dmg: profile dist, Bun bytecode, ad-hoc signed
 ```
 
 Toolchain: Rust 1.97.1 (`rust-toolchain.toml`), Zig 0.16.0, Bun 1.3.10, just.
-There is no remote; never push. `docs/development.md` walks through setup, the
+The GitHub repository is public; push only when asked. `docs/development.md` walks through setup, the
 run directory and the logs.
 
-## Personal use only
+## Personal use
 
-ply is built and run from this checkout for one person's machine. There is no
-`.app` bundle, no code signing, no release workflow and no distribution, so
-packaging and licensing questions do not arise. Run it with `bun run dev` (or
-`bun app/src/main.tsx`) against a release `plyd` (`cargo build --release -p
-ply-daemon -p ply-hook`).
+ply is built for one person's machine. It runs from this checkout — `bun run
+dev` (or `bun app/src/main.tsx`) against a release `plyd` (`cargo build
+--release -p ply-daemon -p ply-hook`) — or as the `.app` that `just dmg` builds.
+The bundle is ad-hoc signed and not notarised, and there is no release workflow
+and no distribution, so notarisation and licensing questions do not arise.
+`docs/development.md`, **The app bundle**, has its layout and optimisations.
 
 ## Coding rules
 

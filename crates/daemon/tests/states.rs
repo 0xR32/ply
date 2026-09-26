@@ -916,3 +916,173 @@ fn codex_home_from_the_login_shell_reaches_the_pane_and_its_rollout_tailer() {
     );
     assert!(!sb.home.join(".codex").exists());
 }
+
+#[test]
+fn a_status_line_report_is_live_usage_and_never_pane_activity() {
+    let mut e = env("st-statusline");
+    let own = e.sb.home.join(".claude/settings.json");
+    std::fs::create_dir_all(own.parent().unwrap()).unwrap();
+    std::fs::write(
+        &own,
+        r#"{"statusLine":{"type":"command","command":"cat > /dev/null; printf mine","refreshInterval":2}}"#,
+    )
+    .unwrap();
+    let (id, fake) = e.claude();
+    e.claude_hook(&fake, id, "UserPromptSubmit", json!({"prompt": "go"}));
+    e.next(id, Running);
+    let report = json!({"rate_limits": {
+        "five_hour": {"used_percentage": 42, "resets_at": 1_790_409_600},
+        "seven_day": {"used_percentage": 83}
+    }});
+    let started = Instant::now();
+    let mut idle = None;
+    // The status line refreshes all along; were it activity, the 5 s quiet timer would never run out before 12 s.
+    while idle.is_none() && started.elapsed() < Duration::from_secs(12) {
+        fake.send(&format!("statusline {report}"));
+        if let Some(Event::PaneStatus(s)) = e.c.wait_event(
+            Duration::from_millis(500),
+            |ev| matches!(ev, Event::PaneStatus(s) if s.pane_id == id),
+        ) {
+            idle = Some(s.status);
+        }
+    }
+    assert_eq!(
+        idle,
+        Some(Idle),
+        "R17 still ends the turn under a refreshing status line"
+    );
+    assert_eq!(
+        std::fs::read_to_string(e.sb.home.join("fake-statusline.out")).unwrap(),
+        "mine",
+        "the user's own status line still shows"
+    );
+    let usage = e.c.call("usage.get", json!({})).unwrap();
+    let windows: Vec<(String, f64)> = usage["claude"]["windows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|w| {
+            (
+                w["label"].as_str().unwrap().to_owned(),
+                w["used_percent"].as_f64().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        windows,
+        [
+            ("Session · 5h".to_owned(), 42.0),
+            ("Week · all models".to_owned(), 83.0)
+        ]
+    );
+    assert_eq!(usage["claude"]["windows"][0]["resets_at"], 1_790_409_600);
+}
+
+#[test]
+fn a_status_line_outside_ply_reports_its_session_under_ply_home() {
+    let mut e = env("st-outside");
+    let payload = json!({
+        "session_id": "00000000-0000-4000-8000-0000000abcde",
+        "rate_limits": {"five_hour": {"used_percentage": 17}}
+    });
+    let mut child = Command::new(hook_program())
+        .arg("statusline")
+        .env_clear()
+        .env("PLY_HOME", &e.sb.ply_home)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    {
+        use std::io::Write;
+        let mut stdin = child.stdin.take().unwrap();
+        stdin.write_all(payload.to_string().as_bytes()).unwrap();
+    }
+    let out = child.wait_with_output().unwrap();
+    assert!(out.status.success() && out.stdout.is_empty());
+    assert!(
+        eventually(WAIT, || {
+            let usage = e.c.call("usage.get", json!({})).unwrap();
+            usage["claude"]["windows"][0]["used_percent"] == json!(17.0)
+        }),
+        "a Claude Code session outside ply feeds the usage view"
+    );
+}
+
+#[test]
+fn the_header_follows_a_branch_switch_and_names_the_project_and_linked_worktree() {
+    let mut e = env("st-git");
+    let repo = e.sb.home.join("proj");
+    let sub = repo.join("crates/deep");
+    std::fs::create_dir_all(&sub).unwrap();
+    git(&repo, &e.sb.home, &["init", "-q", "-b", "main"]);
+    git(
+        &repo,
+        &e.sb.home,
+        &[
+            "-c",
+            "user.name=example",
+            "-c",
+            "user.email=example@example.com",
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            "example",
+        ],
+    );
+    let meta_of = |e: &mut Env, id: u64, pred: &dyn Fn(&ply_proto::control::PaneMeta) -> bool| {
+        e.c.wait_event(
+            WAIT,
+            |ev| matches!(ev, Event::PaneMeta(m) if m.pane_id == id && pred(m)),
+        )
+    };
+    let id = e.pane("claude", json!({"cwd": sub}));
+    Fake::ready(&e.sb, id);
+    assert!(
+        meta_of(&mut e, id, &|m| m.branch.as_deref() == Some("main")
+            && m.project.as_deref() == Some("proj")
+            && m.git_worktree.is_none())
+        .is_some(),
+        "a subfolder names its repository as the project"
+    );
+    git(&repo, &e.sb.home, &["switch", "-q", "-c", "feat-live"]);
+    let started = Instant::now();
+    assert!(
+        meta_of(&mut e, id, &|m| m.branch.as_deref() == Some("feat-live")).is_some(),
+        "a branch switch outside the pane shows without a directory change"
+    );
+    assert!(
+        started.elapsed() < Duration::from_secs(5),
+        "{:?}",
+        started.elapsed()
+    );
+
+    // Laid out by hand as git lays a linked worktree out: ply code never calls that git command (INV-7).
+    let linked = e.sb.home.join("proj-wt");
+    let admin = repo.join(".git/worktrees/proj-wt");
+    std::fs::create_dir_all(&admin).unwrap();
+    std::fs::create_dir_all(&linked).unwrap();
+    git(&repo, &e.sb.home, &["branch", "side"]);
+    std::fs::write(admin.join("HEAD"), "ref: refs/heads/side\n").unwrap();
+    std::fs::write(admin.join("commondir"), "../..\n").unwrap();
+    std::fs::write(
+        admin.join("gitdir"),
+        format!("{}\n", linked.join(".git").display()),
+    )
+    .unwrap();
+    std::fs::write(
+        linked.join(".git"),
+        format!("gitdir: {}\n", admin.display()),
+    )
+    .unwrap();
+    let other = e.pane("claude", json!({"cwd": linked}));
+    Fake::ready(&e.sb, other);
+    assert!(
+        meta_of(&mut e, other, &|m| m.branch.as_deref() == Some("side")
+            && m.project.as_deref() == Some("proj")
+            && m.git_worktree.as_deref() == Some("proj-wt"))
+        .is_some(),
+        "a linked worktree keeps its main repository's project name"
+    );
+}

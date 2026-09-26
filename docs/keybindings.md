@@ -44,8 +44,9 @@ for the ones that talk to plyd (`pane.terminalHere`, `pane.close`, and
 Sonnet"; Codex: "Session · 5h", "Week", with the models the sessions ran on), a
 bar that turns amber over 80 % and red at 100 %, when the window resets, and
 how old the numbers are ("updated 12 min ago", "as of 14:02"). A CLI without a
-record says "No usage recorded yet". The numbers are the CLIs' own records on
-disk, read by plyd (`usage.get`, `docs/agents.md`, **Plan usage**); the app
+record says "No usage recorded yet". Claude Code's numbers are the newest its
+status line reported in any Claude pane, else its own record on disk; Codex's
+are its record on disk (`usage.get`, `docs/agents.md`, **Plan usage**); the app
 asks when the card opens and every 5 s while it is held. It is not an overlay:
 it takes no keys and does not stop the other bindings.
 
@@ -133,14 +134,24 @@ are sent as KEY frames and plyd encodes them against the pane's modes
   binds no key.
 - **A lost pane resumes by mouse or palette.** The Resume button of the strip
   under it and the palette's "Resume <pane>" command both send `pane.resume`;
-  neither binds a key.
+  neither binds a key. plyd resumes lost sessions at its start by itself unless
+  "Resume sessions when plyd starts" is off in Settings, so a pane stays lost
+  only when that failed.
 - **A tab holds at most four panes** (Ruling R56): side by side up to three,
   quadrants at four. In a full tab ⌘N and ⌘D open nothing and the status bar
   says "This tab has 4 panes — ⌘T opens a new tab" for a few seconds; the
   palette shows New pane and Terminal here as unavailable, and the new-pane
   form never adds to a full tab. ⌘T is unaffected.
+- **Panes resize by mouse.** Dragging the gap between two columns, or between
+  the two rows of four panes, moves that boundary, with no pane narrower or
+  shorter than 200 px (scaled with the text); a double click on a gap evens
+  the tab out again. The sizes are the app's, per tab, kept until the tab's
+  pane count changes or the app quits (`app/src/features/panes/pane-grid.tsx`,
+  `split.ts`). While a gap is dragged a transparent layer over the grid takes
+  the pointer, so the terminals under it see nothing of the drag.
 - **plyd is replaced from the palette** (Ruling R53). "Restart plyd" stops it
-  without the sessions and the app starts the build in `target/`; "Quit ply and stop
+  without the sessions and the app starts plyd again (the bundle's, or the build in
+  `target/`); "Quit ply and stop
   sessions" asks first, then stops every pane's process and quits
   (`docs/control-channel.md`, `daemon.shutdown`). Neither binds a key: ⌘Q
   belongs to GPUIX and quits only the window's app, leaving plyd running.

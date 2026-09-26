@@ -15,7 +15,7 @@
 //! id (a shell, or an agent that never reported one) reopens as a fresh login shell in its last directory.
 
 use std::collections::BTreeMap;
-use std::io::Write;
+use std::io::{ErrorKind, Write};
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -25,6 +25,7 @@ use ply_agents::{LAUNCH_FILE, LaunchRequest, LaunchSpec, adapter};
 use ply_proto::control::{ErrorCode, PaneCreateParams};
 use ply_proto::pane::{AgentCli, Cli, Pane, PaneId, PaneStatus, Settings};
 use ply_term::{Engine, Palette};
+use serde_json::Value;
 use tokio::sync::{mpsc, oneshot};
 
 use crate::branch;
@@ -350,27 +351,37 @@ pub fn restore(shared: &Arc<Shared>) {
     }
 }
 
-/// Reopens as fresh shells the `lost` panes with no session to resume (shells, agent panes whose CLI reported no id; R50, spec 11.3), leaving the rest for `pane.resume`; run after binding, since a first start may wait for `theme.set`.
-pub async fn reopen_sessionless(shared: Arc<Shared>) {
-    let panes: Vec<PaneId> = {
+/// Relaunches the `lost` panes at plyd's start: those with no session as fresh shells (R50, spec 11.3), and with `resume_sessions_on_start` the rest through their CLI's resume; run after binding, since a first start may wait for `theme.set`.
+pub async fn reopen_lost(shared: Arc<Shared>) {
+    let (panes, resume_sessions): (Vec<(PaneId, bool)>, bool) = {
         let reg = shared.registry();
-        reg.workspaces()
+        let resume_sessions = reg.settings().resume_sessions_on_start;
+        let panes = reg
+            .workspaces()
             .iter()
             .filter_map(|w| reg.panes_of(w.id).ok())
             .flatten()
-            .filter(|p| {
-                p.status == PaneStatus::Lost && (p.cli == Cli::Shell || p.session_ref.is_none())
-            })
-            .map(|p| p.id)
-            .collect()
+            .filter(|p| p.status == PaneStatus::Lost)
+            .map(|p| (p.id, p.cli == Cli::Shell || p.session_ref.is_none()))
+            .filter(|&(_, sessionless)| sessionless || resume_sessions)
+            .collect();
+        (panes, resume_sessions)
     };
-    for pane_id in panes {
+    tracing::info!(
+        panes = panes.len(),
+        resume_sessions,
+        "relaunching the panes lost when plyd stopped"
+    );
+    for (pane_id, sessionless) in panes {
         match resume(&shared, pane_id).await {
-            Ok(pane) => {
+            Ok(pane) if sessionless => {
                 tracing::info!(pane_id, cli = ?pane.cli, "reopened a pane without a session as a fresh shell");
             }
+            Ok(pane) => {
+                tracing::info!(pane_id, cli = ?pane.cli, session = ?pane.session_ref, "resumed the pane's session at plyd's start");
+            }
             Err(e) => {
-                tracing::warn!(pane_id, error = %e.msg, "cannot reopen the pane; it stays lost");
+                tracing::warn!(pane_id, error = %e.msg, "cannot relaunch the pane; it stays lost");
             }
         }
     }
@@ -503,6 +514,10 @@ fn build_launch(
         ),
         Some(agent) => {
             let hook_socket = shared.paths.hook_socket();
+            let status_line = match agent {
+                AgentCli::Claude => user_status_line(pane_id, o.cwd, &shared.login.base),
+                AgentCli::Codex => None,
+            };
             let request = LaunchRequest {
                 pane_id,
                 program: o.program,
@@ -514,6 +529,7 @@ fn build_launch(
                 worktree: o.worktree,
                 resume: o.resume,
                 prompt: o.prompt,
+                status_line: status_line.as_ref(),
             };
             let launch = adapter(agent).launch(&request).map_err(|e| match e {
                 ply_agents::Error::InvalidLaunch(_) | ply_agents::Error::NonUtf8Path(_) => {
@@ -540,6 +556,58 @@ fn build_launch(
     })?;
     write_private(pane_id, &dir.join(LAUNCH_FILE), json.as_bytes())?;
     Ok(spec)
+}
+
+/// Largest Claude Code settings file read for its `statusLine`.
+const MAX_SETTINGS_BYTES: u64 = 1 << 20;
+
+/// The user's own `statusLine` as Claude Code picks it without ply: the project's `settings.local.json`, its `settings.json`, then the user's.
+fn user_status_line(pane_id: PaneId, cwd: &Path, env: &BTreeMap<String, String>) -> Option<Value> {
+    let dir = |key: &str| env.get(key).filter(|v| !v.is_empty()).map(PathBuf::from);
+    let user = dir("CLAUDE_CONFIG_DIR").or_else(|| dir("HOME").map(|h| h.join(".claude")));
+    let project = cwd.join(".claude");
+    [
+        Some(project.join("settings.local.json")),
+        Some(project.join("settings.json")),
+        user.map(|d| d.join("settings.json")),
+    ]
+    .into_iter()
+    .flatten()
+    .find_map(|path| status_line_in(pane_id, &path))
+}
+
+/// The `statusLine` object of the settings file at `path`; `None` when it has none or cannot be read (logged).
+fn status_line_in(pane_id: PaneId, path: &Path) -> Option<Value> {
+    let file = match std::fs::File::open(path) {
+        Ok(file) => file,
+        Err(e) if e.kind() == ErrorKind::NotFound => return None,
+        Err(e) => {
+            tracing::warn!(pane_id, file = %path.display(), error = %e, "cannot open a Claude Code settings file for its statusLine");
+            return None;
+        }
+    };
+    let mut bytes = Vec::new();
+    if let Err(e) = std::io::Read::read_to_end(
+        &mut std::io::Read::take(file, MAX_SETTINGS_BYTES + 1),
+        &mut bytes,
+    ) {
+        tracing::warn!(pane_id, file = %path.display(), error = %e, "cannot read a Claude Code settings file for its statusLine");
+        return None;
+    }
+    if bytes.len() as u64 > MAX_SETTINGS_BYTES {
+        tracing::warn!(pane_id, file = %path.display(), "a Claude Code settings file is too large to read for its statusLine");
+        return None;
+    }
+    match serde_json::from_slice::<Value>(&bytes) {
+        Ok(settings) => settings
+            .get("statusLine")
+            .filter(|s| s.is_object())
+            .cloned(),
+        Err(e) => {
+            tracing::warn!(pane_id, file = %path.display(), error = %e, "a Claude Code settings file is not JSON; its statusLine is ignored");
+            None
+        }
+    }
 }
 
 fn write_private(pane_id: PaneId, path: &Path, bytes: &[u8]) -> MethodResult<()> {
@@ -602,5 +670,75 @@ fn spawn(
             tracing::warn!(pane_id, error = %e, "cannot start the pane's process");
             Err(refuse(ErrorCode::SpawnFailed, e.to_string()))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+
+    struct Dir(PathBuf);
+
+    impl Drop for Dir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn write(path: &Path, text: &str) {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, text).unwrap();
+    }
+
+    #[test]
+    fn the_users_status_line_comes_from_the_project_first_then_their_own_settings() {
+        let root =
+            Dir(std::env::temp_dir().join(format!("ply-status-line-{}", std::process::id())));
+        let home = root.0.join("home");
+        let project = root.0.join("project");
+        let env = BTreeMap::from([("HOME".to_owned(), home.display().to_string())]);
+        let line =
+            |cmd: &str| json!({"statusLine": {"type": "command", "command": cmd}}).to_string();
+        assert_eq!(user_status_line(1, &project, &env), None);
+
+        write(&home.join(".claude/settings.json"), &line("user"));
+        assert_eq!(
+            user_status_line(1, &project, &env).unwrap()["command"],
+            "user"
+        );
+        write(&project.join(".claude/settings.json"), &line("project"));
+        assert_eq!(
+            user_status_line(1, &project, &env).unwrap()["command"],
+            "project"
+        );
+        write(&project.join(".claude/settings.local.json"), &line("local"));
+        assert_eq!(
+            user_status_line(1, &project, &env).unwrap()["command"],
+            "local"
+        );
+
+        write(&project.join(".claude/settings.local.json"), "{not json");
+        write(
+            &project.join(".claude/settings.json"),
+            r#"{"statusLine": "text"}"#,
+        );
+        assert_eq!(
+            user_status_line(1, &project, &env).unwrap()["command"],
+            "user",
+            "an unreadable file and a statusLine that is not an object are passed over"
+        );
+
+        let config = root.0.join("config");
+        write(&config.join("settings.json"), &line("config dir"));
+        let env = BTreeMap::from([
+            ("HOME".to_owned(), home.display().to_string()),
+            ("CLAUDE_CONFIG_DIR".to_owned(), config.display().to_string()),
+        ]);
+        assert_eq!(
+            user_status_line(1, &project, &env).unwrap()["command"],
+            "config dir"
+        );
     }
 }

@@ -48,6 +48,20 @@ describe('planLaunch', () => {
     });
   });
 
+  test("the bundle's plyd beside the executable wins over the checkout's builds, PLY_PLYD over it", () => {
+    const repo = tree(['target/release/plyd']);
+    const app = tree(['ply.app/Contents/MacOS/plyd']);
+    const exeDir = join(app, 'ply.app/Contents/MacOS');
+    expect(planLaunch({ env: {}, repoRoot: repo, exeDir })).toEqual({
+      kind: 'launch-agent',
+      plyd: join(exeDir, 'plyd'),
+    });
+    const own = tree(['bin/plyd']);
+    expect(
+      planLaunch({ env: { PLY_PLYD: join(own, 'bin/plyd') }, repoRoot: repo, exeDir }),
+    ).toEqual({ kind: 'launch-agent', plyd: join(own, 'bin/plyd') });
+  });
+
   test('PLY_HOME always spawns a build-dir plyd, never the LaunchAgent, and says when none is built', () => {
     const repo = tree(['target/debug/plyd']);
     expect(planLaunch({ env: { PLY_HOME: '/x' }, repoRoot: repo })).toEqual({
@@ -95,5 +109,9 @@ describe('os facts', () => {
     expect(geistAvailable(fontDirs(home).slice(0, 1))).toBe(true);
     const bare = tree(['Library/Fonts/Menlo.ttc']);
     expect(geistAvailable([join(bare, 'Library', 'Fonts')])).toBe(false);
+    const app = tree(['ply.app/Contents/Resources/Fonts/GeistMono-Regular.ttf']);
+    const bundled = fontDirs(bare, join(app, 'ply.app', 'Contents', 'MacOS'));
+    expect(bundled[2]).toBe(join(app, 'ply.app', 'Contents', 'Resources', 'Fonts'));
+    expect(geistAvailable(bundled)).toBe(true);
   });
 });

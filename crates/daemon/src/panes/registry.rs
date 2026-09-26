@@ -403,6 +403,8 @@ impl Registry {
             model_seen: None,
             worktree_seen: None,
             branch: None,
+            project: None,
+            git_worktree: None,
             session_ref: None,
             exit_code: None,
             created_at: now,
@@ -635,16 +637,28 @@ impl Registry {
         moved
     }
 
-    /// Records the git branch of `cwd` (display only, never stored) and broadcasts `pane.meta`, unless the pane moved on.
-    pub fn set_branch(&mut self, id: PaneId, cwd: &str, branch: Option<String>) {
+    /// Records git's branch, project and linked worktree for `cwd` (display only, never stored) and broadcasts `pane.meta` when they changed, unless the pane moved on; without a repository the project is `cwd`'s folder name.
+    pub fn set_git(&mut self, id: PaneId, cwd: &str, git: &crate::branch::GitInfo) {
         let Some(entry) = self.panes.get_mut(&id) else {
             return;
         };
-        if entry.pane.cwd != cwd || entry.pane.branch == branch {
+        let project = git.project.clone().or_else(|| {
+            std::path::Path::new(cwd)
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+        });
+        let pane = &mut entry.pane;
+        if pane.cwd != cwd
+            || (pane.branch == git.branch
+                && pane.project == project
+                && pane.git_worktree == git.worktree)
+        {
             return;
         }
-        entry.pane.branch = branch;
-        let pane = entry.pane.clone();
+        pane.branch.clone_from(&git.branch);
+        pane.project = project;
+        pane.git_worktree.clone_from(&git.worktree);
+        let pane = pane.clone();
         self.emit_meta(&pane);
     }
 
@@ -687,6 +701,8 @@ impl Registry {
             worktree: pane.worktree_seen.clone(),
             cwd: pane.cwd.clone(),
             branch: pane.branch.clone(),
+            project: pane.project.clone(),
+            git_worktree: pane.git_worktree.clone(),
         }));
     }
 

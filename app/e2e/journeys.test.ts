@@ -367,6 +367,11 @@ describe.if(E2E)('journeys on the full app and a real plyd', () => {
       await j.obs.waitPane(claude.id, (p) => p.session_ref === claudeSession(claude.id), 'claude');
       await j.obs.waitPane(codex.id, (p) => p.session_ref === codexThread(codex.id), 'codex');
       expect((await j.obs.panes()).find((p) => p.id === silent.id)?.session_ref).toBeUndefined();
+      // J6 is the manual resume; with the default on, the restarted plyd would resume the panes itself.
+      const settings = await j.obs.client.request('settings.get', {});
+      await j.obs.client.request('settings.set', {
+        settings: { ...settings, resume_sessions_on_start: false },
+      });
       const plyd = j.sb.plydPid() as number;
 
       process.kill(plyd, 'SIGKILL');

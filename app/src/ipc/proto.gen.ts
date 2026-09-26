@@ -109,6 +109,14 @@ export type Pane = {
    */
   branch?: string;
   /**
+   * The project `cwd` belongs to: the folder name of its repository (a linked worktree's main one), else of `cwd`; display only, never stored.
+   */
+  project?: string;
+  /**
+   * The linked worktree `cwd` is in, by its folder name, as git reports it; display only, never stored (INV-7).
+   */
+  git_worktree?: string;
+  /**
    * The CLI's own session id (Claude `session_id`, Codex thread id), used to resume.
    */
   session_ref?: string;
@@ -332,6 +340,10 @@ export type Settings = {
    */
   keep_awake_while_running: boolean;
   /**
+   * When plyd starts, resume every `lost` Claude Code and Codex pane that has a session to resume, as `pane.resume` does.
+   */
+  resume_sessions_on_start: boolean;
+  /**
    * Pass `"theme":"dark-ansi"` to Claude Code so it uses ply's palette.
    */
   use_ply_colours_in_claude: boolean;
@@ -350,11 +362,11 @@ export type Settings = {
 };
 
 /**
- * What `usage.get` returns (Ruling R59): each CLI's plan usage as its own local files last recorded it.
+ * What `usage.get` returns (Ruling R59): each CLI's plan usage as it last reported it.
  */
 export type Usage = {
   /**
-   * Claude Code's, from the usage cache in its `.claude.json`; absent when there is none.
+   * Claude Code's, from the newest status line report of a Claude pane or the usage cache in its `.claude.json`, whichever is newer; absent when there is neither.
    */
   claude?: CliUsage;
   /**
@@ -788,6 +800,14 @@ export type PaneMeta = {
    * Git branch of `cwd`.
    */
   branch?: string;
+  /**
+   * The project `cwd` belongs to ([`crate::pane::Pane::project`]).
+   */
+  project?: string;
+  /**
+   * The linked worktree `cwd` is in, from git ([`crate::pane::Pane::git_worktree`]).
+   */
+  git_worktree?: string;
 };
 
 /**

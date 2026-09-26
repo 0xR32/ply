@@ -16,6 +16,7 @@ describe('the build id', () => {
     const dir = mkdtempSync(join(tmpdir(), 'ply-nogit-'));
     try {
       expect(await readBuildId(dir)).toBeNull();
+      expect(await readBuildId(dir, '0.1.0+0123456789ab')).toBe('0.1.0+0123456789ab');
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

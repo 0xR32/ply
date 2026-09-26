@@ -34,6 +34,7 @@ fn request<'a>(cli: AgentCli, settings: &'a Settings) -> LaunchRequest<'a> {
         worktree: None,
         resume: None,
         prompt: None,
+        status_line: None,
     }
 }
 
@@ -77,7 +78,7 @@ fn claude_argv_env_and_settings_file_follow_spec_6_1() {
     assert_eq!(launch.files[0].path, PathBuf::from(settings_path()));
     assert_eq!(
         launch.files[0].contents,
-        claude_settings_json(Path::new(HOOK), true).unwrap()
+        claude_settings_json(Path::new(HOOK), true, None).unwrap()
     );
 }
 
@@ -127,17 +128,17 @@ fn values_that_would_read_as_options_are_refused() {
 }
 
 #[test]
-fn claude_settings_contain_only_hooks_and_the_theme() {
+fn claude_settings_contain_only_hooks_the_status_line_and_the_theme() {
     let with_theme: Value =
-        serde_json::from_str(&claude_settings_json(Path::new(HOOK), true).unwrap()).unwrap();
+        serde_json::from_str(&claude_settings_json(Path::new(HOOK), true, None).unwrap()).unwrap();
     let keys: Vec<&String> = with_theme.as_object().unwrap().keys().collect();
-    assert_eq!(keys, ["hooks", "theme"]);
+    assert_eq!(keys, ["hooks", "statusLine", "theme"]);
     assert_eq!(with_theme["theme"], "dark-ansi");
     let without: Value =
-        serde_json::from_str(&claude_settings_json(Path::new(HOOK), false).unwrap()).unwrap();
+        serde_json::from_str(&claude_settings_json(Path::new(HOOK), false, None).unwrap()).unwrap();
     assert_eq!(
         without.as_object().unwrap().keys().collect::<Vec<_>>(),
-        ["hooks"]
+        ["hooks", "statusLine"]
     );
 
     let hooks = with_theme["hooks"].as_object().unwrap();
@@ -160,9 +161,51 @@ fn claude_settings_contain_only_hooks_and_the_theme() {
 }
 
 #[test]
+fn the_status_line_reports_to_plyd_then_runs_the_users_own_with_their_other_keys() {
+    let status = |user: Option<Value>| -> Value {
+        let json = claude_settings_json(Path::new(HOOK), false, user.as_ref()).unwrap();
+        serde_json::from_str::<Value>(&json).unwrap()["statusLine"].clone()
+    };
+    assert_eq!(
+        status(None),
+        serde_json::json!({"type": "command", "command": format!("'{HOOK}' statusline")})
+    );
+    let own = serde_json::json!({
+        "type": "command",
+        "command": "~/.claude/it's line.sh --x",
+        "refreshInterval": 2,
+        "padding": 0
+    });
+    assert_eq!(
+        status(Some(own)),
+        serde_json::json!({
+            "type": "command",
+            "command": format!(r"'{HOOK}' statusline '~/.claude/it'\''s line.sh --x'"),
+            "refreshInterval": 2,
+            "padding": 0
+        })
+    );
+    for ignored in [
+        serde_json::json!({"type": "static", "command": "echo no"}),
+        serde_json::json!({"type": "command", "command": "   "}),
+        serde_json::json!("echo"),
+    ] {
+        assert_eq!(
+            status(Some(ignored.clone()))["command"],
+            format!("'{HOOK}' statusline"),
+            "{ignored}"
+        );
+    }
+}
+
+#[test]
 fn hook_program_paths_are_shell_quoted() {
-    let json =
-        claude_settings_json(Path::new("/Users/example/My Apps/it's/ply-hook"), false).unwrap();
+    let json = claude_settings_json(
+        Path::new("/Users/example/My Apps/it's/ply-hook"),
+        false,
+        None,
+    )
+    .unwrap();
     let settings: Value = serde_json::from_str(&json).unwrap();
     assert_eq!(
         settings["hooks"]["Stop"][0]["hooks"][0]["command"],

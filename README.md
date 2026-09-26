@@ -73,6 +73,7 @@ macOS 13 or later on Apple Silicon, with:
 | `just e2e` | journeys J1–J6 on the full app against the release `plyd` and fake CLIs (opens windows, unfocused) |
 | `just deny` | cargo-deny: licences, advisories, the HTTP-client and gpui bans |
 | `bun run gen` | regenerates `app/src/ipc/proto.gen.ts` from ply-proto |
+| `just dmg` | builds `dist/ply.app` and `dist/ply-<version>.dmg`: optimised `plyd`, the app compiled to bytecode, Geist bundled |
 
 ## Documentation
 

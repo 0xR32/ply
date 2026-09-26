@@ -63,26 +63,27 @@ function mount(store: Store) {
 }
 
 describe.if(hasNativeTestRenderer)('App', () => {
-  test('paints the main screen of the canvas: bar, tabs, needs-you pill, panes and footer', () => {
+  test('paints the main screen of the canvas: bar, tabs, status, needs-you pill and panes', () => {
     const store = createStore(canvasState());
     const { renderer, unmount } = mount(store);
     try {
       const text = renderer.getAllText();
-      for (const s of [
-        'ply',
-        'notes',
-        '1 needs you',
-        'Search or run a command',
-        'Commands',
-        'Terminal here',
-      ]) {
+      for (const s of ['ply', 'notes', '1 needs you', 'Search or run a command']) {
         expect(text).toContain(s);
       }
       expect(text).toContain('2 claude · 1 codex · 1 zsh');
       const bar = renderer.findByTestId('top-bar');
-      expect(bar && renderer.getElementBounds(bar.id)?.height).toBe(52);
-      const footer = renderer.findByTestId('statusbar');
-      expect(footer && renderer.getElementBounds(footer.id)?.height).toBe(36);
+      const barBox = bar && renderer.getElementBounds(bar.id);
+      expect(barBox?.height).toBe(40);
+      const status = renderer.findByTestId('statusbar');
+      const statusBox = status && renderer.getElementBounds(status.id);
+      expect(
+        statusBox &&
+          barBox &&
+          statusBox.y >= barBox.y &&
+          statusBox.y + statusBox.height <= barBox.y + barBox.height,
+      ).toBe(true);
+      expect(renderer.findByTestId('hint-commands')).toBeUndefined();
       shot(renderer, 'main');
     } finally {
       unmount();

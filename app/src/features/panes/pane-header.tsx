@@ -114,7 +114,12 @@ export interface PaneHeaderProps {
   onActivate: () => void;
 }
 
-/** The 42 px pane header: position key, title, a bell mark until the pane is looked at, branch, plan progress, CLI and model, status chip; narrow, it drops the progress numbers, the model, the bar, the branch and the CLI in that order and clips rather than overlaps. */
+/** The last component of `path`, the project shown before plyd has asked git; `undefined` for `/`. */
+export function folderName(path: string): string | undefined {
+  return path.split('/').filter(Boolean).at(-1);
+}
+
+/** The 42 px pane header: position key, project, title, a bell mark until the pane is looked at, branch, plan progress, CLI and model, status chip; narrow, it drops the progress numbers, the model, the bar, the branch and the CLI in that order and clips rather than overlaps. */
 export function PaneHeader({ pane, position, focused, onActivate }: PaneHeaderProps) {
   const chrome = useChrome();
   const { z, accent } = chrome;
@@ -127,9 +132,11 @@ export function PaneHeader({ pane, position, focused, onActivate }: PaneHeaderPr
   const agent = pane.cli !== 'shell';
   const progress = agent ? pane.progress : undefined;
   const colours = toneColours(view.tone, chrome);
-  const branch = [pane.branch, pane.worktree_seen ? `worktree ${pane.worktree_seen}` : undefined]
+  const worktree = pane.worktree_seen ?? pane.git_worktree;
+  const branch = [pane.branch, worktree ? `worktree ${worktree}` : undefined]
     .filter(Boolean)
     .join(' · ');
+  const project = pane.project ?? folderName(pane.cwd);
   const barColour = waiting ? tokens.amber : isDone(pane) ? tokens.mint : accent.base;
   return (
     <div
@@ -172,7 +179,14 @@ export function PaneHeader({ pane, position, focused, onActivate }: PaneHeaderPr
           background={focused ? accent.a14 : tokens.white[3]}
           ring={focused ? accent.a45 : tokens.white[10]}
         />
-        <Text color={tokens.text} weight={500} ellipsis testId={`pane-${pane.id}-title`}>
+        {project ? (
+          <div style={{ flexShrink: 0, maxWidth: z(200), minWidth: 0, display: 'flex' }}>
+            <Text color={tokens.text} weight={600} ellipsis testId={`pane-${pane.id}-project`}>
+              {project}
+            </Text>
+          </div>
+        ) : null}
+        <Text color={tokens.text2} weight={500} ellipsis testId={`pane-${pane.id}-title`}>
           {paneTitle(pane)}
         </Text>
         {pane.bell ? (

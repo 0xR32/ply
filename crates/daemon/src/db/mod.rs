@@ -342,6 +342,8 @@ fn pane_of(r: &Row<'_>) -> Result<Pane> {
         detail: None,
         progress: None,
         branch: None,
+        project: None,
+        git_worktree: None,
     })
 }
 
@@ -435,6 +437,8 @@ mod tests {
             model_seen: None,
             worktree_seen: None,
             branch: None,
+            project: None,
+            git_worktree: None,
             session_ref: None,
             exit_code: None,
             created_at: 100,

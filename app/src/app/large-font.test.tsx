@@ -61,7 +61,7 @@ const HEADER_ITEMS = ['focus', 'progress-bar', 'progress', 'cli', 'status'];
 
 describe.if(hasNativeTestRenderer)('the chrome at the largest font size', () => {
   for (const width of [1440, 1100, 720]) {
-    test(`at ${width} px the pane headers drop items instead of overlapping, and the footer drops hints`, async () => {
+    test(`at ${width} px the pane headers drop items instead of overlapping, and the status gives way to the search field`, async () => {
       const store = createStore(largeFontState());
       const root = createTestRoot({ width, height: 900, ...windowKeyListeners(store) });
       root.render(<App store={store} />);
@@ -83,18 +83,10 @@ describe.if(hasNativeTestRenderer)('the chrome at the largest font size', () => 
           }
           expect(right).toBeLessThanOrEqual(header.x + header.width + 0.5);
         }
-        const footer = box(renderer, 'statusbar');
-        const hints = box(renderer, 'statusbar-hints');
-        const counts = box(renderer, 'cli-counts');
-        if (!footer || !hints || !counts) throw new Error('the footer did not paint');
-        expect(counts.x + counts.width).toBeLessThanOrEqual(footer.x + footer.width + 0.5);
-        expect(hints.x + hints.width).toBeLessThanOrEqual(counts.x + 0.5);
-        for (const label of ['commands', 'new-tab', 'new-pane', 'terminal-here', 'next-waiting']) {
-          const hint = box(renderer, `hint-${label}`);
-          if (!hint || hint.y >= hints.y + hints.height) continue;
-          expect(hint.x + hint.width).toBeLessThanOrEqual(hints.x + hints.width + 0.5);
-        }
-        expect(box(renderer, 'hint-commands')?.y).toBe(hints.y);
+        const status = box(renderer, 'statusbar');
+        const search = box(renderer, 'palette-button');
+        if (!status || !search) throw new Error('the top bar did not paint');
+        expect(status.x + status.width).toBeLessThanOrEqual(search.x + 0.5);
       } finally {
         root.unmount();
       }

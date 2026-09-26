@@ -399,7 +399,7 @@ pub enum Call {
     /// `daemon.shutdown` → `{}`, sent before plyd emits `daemon.stopping` and exits.
     #[serde(rename = "daemon.shutdown")]
     DaemonShutdown(DaemonShutdownParams),
-    /// `usage.get` → [`crate::pane::Usage`]: the CLIs' plan usage from their own local files, read-only (Ruling R59).
+    /// `usage.get` → [`crate::pane::Usage`]: the CLIs' plan usage as they last reported it, read-only (Ruling R59).
     #[serde(rename = "usage.get")]
     UsageGet(Empty),
 }
@@ -712,6 +712,12 @@ pub struct PaneMeta {
     /// Git branch of `cwd`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub branch: Option<String>,
+    /// The project `cwd` belongs to ([`crate::pane::Pane::project`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<String>,
+    /// The linked worktree `cwd` is in, from git ([`crate::pane::Pane::git_worktree`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub git_worktree: Option<String>,
 }
 
 /// `pane.exit` payload.

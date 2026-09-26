@@ -1,4 +1,4 @@
-import type { EventPayload, PublicInstance } from '@gpuix/react';
+import { type EventPayload, type PublicInstance, useGpuix } from '@gpuix/react';
 import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 import type { AppState } from '../../state/reducer';
 import { useAppSelector, useDispatch } from '../../state/store';
@@ -40,9 +40,26 @@ export function Palette() {
   );
   const hi = items.length === 0 ? -1 : Math.min(highlight, items.length - 1);
   const hiRef = useRef<PublicInstance>(null);
+  const listRef = useRef<PublicInstance>(null);
+  const { renderer } = useGpuix();
   useEffect(() => {
-    if (hi >= 0) hiRef.current?.scrollIntoView?.();
-  }, [hi]);
+    // GPUIX 0.10.0's scrollIntoView leaves this list where it is, so the list scrolls by the row's overflow itself.
+    const row = hiRef.current?.id;
+    const list = listRef.current?.id;
+    if (hi < 0 || row === undefined || list === undefined) return;
+    const r = renderer?.getElementBounds?.(row);
+    const view = renderer?.getElementBounds?.(list);
+    const offset = renderer?.getScrollOffset?.(list);
+    if (!r || !view || !offset) return;
+    const [x = 0, y = 0] = offset;
+    // A scroll container's own bounds come back moved by its scroll offset (y, negative once scrolled).
+    const top = view.y - y;
+    const margin = z(6);
+    const below = r.y + r.height + margin - (top + view.height);
+    const above = top + margin - r.y;
+    if (below > 0) renderer?.scrollTo?.(list, x, y - below);
+    else if (above > 0) renderer?.scrollTo?.(list, x, Math.min(0, y + above));
+  }, [hi, renderer, z]);
 
   const close = () => dispatch({ type: 'overlay/close' });
   const run = (item: PaletteItem | undefined) => {
@@ -168,6 +185,7 @@ export function Palette() {
           </div>
         </CardBar>
         <div
+          ref={listRef}
           testId="palette-list"
           style={{
             flexGrow: 1,

@@ -1,7 +1,7 @@
 //! `config.toml` (spec 11.1): the user settings of `settings.get`/`settings.set` and the last `theme.set` palette.
 //!
 //! Every key is optional; a missing key takes the [`Settings`] default (`scrollback_lines` 10 000,
-//! `keep_awake_while_running` and `use_ply_colours_in_claude` on, `option_as_meta` off). The palette is kept here so
+//! `keep_awake_while_running`, `resume_sessions_on_start` and `use_ply_colours_in_claude` on, `option_as_meta` off). The palette is kept here so
 //! a restarted plyd can spawn panes before the app sends `theme.set` again (R-R4: no child starts before its
 //! terminal knows the palette). A file that does not parse is logged and ignored, never overwritten until the next
 //! `settings.set` or `theme.set`. Writes go to a temporary file renamed over the old one, mode 0600.
@@ -35,6 +35,8 @@ struct ConfigFile {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     keep_awake_while_running: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    resume_sessions_on_start: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     use_ply_colours_in_claude: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     codex_plan_tool: Option<bool>,
@@ -58,6 +60,9 @@ impl Config {
                 keep_awake_while_running: file
                     .keep_awake_while_running
                     .unwrap_or(d.keep_awake_while_running),
+                resume_sessions_on_start: file
+                    .resume_sessions_on_start
+                    .unwrap_or(d.resume_sessions_on_start),
                 use_ply_colours_in_claude: file
                     .use_ply_colours_in_claude
                     .unwrap_or(d.use_ply_colours_in_claude),
@@ -76,6 +81,7 @@ impl Config {
             accent: Some(s.accent),
             option_as_meta: Some(s.option_as_meta),
             keep_awake_while_running: Some(s.keep_awake_while_running),
+            resume_sessions_on_start: Some(s.resume_sessions_on_start),
             use_ply_colours_in_claude: Some(s.use_ply_colours_in_claude),
             codex_plan_tool: Some(s.codex_plan_tool),
             scrollback_lines: Some(s.scrollback_lines),

@@ -141,6 +141,10 @@ export const fontSizeRange = { min: 9.5, max: 24.5, step: 1 } as const;
 /** Chrome colours, radii, layout metrics and the type scale; lengths are logical pixels, weights CSS weights. */
 export const tokens = {
   ground,
+  /** The window's ground over macOS's blur (GPUIX `windowBackground: "blurred"`): the desktop shows through, frosted and darkened. */
+  glass: 'rgba(10, 11, 16, 0.62)',
+  /** The light the glass catches from its top-left corner, fading out across the window. */
+  glassSheen: ['rgba(255, 255, 255, 0.07)', 'rgba(255, 255, 255, 0)'] as const,
   pane,
   paneFocus,
   term,
@@ -156,6 +160,9 @@ export const tokens = {
   amber,
   mint,
   red,
+  /** Behind a diff row a CLI marks added (`+`) or removed (`-`), low contrast so the code stays the thing read. */
+  diffAdd: withAlpha(mint, 0.2),
+  diffRemove: withAlpha(red, 0.2),
   violet,
   teal,
   tabActive: '#1A1E2A',
@@ -205,18 +212,17 @@ export const tokens = {
     overlay: 14,
   },
   layout: {
-    headerHeight: 52,
+    headerHeight: 40,
     headerPaddingLeft: 84,
     headerPaddingRight: 16,
     trafficLightX: 16,
-    trafficLightY: 18,
+    trafficLightY: 13,
     groundGlowHeight: 420,
     paneHeaderHeight: 42,
-    footerHeight: 36,
     gap: 10,
-    gridPaddingX: 14,
+    gridPaddingX: 6,
     gridPaddingTop: 2,
-    gridPaddingBottom: 10,
+    gridPaddingBottom: 6,
     overlayTop: 110,
     paletteWidth: 640,
     paletteHeight: 420,

@@ -107,6 +107,12 @@ pub struct Pane {
     /// Git branch of `cwd` (display only, never stored).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub branch: Option<String>,
+    /// The project `cwd` belongs to: the folder name of its repository (a linked worktree's main one), else of `cwd`; display only, never stored.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<String>,
+    /// The linked worktree `cwd` is in, by its folder name, as git reports it; display only, never stored (INV-7).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub git_worktree: Option<String>,
     /// The CLI's own session id (Claude `session_id`, Codex thread id), used to resume.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_ref: Option<String>,
@@ -309,6 +315,8 @@ pub struct Settings {
     pub option_as_meta: OptionAsMeta,
     /// Hold a prevent-idle-sleep assertion while any pane is running.
     pub keep_awake_while_running: bool,
+    /// When plyd starts, resume every `lost` Claude Code and Codex pane that has a session to resume, as `pane.resume` does.
+    pub resume_sessions_on_start: bool,
     /// Pass `"theme":"dark-ansi"` to Claude Code so it uses ply's palette.
     pub use_ply_colours_in_claude: bool,
     /// Enable Codex's plan tool per invocation (`-c tools.update_plan.enabled=true`, Ruling R26).
@@ -325,6 +333,7 @@ impl Default for Settings {
             accent: AccentName::Blue,
             option_as_meta: OptionAsMeta::Off,
             keep_awake_while_running: true,
+            resume_sessions_on_start: true,
             use_ply_colours_in_claude: true,
             codex_plan_tool: true,
             scrollback_lines: 10_000,
@@ -333,12 +342,12 @@ impl Default for Settings {
     }
 }
 
-/// What `usage.get` returns (Ruling R59): each CLI's plan usage as its own local files last recorded it.
+/// What `usage.get` returns (Ruling R59): each CLI's plan usage as it last reported it.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, TS)]
 #[serde(deny_unknown_fields)]
 #[ts(optional_fields)]
 pub struct Usage {
-    /// Claude Code's, from the usage cache in its `.claude.json`; absent when there is none.
+    /// Claude Code's, from the newest status line report of a Claude pane or the usage cache in its `.claude.json`, whichever is newer; absent when there is neither.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub claude: Option<CliUsage>,
     /// Codex's, from the rate limits its newest rollouts recorded; absent when there are none.

@@ -10,6 +10,7 @@
 //! |---|---|---|
 //! | `start` | fires SessionStart (and UserPromptSubmit for a prompt) when started with the prompt `wait-for-start` | — |
 //! | `hook <Event> <json>` | pipes `<json>` into the command its `--settings` file registers for `<Event>`, as Claude Code does | — |
+//! | `statusline <json>` | pipes `<json>` into its `--settings` file's `statusLine` command, as Claude Code does, and writes what it prints to `$HOME/fake-statusline.out` | — |
 //! | `session` | — | creates `$CODEX_HOME/sessions/YYYY/MM/DD/rollout-<ts>-<thread>.jsonl` with its `session_meta` |
 //! | `newthread <thread>` | — | switches to another thread, as `/new` does, and creates its rollout like `session` |
 //! | `record <json>` | — | appends one record line to the current rollout |

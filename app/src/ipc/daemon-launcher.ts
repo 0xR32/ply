@@ -1,12 +1,14 @@
 import { existsSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { log } from './log';
 
 /** Where the starter looks for plyd; everything defaults to the running process and its environment. */
 export interface DaemonLauncherOptions {
   env?: NodeJS.ProcessEnv;
-  /** Repository root of the cargo builds (`target/{release,debug}/plyd`); ply runs from its checkout (no bundle). */
+  /** Repository root of the cargo builds (`target/{release,debug}/plyd`) for a run from the checkout. */
   repoRoot?: string;
+  /** The running executable's directory: `ply.app/Contents/MacOS`, where the bundle keeps its plyd, in a `just dmg` build. */
+  exeDir?: string;
 }
 
 /** `launch-agent`: run `plyd install-agent` (plyd writes its own LaunchAgent, R38); `spawn`: `PLY_HOME` runs never touch it. */
@@ -19,12 +21,13 @@ const REPO_ROOT = join(import.meta.dir, '..', '..', '..');
 
 const NOT_BUILT = 'plyd is not built (cargo build --release -p ply-daemon -p ply-hook)';
 
-/** Decides how plyd would be started: `PLY_PLYD` if set, else the release build, else the debug build (the release one wins when both exist). */
+/** Decides how plyd would be started: `PLY_PLYD` if set, else the bundle's plyd beside the executable, else the release build, else the debug build. */
 export function planLaunch(options: DaemonLauncherOptions = {}): LaunchPlan {
   const env = options.env ?? process.env;
   const root = options.repoRoot ?? REPO_ROOT;
   const built = [
     env.PLY_PLYD,
+    join(options.exeDir ?? dirname(process.execPath), 'plyd'),
     join(root, 'target', 'release', 'plyd'),
     join(root, 'target', 'debug', 'plyd'),
   ].find((c): c is string => c !== undefined && existsSync(c));
@@ -52,7 +55,7 @@ function spawnDetached(plyd: string, env: NodeJS.ProcessEnv): void {
     detached: true,
   });
   child.unref();
-  log('info', 'started plyd from the build directory', { plyd, pid: child.pid });
+  log('info', 'started plyd in the foreground', { plyd, pid: child.pid });
 }
 
 /** A `startDaemon` for the control client; it throws with a readable reason when plyd cannot be started. */

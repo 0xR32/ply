@@ -1,9 +1,11 @@
-//! `usage.get` (Ruling R59): the plan usage Claude Code and Codex recorded in their own local files, read-only.
+//! `usage.get` (Ruling R59): the plan usage Claude Code and Codex report themselves, read-only.
 //!
-//! Claude Code caches its usage in `.claude.json` (in `$CLAUDE_CONFIG_DIR` when the login shell sets it, else in the
-//! home directory); Codex records its rate limits with every `token_count` event of its rollouts under
-//! `$CODEX_HOME/sessions/` (default `~/.codex`). plyd reads both on a blocking thread, never writes either (INV-8) and
-//! makes no request (INV-1), so the numbers are as old as the CLIs' last report and [`CliUsage::as_of`] says how old.
+//! Claude Code's newest numbers are the `rate_limits` its status line payload carries after every API response, which
+//! `ply-hook statusline` forwards from each Claude pane ([`UsageCache::status_line`]). They win over the usage it caches
+//! in `.claude.json` (in `$CLAUDE_CONFIG_DIR` when the login shell sets it, else in the home directory) whenever they
+//! are newer. Codex records its rate limits with every `token_count` event of its rollouts under
+//! `$CODEX_HOME/sessions/` (default `~/.codex`). plyd reads the files on a blocking thread, never writes them (INV-8)
+//! and makes no request (INV-1), so the numbers are as old as the CLIs' last report and [`CliUsage::as_of`] says how old.
 //! Rollouts are read from their ends: at most the [`MAX_ROLLOUTS`] most recently written files, at most
 //! [`MAX_BYTES_PER_ROLLOUT`] of each and [`MAX_ROLLOUT_BYTES`] in all. An answer is reused for [`CACHE_FOR`], so a held
 //! ⌘U polling every 5 s reads the files at most once per interval. A missing, unreadable or unexpected file means no
@@ -15,9 +17,10 @@ use std::io::{ErrorKind, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime};
 
-use ply_agents::claude::usage::parse_usage_cache;
+use ply_agents::claude::usage::{parse_usage_cache, status_line_windows};
 use ply_agents::codex::usage::{FileScan, RolloutUsage};
-use ply_proto::pane::{CliUsage, Usage};
+use ply_proto::pane::{CliUsage, PaneId, UnixSeconds, Usage, UsageWindow};
+use serde_json::Value;
 use tokio::sync::Mutex;
 
 /// How long one reading answers `usage.get`.
@@ -31,6 +34,9 @@ pub const MAX_ROLLOUT_BYTES: u64 = 8 << 20;
 
 /// Rollout bytes read from the end of one file, so one file without rate limits cannot use up the whole budget.
 pub const MAX_BYTES_PER_ROLLOUT: u64 = 2 << 20;
+
+/// Sessions whose last status line report is kept; a new one beyond this evicts the one whose numbers changed longest ago.
+pub const MAX_STATUS_LINE_SESSIONS: usize = 64;
 
 /// Largest `.claude.json` read; a bigger one is skipped and logged.
 pub const MAX_CLAUDE_JSON_BYTES: u64 = 64 << 20;
@@ -258,15 +264,82 @@ fn numbered_dirs_desc(dir: &Path) -> Vec<PathBuf> {
     dirs
 }
 
-/// The last `usage.get` answer and when it was read; concurrent callers wait for one reading instead of starting several.
+/// One session's last status line numbers and since when it has reported exactly these.
+#[derive(Debug, Clone, PartialEq)]
+struct StatusLineReport {
+    windows: Vec<UsageWindow>,
+    since: UnixSeconds,
+}
+
+/// The last file reading, reused for [`CACHE_FOR`] and shared by concurrent callers, and each Claude session's last status line numbers.
 #[derive(Debug, Default)]
 pub struct UsageCache {
     last: Mutex<Option<(Instant, Usage)>>,
+    status_lines: Mutex<BTreeMap<String, StatusLineReport>>,
 }
 
 impl UsageCache {
-    /// The usage in `sources`, read on a blocking thread unless the last reading is younger than [`CACHE_FOR`].
+    /// The usage in `sources`, read on a blocking thread unless the last reading is younger than [`CACHE_FOR`], with Claude Code's newest status line numbers in place of its cache when they are newer.
     pub async fn get(&self, sources: UsageSources) -> Usage {
+        let mut usage = self.read(sources).await;
+        if let Some(live) = self.newest_status_line().await
+            && usage.claude.as_ref().is_none_or(|c| c.as_of <= live.as_of)
+        {
+            usage.claude = Some(live);
+        }
+        usage
+    }
+
+    /// Records the plan usage in one status line payload from `pane_id` (0 outside ply) at `now`, per the payload's `session_id`; a payload without `rate_limits` changes nothing.
+    pub async fn status_line(&self, pane_id: PaneId, payload: &Value, now: UnixSeconds) {
+        let windows = status_line_windows(payload);
+        if windows.is_empty() {
+            return;
+        }
+        let key = payload
+            .get("session_id")
+            .and_then(Value::as_str)
+            .map_or_else(|| format!("pane {pane_id}"), |id| format!("session {id}"));
+        let mut reports = self.status_lines.lock().await;
+        // `since` moves only when the numbers change, so an idle session repeating old ones never outranks a busier one.
+        match reports.get_mut(&key) {
+            Some(report) if report.windows == windows => {}
+            Some(report) => {
+                *report = StatusLineReport {
+                    windows,
+                    since: now,
+                }
+            }
+            None => {
+                if reports.len() >= MAX_STATUS_LINE_SESSIONS
+                    && let Some(oldest) = reports
+                        .iter()
+                        .min_by_key(|(_, r)| r.since)
+                        .map(|(key, _)| key.clone())
+                {
+                    reports.remove(&oldest);
+                }
+                reports.insert(
+                    key,
+                    StatusLineReport {
+                        windows,
+                        since: now,
+                    },
+                );
+            }
+        }
+    }
+
+    async fn newest_status_line(&self) -> Option<CliUsage> {
+        let reports = self.status_lines.lock().await;
+        reports.values().max_by_key(|r| r.since).map(|r| CliUsage {
+            as_of: r.since,
+            plan: None,
+            windows: r.windows.clone(),
+        })
+    }
+
+    async fn read(&self, sources: UsageSources) -> Usage {
         let mut last = self.last.lock().await;
         if let Some((at, usage)) = last.as_ref()
             && at.elapsed() < CACHE_FOR
@@ -590,5 +663,114 @@ mod tests {
         );
         *cache.last.lock().await = None;
         assert!(cache.get(sources).await.claude.is_some());
+    }
+
+    fn limits(five_hour: f64) -> Value {
+        serde_json::json!({"rate_limits": {
+            "five_hour": {"used_percentage": five_hour, "resets_at": 1_790_409_600},
+            "seven_day": {"used_percentage": 30}
+        }})
+    }
+
+    fn no_files() -> UsageSources {
+        UsageSources {
+            claude_json: None,
+            codex_sessions: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn the_newest_status_line_numbers_answer_for_claude_code() {
+        let cache = UsageCache::default();
+        cache.status_line(1, &limits(10.0), 1_000).await;
+        cache.status_line(2, &limits(20.0), 1_100).await;
+        let claude = cache.get(no_files()).await.claude.unwrap();
+        assert_eq!(claude.as_of, 1_100);
+        assert_eq!(
+            claude
+                .windows
+                .iter()
+                .map(|w| (w.label.as_str(), w.used_percent))
+                .collect::<Vec<_>>(),
+            [("Session · 5h", 20.0), ("Week · all models", 30.0)]
+        );
+        cache.status_line(1, &limits(10.0), 1_200).await;
+        let claude = cache.get(no_files()).await.claude.unwrap();
+        assert_eq!(
+            (claude.as_of, claude.windows[0].used_percent),
+            (1_100, 20.0),
+            "a pane repeating its old numbers does not outrank a newer report"
+        );
+        cache.status_line(1, &limits(12.0), 1_300).await;
+        let claude = cache.get(no_files()).await.claude.unwrap();
+        assert_eq!(
+            (claude.as_of, claude.windows[0].used_percent),
+            (1_300, 12.0)
+        );
+        cache
+            .status_line(3, &serde_json::json!({"model": {}}), 1_400)
+            .await;
+        assert_eq!(cache.get(no_files()).await.claude.unwrap().as_of, 1_300);
+    }
+
+    #[tokio::test]
+    async fn the_cache_wins_only_when_it_is_newer_than_every_status_line() {
+        let dir = Dir::new("live");
+        let json = dir.0.join(".claude.json");
+        std::fs::write(
+            &json,
+            r#"{"cachedUsageUtilization":{"fetchedAtMs":1790350000000,"utilization":{"five_hour":{"utilization":5},"seven_day_opus":{"utilization":7}}}}"#,
+        )
+        .unwrap();
+        let sources = UsageSources {
+            claude_json: Some(json),
+            codex_sessions: None,
+        };
+        let cache = UsageCache::default();
+        cache.status_line(1, &limits(40.0), 1_790_349_000).await;
+        assert_eq!(
+            cache.get(sources.clone()).await.claude.unwrap().as_of,
+            1_790_350_000
+        );
+        cache.status_line(1, &limits(41.0), 1_790_351_000).await;
+        let claude = cache.get(sources).await.claude.unwrap();
+        assert_eq!(
+            (claude.as_of, claude.windows[0].used_percent),
+            (1_790_351_000, 41.0)
+        );
+    }
+
+    #[tokio::test]
+    async fn at_most_so_many_sessions_are_kept_and_the_stalest_goes_first() {
+        let cache = UsageCache::default();
+        for pane in 0..=MAX_STATUS_LINE_SESSIONS as u64 {
+            cache.status_line(pane, &limits(1.0), 1_000 + pane).await;
+        }
+        let reports = cache.status_lines.lock().await;
+        assert_eq!(reports.len(), MAX_STATUS_LINE_SESSIONS);
+        assert!(
+            !reports.contains_key("pane 0"),
+            "the report made longest ago went"
+        );
+    }
+
+    #[tokio::test]
+    async fn sessions_outside_ply_are_told_apart_by_their_session_id() {
+        let cache = UsageCache::default();
+        let from = |session: &str, used: f64| {
+            let mut payload = limits(used);
+            payload["session_id"] = Value::String(session.to_owned());
+            payload
+        };
+        cache.status_line(0, &from("busy", 10.0), 1_000).await;
+        cache.status_line(0, &from("idle", 5.0), 1_100).await;
+        cache.status_line(0, &from("busy", 12.0), 1_200).await;
+        cache.status_line(0, &from("idle", 5.0), 1_300).await;
+        let claude = cache.get(no_files()).await.claude.unwrap();
+        assert_eq!(
+            (claude.as_of, claude.windows[0].used_percent),
+            (1_200, 12.0),
+            "the idle session repeating 5 % does not replace the busy one's newer 12 %"
+        );
     }
 }

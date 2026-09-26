@@ -54,6 +54,8 @@ pub struct LaunchRequest<'a> {
     pub resume: Option<&'a str>,
     /// First prompt, passed as the CLI's positional prompt argument.
     pub prompt: Option<&'a str>,
+    /// The user's own Claude Code `statusLine` setting, which the pane's status line runs after reporting to plyd; Codex ignores it.
+    pub status_line: Option<&'a serde_json::Value>,
 }
 
 /// What plyd needs to spawn a pane: the spec, plus files it must write (mode 0600) before the spawn.

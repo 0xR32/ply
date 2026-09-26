@@ -114,9 +114,10 @@ model and effort inside the pane.
 
 **`claude-settings.json`** (`crates/agents/src/claude/settings.rs`). A
 `--settings` file merges with the user's settings and wins over them, so it
-holds only `hooks` — plus `"theme":"dark-ansi"` when "Use ply colours in Claude
-Code" is on — and the user's own model, permissions, status line and hooks stay
-in force. Each hook is one command:
+holds only `hooks`, the `statusLine`, and `"theme":"dark-ansi"` when "Use ply
+colours in Claude Code" is on. The user's own model, permissions and hooks stay
+in force, and so does their status line: ply's `statusLine` runs it. Each hook
+is one command:
 
 ```json
 {
@@ -124,9 +125,25 @@ in force. Each hook is one command:
     "SessionStart": [{"hooks": [{"type": "command", "command": "'<plyd dir>/ply-hook' claude SessionStart"}]}],
     …
   },
+  "statusLine": {"type": "command", "command": "'<plyd dir>/ply-hook' statusline '~/.claude/statusline.sh'", "refreshInterval": 2},
   "theme": "dark-ansi"
 }
 ```
+
+**The status line.** plyd reads the user's own `statusLine` when it starts the
+pane, as Claude Code would pick it without ply: the project's
+`.claude/settings.local.json`, then its `.claude/settings.json`, then
+`settings.json` in `$CLAUDE_CONFIG_DIR` or `~/.claude`. A command status line's
+command becomes the argument of `ply-hook statusline`, and its other keys
+(`refreshInterval`, `padding`) are copied; without one, `ply-hook statusline`
+stands alone and prints nothing. Each run sends the payload Claude Code pipes in
+to plyd as a `StatusLine` envelope, for the plan usage in its `rate_limits`
+(see **Plan usage**), then runs the user's command through `/bin/sh -c` with
+the same payload and prints what it prints, exiting with its code. plyd takes a
+`StatusLine` envelope as plan usage only: it never reaches the pane, so a status
+line that refreshes every few seconds cannot hold the R17 quiet timer open
+(`a_status_line_report_is_live_usage_and_never_pane_activity`). A setting
+changed after the pane started applies from the pane's next start.
 
 The path of `ply-hook` is single-quoted for `sh`, which Claude Code runs hook
 commands with. `ply-hook` is the binary beside the running plyd (build both:
@@ -423,12 +440,25 @@ clears when the pane leaves the worktree; the stored session record keeps the
 last worktree the pane was in. The model is shown exactly as reported; with none
 reported the pane header shows only the CLI name.
 
-The branch label comes from `git rev-parse --abbrev-ref HEAD` in the pane's
-directory (`crates/daemon/src/branch.rs`), run on its own task at spawn and
-whenever the directory changes, with the pane's base environment, stdin from
-`/dev/null` and a 2 s limit; outside a repository, without git or on any failure
-there is none. It is display only: it travels in `pane.meta` and `pane.list`
-and is never stored.
+The git labels come from two git runs in the pane's directory
+(`crates/daemon/src/branch.rs`): `git rev-parse --show-toplevel
+--absolute-git-dir --git-common-dir`, then `git symbolic-ref --short -q HEAD`
+(`git rev-parse --short HEAD` for a detached `HEAD`), each on its own task with
+the pane's base environment, stdin from `/dev/null` and a 2 s limit. They run at
+spawn, whenever the directory changes, and whenever the repository's `HEAD` file
+changes. plyd looks at each pane's `HEAD` once a second, a file stat and no git
+run, so a `git switch` in the pane or anywhere else shows within a second.
+
+- `branch`: the branch checked out, or the short commit of a detached `HEAD`.
+- `project`: the folder name of the repository, of the main one when the
+  directory is in a linked worktree (its `--git-common-dir`); outside a
+  repository, the directory's own folder name.
+- `git_worktree`: the folder name of the linked worktree the directory is in,
+  whatever its path; the header shows it when the CLI reports no worktree.
+
+Outside a repository, without git or on any failure there is no branch and no
+worktree. All three are display only: they travel in `pane.meta` and
+`pane.list` and are never stored.
 
 `session_ref`, `model_seen`, `worktree_seen` and `cwd` are stored in the pane's
 row and returned by `pane.list` and `session.list`.
@@ -533,12 +563,27 @@ launches anyway. The adapters also name a `--version` probe
 ## Plan usage
 
 Holding ⌘U shows each CLI's plan usage (`usage.get`, Ruling R59). ply computes
-none of it and asks no server: it shows what the CLIs themselves last recorded
-on disk, with its age, and reads those files without ever writing them
+none of it and asks no server: it shows what the CLIs themselves last reported,
+with its age, and reads their files without ever writing them
 (`crates/daemon/src/usage.rs`; the parsers are
 `crates/agents/src/claude/usage.rs` and `crates/agents/src/codex/usage.rs`).
 
-- **Claude Code** caches the usage it fetches in `.claude.json`
+- **Claude Code, live:** the status line payload of every Claude Code session
+  carries `rate_limits: {five_hour, seven_day, …}`, each window
+  `{used_percentage, resets_at (Unix seconds)}`, which Claude Code updates from
+  every API response of the session (absent for an API-key login, and until the
+  session's first response). Claude panes report it through their
+  `statusLine`; a session outside ply reports the same way when its own status
+  line pipes its input to `ply-hook statusline`, which then sends it as pane 0
+  to `PLY_HOOK_SOCK`, else to `run/hook.sock` under `PLY_HOME` or
+  `~/Library/Application Support/ply`. plyd keeps each session's last report,
+  by the payload's `session_id`, and when its numbers last changed, since a
+  status line repeats unchanged numbers on every refresh; the report whose
+  numbers changed most recently answers, with that time as its age, whenever it
+  is newer than the cache below. It carries the windows it has, "Session · 5h"
+  and "Week · all models"; the per-model weeks come only from the cache, when
+  the cache is the newer. At most 64 sessions' reports are kept.
+- **Claude Code, cached:** it caches the usage it fetches in `.claude.json`
   (`$CLAUDE_CONFIG_DIR/.claude.json` when the login shell exports
   `CLAUDE_CONFIG_DIR`, else `~/.claude.json`) under `cachedUsageUtilization`:
   `{fetchedAtMs, accountUuid, utilization: {five_hour, seven_day,
@@ -571,7 +616,7 @@ and the view says "No usage recorded yet".
 
 ply never writes `~/.claude/settings.json`, `~/.claude.json` or
 `~/.codex/config.toml` (INV-8); it reads `~/.claude.json` only for the usage
-cache above. Everything it configures is per invocation:
+cache above, and the user's `settings.json` files only for their `statusLine`. Everything it configures is per invocation:
 Claude Code's `--settings` file lives in ply's own `run/panes/<id>/`, and
 Codex's options are `-c` arguments. ply never passes a permission-skipping flag,
 never installs, updates or signs in either CLI, and adds no hook to the user's
@@ -587,11 +632,13 @@ sandboxed `HOME` and `CODEX_HOME`.
 ## Resume
 
 After a logout, a reboot or a plyd restart the processes are gone, and their
-panes come back `lost`. Right after its sockets are bound, plyd reopens every
-`lost` pane without a session id to resume by itself, as below (Ruling R50,
-`reopen_sessionless`); the panes with a session id stay `lost` until
-`pane.resume` relaunches one from its `launch.json`
-(`crates/daemon/src/panes/launch.rs`, `resume`):
+panes come back `lost`. Right after its sockets are bound, plyd relaunches them
+by itself (`reopen_lost`): every `lost` pane without a session id reopens as
+below (Ruling R50), and, with the setting `resume_sessions_on_start` (on by
+default), every agent pane with one resumes its session, as `pane.resume`
+would. With the setting off those panes stay `lost` until `pane.resume`
+relaunches one from its `launch.json` (`crates/daemon/src/panes/launch.rs`,
+`resume`); a resume that fails leaves its pane `lost` too:
 
 - **Claude Code**: `claude --settings … --resume <session_ref>` in the stored
   working directory, with the stored `--worktree` option when there was one.

@@ -1,6 +1,5 @@
 import { useMemo } from 'react';
 import { PaneGrid } from '../features/panes/pane-grid';
-import { StatusBar } from '../features/statusbar/statusbar';
 import { UsageView } from '../features/usage/usage-view';
 import { type Store, StoreContext, useAppSelector } from '../state/store';
 import { ChromeThemeContext, chromeFonts, createChromeTheme } from '../theme/chrome';
@@ -27,10 +26,28 @@ function Shell() {
           flexDirection: 'column',
           width: '100%',
           height: '100%',
-          backgroundColor: tokens.ground,
+          backgroundColor: tokens.glass,
           fontFamily: theme.fonts.ui,
         }}
       >
+        <div
+          style={{
+            position: 'absolute',
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            pointerEvents: 'none',
+            background: {
+              type: 'linear-gradient',
+              angle: 135,
+              stops: [
+                { color: tokens.glassSheen[0], position: 0 },
+                { color: tokens.glassSheen[1], position: 0.45 },
+              ],
+            },
+          }}
+        />
         <div
           style={{
             position: 'absolute',
@@ -51,7 +68,6 @@ function Shell() {
         />
         <TopBar />
         <PaneGrid />
-        <StatusBar />
         <Overlays />
         <UsageView />
       </div>
@@ -59,7 +75,7 @@ function Shell() {
   );
 }
 
-/** Composition root: provides the store and the chrome theme, and lays out bar, grid, footer and overlays. */
+/** Composition root: provides the store and the chrome theme, and lays out the top bar, the grid and the overlays. */
 export function App({ store }: { store: Store }) {
   return (
     <StoreContext.Provider value={store}>

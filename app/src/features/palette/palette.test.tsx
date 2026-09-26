@@ -173,6 +173,34 @@ describe.if(hasNativeTestRenderer)('Palette', () => {
     }
   });
 
+  test('↑↓ keep the highlighted row inside the list, scrolling it when it would leave', () => {
+    const { renderer, unmount } = mount();
+    try {
+      const list = renderer.findByTestId('palette-list');
+      const view = list ? renderer.getElementBounds(list.id) : null;
+      if (!view) throw new Error('no palette list');
+      const highlighted = () => {
+        const on = renderer
+          .findByType('div')
+          .find((el) => el.testId?.startsWith('palette-item-') && el.style.borderWidth === 1);
+        return on ? renderer.getElementBounds(on.id) : null;
+      };
+      const rows = paletteItems(state(), '', 0).length;
+      for (let step = 0; step < rows + 2; step++) {
+        renderer.simulateKeystrokes(step < rows ? 'down' : 'up');
+        renderer.flush();
+        renderer.flush();
+        const b = highlighted();
+        expect(b).not.toBeNull();
+        if (!b) return;
+        expect(b.y).toBeGreaterThanOrEqual(view.y - 0.5);
+        expect(b.y + b.height).toBeLessThanOrEqual(view.y + view.height + 0.5);
+      }
+    } finally {
+      unmount();
+    }
+  });
+
   test('a click runs a row', () => {
     const { renderer, seen, unmount } = mount();
     try {

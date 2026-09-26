@@ -175,6 +175,23 @@ describe('daemon events', () => {
     const d = run(c, evt({ e: 'pane.meta', p: { pane_id: 1, cwd: '/Users/example/code/ply' } }));
     expect(d.panes[1]?.worktree_seen).toBeUndefined();
   });
+
+  test("pane.meta carries git's project and linked worktree, kept in the same directory until git answers", () => {
+    const cwd = '/Users/example/code/ply/crates';
+    const a = run(
+      threePanes(),
+      evt({
+        e: 'pane.meta',
+        p: { pane_id: 1, cwd, branch: 'main', project: 'ply', git_worktree: 'ply-side' },
+      }),
+    );
+    expect(a.panes[1]).toMatchObject({ project: 'ply', git_worktree: 'ply-side' });
+    const b = run(a, evt({ e: 'pane.meta', p: { pane_id: 1, cwd, model: 'claude-opus-5' } }));
+    expect(b.panes[1]).toMatchObject({ project: 'ply', git_worktree: 'ply-side', branch: 'main' });
+    const c = run(b, evt({ e: 'pane.meta', p: { pane_id: 1, cwd: '/tmp' } }));
+    expect(c.panes[1]?.project).toBeUndefined();
+    expect(c.panes[1]?.git_worktree).toBeUndefined();
+  });
 });
 
 describe('commands', () => {

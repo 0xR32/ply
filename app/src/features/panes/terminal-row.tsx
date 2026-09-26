@@ -1,7 +1,9 @@
 import { memo } from 'react';
+import { diffKind } from '../../terminal/diff';
 import type { Style } from '../../terminal/frames';
 import { type ReplicaRow, sameCells } from '../../terminal/replica';
 import { type RowSelection, rowRuns, type StyleResolver } from '../../terminal/runs';
+import { tokens } from '../../theme/tokens';
 
 /** Props of one terminal row; its cells (compared by hash, then content) and selection columns decide whether it re-renders. */
 export interface TerminalRowProps {
@@ -29,7 +31,7 @@ function same(a: TerminalRowProps, b: TerminalRowProps): boolean {
   );
 }
 
-/** One screen row: each `<text>` run placed at its own column, rounded to a whole pixel, so neither a fallback glyph nor layout rounding can shift the columns after it. */
+/** One screen row: each `<text>` run placed at its own column, rounded to a whole pixel, so neither a fallback glyph nor layout rounding can shift the columns after it; a diff line gets a low-contrast green or red band across the pane. */
 export const TerminalRow = memo(function TerminalRow({
   row,
   cols,
@@ -40,8 +42,23 @@ export const TerminalRow = memo(function TerminalRow({
   cellHeight,
 }: TerminalRowProps) {
   const runs = rowRuns(row.row, cols, styleOf, resolver, selection);
+  const diff = diffKind(row.row, styleOf);
   return (
     <div style={{ position: 'relative', height: cellHeight, flexShrink: 0 }}>
+      {diff ? (
+        <div
+          testId={`terminal-diff-${diff}`}
+          style={{
+            position: 'absolute',
+            left: 0,
+            top: 0,
+            width: Math.round(cols * cellWidth),
+            height: cellHeight,
+            pointerEvents: 'none',
+            backgroundColor: diff === 'add' ? tokens.diffAdd : tokens.diffRemove,
+          }}
+        />
+      ) : null}
       {runs.map((run) => {
         const left = Math.round(run.col * cellWidth);
         return (

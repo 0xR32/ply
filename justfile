@@ -38,6 +38,10 @@ icon:
     for s in 16 32 128 256 512; do resvg app/assets/icon/ply.svg target/ply.iconset/icon_${s}x${s}.png -w $s && resvg app/assets/icon/ply.svg target/ply.iconset/icon_${s}x${s}@2x.png -w $((s * 2)); done
     iconutil -c icns target/ply.iconset -o app/assets/icon/ply.icns
 
+# dist/ply.app and dist/ply-<version>.dmg: plyd at profile dist, the app compiled by Bun to bytecode, ad-hoc signed.
+dmg:
+    bun scripts/dmg.ts
+
 # Installs Geist and Geist Mono for this user: GPUIX loads no font file, so the app finds them only in ~/Library/Fonts.
 fonts:
     mkdir -p ~/Library/Fonts

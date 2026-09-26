@@ -94,8 +94,15 @@ export interface NewPaneRequest {
   prompt?: string;
 }
 
+/** A tab's pane sizes: the share of its width each column takes and of its height each row takes, each list summing to 1. */
+export interface Split {
+  columns: readonly number[];
+  rows: readonly number[];
+}
+
 /** Every state change; the reducer is pure over these and effects.ts performs the C1 side of the intents. */
 export type Action =
+  | { type: 'grid/split'; tabId: number; split: Split }
   | { type: 'connection/changed'; state: ConnectionState }
   | {
       type: 'session/loaded';

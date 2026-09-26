@@ -48,6 +48,14 @@ fn wait_listed(c: &mut Control, ws: u64, pane: u64, key: &str, want: &Value) {
     );
 }
 
+/// Turns `resume_sessions_on_start` off, so the next plyd leaves the agent panes `lost` for `pane.resume`.
+fn keep_lost(c: &mut Control) {
+    let mut settings = c.call("settings.get", json!({})).unwrap();
+    settings["resume_sessions_on_start"] = json!(false);
+    c.call("settings.set", json!({"settings": settings}))
+        .unwrap();
+}
+
 #[test]
 fn j6_killing_plyd_leaves_lost_panes_that_resume_brings_back() {
     let sb = Sandbox::new("j6");
@@ -80,6 +88,7 @@ fn j6_killing_plyd_leaves_lost_panes_that_resume_brings_back() {
         "session_ref",
         &json!(codex_thread(codex)),
     );
+    keep_lost(&mut c);
     drop(c);
 
     plyd.child.kill().unwrap();
@@ -164,6 +173,63 @@ fn j6_killing_plyd_leaves_lost_panes_that_resume_brings_back() {
 }
 
 #[test]
+fn a_restart_resumes_the_agent_sessions_by_itself() {
+    let sb = Sandbox::new("autoresume");
+    install(&sb);
+    hook_program();
+    let mut plyd = sb.start();
+    let (mut c, ws) = sb.control();
+    let claude = create(&mut c, ws, json!({"cli": "claude", "cwd": sb.home}));
+    let codex = create(&mut c, ws, json!({"cli": "codex", "cwd": sb.home}));
+    Fake::ready(&sb, codex).send("session");
+    wait_listed(
+        &mut c,
+        ws,
+        claude,
+        "session_ref",
+        &json!(claude_session(claude)),
+    );
+    wait_listed(
+        &mut c,
+        ws,
+        codex,
+        "session_ref",
+        &json!(codex_thread(codex)),
+    );
+    drop(c);
+
+    plyd.child.kill().unwrap();
+    plyd.child.wait().unwrap();
+    let _plyd = sb.start();
+    let mut c = Control::connect(&sb.control_socket()).unwrap();
+    wait_listed(&mut c, ws, claude, "status", &json!("idle"));
+    wait_listed(&mut c, ws, codex, "status", &json!("idle"));
+    let claude_runs = launches(&sb, "claude");
+    assert_eq!(
+        claude_runs.len(),
+        2,
+        "one launch and one resume: {claude_runs:?}"
+    );
+    assert!(
+        claude_runs[1].contains(&format!("--resume {}", claude_session(claude))),
+        "{claude_runs:?}"
+    );
+    let codex_runs = launches(&sb, "codex");
+    assert!(
+        codex_runs
+            .last()
+            .unwrap()
+            .contains(&format!("resume {}", codex_thread(codex))),
+        "{codex_runs:?}"
+    );
+    assert_eq!(
+        listed(&mut c, ws, claude)["cli"],
+        "claude",
+        "resumed, not reopened as a shell"
+    );
+}
+
+#[test]
 fn a_pane_without_a_session_id_reopens_as_a_fresh_shell_by_itself() {
     let sb = Sandbox::new("fresh");
     install(&sb);
@@ -220,6 +286,7 @@ fn a_codex_pane_lost_mid_turn_resumes_idle_without_replaying_its_past_turns() {
     for status in [PaneStatus::Running, PaneStatus::Idle, PaneStatus::Running] {
         wait_status(&mut c, codex, status, WAIT);
     }
+    keep_lost(&mut c);
     drop(c);
 
     plyd.child.kill().unwrap();
@@ -263,11 +330,16 @@ fn a_close_with_kill_during_a_resume_stops_the_resumed_process_and_closes_the_pa
         "session_ref",
         &json!(claude_session(claude)),
     );
+    keep_lost(&mut c);
     drop(c);
     plyd.child.kill().unwrap();
     plyd.child.wait().unwrap();
     // Without a stored palette the resume waits for theme.set, which holds it before its process starts.
-    std::fs::remove_file(sb.ply_home.join("config.toml")).unwrap();
+    std::fs::write(
+        sb.ply_home.join("config.toml"),
+        "resume_sessions_on_start = false\n",
+    )
+    .unwrap();
     let _plyd = sb.start();
     let mut resumer = Control::connect(&sb.control_socket()).unwrap();
     let resuming =

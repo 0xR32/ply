@@ -1,6 +1,6 @@
 import { existsSync, readdirSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { basename, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { version } from '../../package.json';
 import type { KeyRepeat } from '../state/actions';
 import { log } from './log';
@@ -21,9 +21,16 @@ function hasGeist(dir: string): boolean {
   }
 }
 
-/** Where macOS looks for user and system fonts; `just fonts` copies Geist into the first. */
-export function fontDirs(home: string = homedir()): string[] {
-  return [join(home, 'Library', 'Fonts'), '/Library/Fonts'];
+/** Where the app's fonts can come from: the user's and the system's (`just fonts` copies Geist into the first), and the bundle's, which its `ATSApplicationFontsPath` registers. */
+export function fontDirs(
+  home: string = homedir(),
+  exeDir: string = dirname(process.execPath),
+): string[] {
+  return [
+    join(home, 'Library', 'Fonts'),
+    '/Library/Fonts',
+    join(exeDir, '..', 'Resources', 'Fonts'),
+  ];
 }
 
 /** Whether GPUI will resolve the Geist families: GPUIX loads no font files, so they must be installed in `dirs`. */
@@ -32,7 +39,12 @@ export function geistAvailable(dirs: readonly string[] = fontDirs()): boolean {
 }
 
 /** The app's build id, `<version>+<commit>` with `HEAD` of `root` abbreviated to 12 as plyd's `build.rs` does; `null` when git cannot tell. */
-export async function readBuildId(root: string = REPO_ROOT): Promise<string | null> {
+export async function readBuildId(
+  root: string = REPO_ROOT,
+  baked: string | undefined = process.env.PLY_BUILD_ID,
+): Promise<string | null> {
+  // `just dmg` defines PLY_BUILD_ID, because a bundle has no checkout to ask.
+  if (baked) return baked;
   try {
     const child = Bun.spawn(['git', '-C', root, 'rev-parse', '--short=12', 'HEAD'], {
       stdin: 'ignore',

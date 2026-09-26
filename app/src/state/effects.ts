@@ -319,7 +319,7 @@ export function startEffects(store: Store, options: EffectsOptions): () => void 
       case 'daemon/restart':
         client
           .request('daemon.shutdown', { kill_panes: false })
-          .then(() => log('info', 'plyd stops; the next connect starts the build in target/'))
+          .then(() => log('info', 'plyd stops; the next connect starts it again'))
           .catch((error) => failed('Restarting plyd', error));
         break;
       case 'daemon/quit':

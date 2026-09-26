@@ -2,8 +2,9 @@
 
 Where ply keeps its files, the one settings file, the environment variables
 that change what it does, and what a run writes to the machine. ply runs from a
-checkout: the app is `bun run dev` and the daemon is the cargo-built `plyd`.
-There is no bundle and no installer.
+checkout (the app is `bun run dev` and the daemon the cargo-built `plyd`) or as
+the `ply.app` that `just dmg` builds; there is no installer beyond dragging that
+to `/Applications`.
 
 `crates/daemon/src/paths.rs` resolves every path, `crates/daemon/src/config.rs`
 reads and writes `config.toml`, and the app's side is `app/src/ipc/paths.ts`
@@ -53,6 +54,7 @@ and runs on the new values until it stops. The app gets the values over C1.
 accent = "blue"
 option_as_meta = "off"
 keep_awake_while_running = true
+resume_sessions_on_start = true
 use_ply_colours_in_claude = true
 codex_plan_tool = true
 scrollback_lines = 10000
@@ -83,6 +85,7 @@ edit it by hand only while plyd is stopped.
 | `accent` | `blue`, `mint`, `violet`, `sand` | `blue` | The chrome's accent, and the terminal cursor and selection colours (the ANSI colours never change). The app sends a new `theme.set` when it changes. | at once |
 | `option_as_meta` | `off`, `left`, `right`, `both` | `off` | Which ⌥ acts as Meta; `off` keeps ⌥ for the layout's characters (`docs/keybindings.md`). | at once, in every pane |
 | `keep_awake_while_running` | bool | `true` | While a pane is `running`, plyd holds a prevent-idle-sleep assertion through `caffeinate -i -w <plyd pid>`, released as soon as none is; closing the lid still sleeps the Mac. Never held by a plyd under `PLY_HOME`; an agent pane is `running` as `docs/agents.md` describes. | at once |
+| `resume_sessions_on_start` | bool | `true` | When plyd starts, after a restart, a reboot or a logout, it resumes every `lost` Claude Code and Codex pane that has a session (`claude --resume`, `codex resume`), as `pane.resume` does; off, they stay `lost` for the Resume button. | plyd's next start |
 | `use_ply_colours_in_claude` | bool | `true` | Adds `"theme":"dark-ansi"` to Claude Code's per-pane settings file, so Claude Code draws with the terminal's ANSI colours. | Claude Code panes started or resumed afterwards |
 | `codex_plan_tool` | bool | `true` | Passes `-c tools.update_plan.enabled=true` to Codex, the only source of Codex progress. | Codex panes started or resumed afterwards |
 | `scrollback_lines` | u32 | 10 000 | Scrollback lines each pane's terminal keeps; libghostty-vt keeps up to 300 more. | panes created afterwards, and panes restored at plyd's start |
@@ -90,7 +93,8 @@ edit it by hand only while plyd is stopped.
 | `palette` | a terminal theme (`docs/control-channel.md`, `TerminalTheme`) | none | The last `theme.set`. A restarted plyd uses it at once, so a pane can start before the app has sent the palette again. | written by `theme.set` |
 
 The Settings overlay (⌘,) edits `accent`, `option_as_meta`,
-`keep_awake_while_running` and `use_ply_colours_in_claude`; the font keys edit
+`keep_awake_while_running`, `use_ply_colours_in_claude` and
+`resume_sessions_on_start`; the font keys edit
 `font_size`. `codex_plan_tool` and `scrollback_lines` have no control in the app:
 set them in the file with plyd stopped, or with `settings.set`.
 
@@ -103,7 +107,9 @@ set them in the file with plyd stopped, or with `settings.set`.
 | `PLY_HOME` | plyd, the app, the mock server | Moves every path above under one directory (logs to `$PLY_HOME/logs`). plyd requires an absolute path and treats an empty value as unset. A plyd under `PLY_HOME` is *sandboxed*: it never installs a LaunchAgent and never holds a power assertion. The app then spawns plyd itself instead of going through the LaunchAgent. The mock server refuses to start without it. |
 | `HOME` | plyd | The base of the default paths; also the directory of the default workspace. Must be absolute when `PLY_HOME` is unset. |
 | `PLY_LOG` | plyd | Log level: `error`, `warn`, `info` (default), `debug`, `trace` or `off`. The app's log has no level filter. |
-| `PLY_PLYD` | the app | The plyd binary to start, tried before `target/release/plyd` and then `target/debug/plyd` (release wins when both exist). |
+| `PLY_PLYD` | the app | The plyd binary to start, tried before a `plyd` beside the app's executable (the bundle's), `target/release/plyd` and then `target/debug/plyd` (release wins when both exist). |
+| `PLY_BUILD_ID` | the app | Its build id; `just dmg` compiles it in, because a bundle has no checkout for `git rev-parse`. |
+| `NAPI_RS_NATIVE_LIBRARY_PATH` | the app | Where GPUIX's native addon is loaded from. The bundle's entry sets it to `Contents/Frameworks/gpuix-native.darwin-arm64.node` unless it is set already. |
 | `PLY_WINDOW_FOCUS` | the app | `0` opens the window without taking focus, for scripted and agent-driven runs. |
 | `PLY_WINDOW_ZOOM` | the app | The window opens and then zooms once (the native macOS zoom) to fill the usable area of its screen, minus the menu bar and Dock; `0` keeps the opening size. |
 | `PLY_TERMINAL_STATS` | the app | `1` shows each terminal's last decode and render time in its corner, turns on GPUIX's frame overlay and logs a `frame stats` line (GPUI draw time, main-thread stalls) every second (`docs/perf.md`). |
@@ -221,6 +227,15 @@ The everyday setup.
 real data directory, without a LaunchAgent, unless the agent's plyd already
 holds it.
 
+### The app bundle
+
+The same as without `PLY_HOME`, from `/Applications/ply.app`: the plist the app
+has plyd write names `/Applications/ply.app/Contents/MacOS/plyd`, and the data
+and log directories are the same ones, so the bundle and `bun run dev` share
+every session. Deleting or moving the app leaves the agent pointing at nothing
+until an app starts plyd again. The bundle writes nothing else: its Geist
+fonts are registered for its own process, not installed.
+
 ### In both
 
 - The panes' programs run as the user, in the user's `HOME`, and write what they
@@ -229,7 +244,7 @@ holds it.
 - The app runs `defaults read com.apple.universalaccess reduceMotion`,
   `defaults read -g InitialKeyRepeat` and `defaults read -g KeyRepeat` (the
   ⌘U hold's timing, `docs/keybindings.md`) and `git rev-parse --short=12 HEAD`
-  in its checkout (its build id) once at startup, `pbcopy` or `pbpaste`
+  in its checkout (its build id, compiled into the bundle instead) once at startup, `pbcopy` or `pbpaste`
   when you copy or paste in a pane, and `open -u <url>` when you ⌘-click a
   link, which hands the URL to the default browser.
 - For the new-pane form's folder suggestions (Ruling R57), each time the form
@@ -245,15 +260,23 @@ holds it.
   ask once whether the terminal ply runs from may read them; a refused folder
   is skipped.
 - Geist and Geist Mono are used only when installed (in `~/Library/Fonts` or
-  `/Library/Fonts`), because GPUIX cannot load a font file; otherwise the chrome
-  uses the system font and the terminal Menlo. The TTFs, under the SIL Open Font
+  `/Library/Fonts`) or when the app runs as the bundle, which registers its own
+  copies, because GPUIX cannot load a font file; otherwise the chrome uses the
+  system font and the terminal Menlo. The TTFs, under the SIL Open Font
   Licence, are in `app/assets/fonts/`; `just fonts` copies them into
   `~/Library/Fonts`, the one thing it writes.
 - While ⌘U is held, plyd reads, at most once every 5 s, Claude Code's
   `.claude.json` and the ends of Codex's 20 most recently written rollouts
   (8 MiB at most) for the usage view: the CLIs' own local records of their plan
   usage, read-only, kept in memory for 5 s, never written and never sent
-  anywhere (`docs/agents.md`, **Plan usage**).
+  anywhere (`docs/agents.md`, **Plan usage**). Claude Code status lines, in
+  ply's panes and wherever they pipe their input to `ply-hook statusline`, also
+  report their `rate_limits` to plyd, which keeps each session's last numbers in
+  memory only.
+- When plyd starts a Claude pane it reads the user's own `statusLine` from
+  the project's `.claude/settings.local.json` and `.claude/settings.json` and
+  from `settings.json` in `$CLAUDE_CONFIG_DIR` or `~/.claude`, read-only, so
+  the pane's status line can run it (`docs/agents.md`, **The status line**).
 - ply makes no network request while it runs (INV-1).
 
 ### Building
@@ -265,7 +288,8 @@ into its own cache when they are missing. Everything else a build writes stays
 under `target/`. With `PLY_GHOSTTY_SRC` set nothing is downloaded for the
 source (`docs/terminal.md`). `crates/daemon/build.rs` runs `git rev-parse` in
 the checkout for plyd's build id (read-only, offline) and runs again when
-`HEAD` or a branch moves.
+`HEAD` or a branch moves. `just dmg` also writes `target/dist/` and `dist/`
+(both ignored by git).
 
 ### Removing it
 
@@ -273,6 +297,7 @@ the checkout for plyd's build id (read-only, offline) and runs again when
 launchctl bootout gui/$(id -u)/dev.ply.app.plyd
 rm ~/Library/LaunchAgents/dev.ply.app.plyd.plist
 rm -r ~/Library/Application\ Support/ply ~/Library/Logs/ply ~/Library/Caches/ply
+rm -r /Applications/ply.app     # when the bundle is installed
 ```
 
 `bootout` stops plyd with SIGTERM, and the panes' processes lose their pty with

@@ -69,6 +69,7 @@ impl Adapter for ClaudeAdapter {
         let contents = claude_settings_json(
             request.hook_program,
             request.settings.use_ply_colours_in_claude,
+            request.status_line,
         )?;
         Ok(Launch {
             spec: LaunchSpec {

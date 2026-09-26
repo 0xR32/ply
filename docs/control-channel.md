@@ -252,7 +252,10 @@ session id (a shell, or an agent whose CLI never reported one) reopens as a
 fresh login shell in its last directory and is a `shell` pane from then on,
 announced again with `pane.added` (the whole record, `cli: shell`);
 plyd does that by itself at its start (Ruling R50), so such a pane is `lost`
-only when that reopening failed.
+only when that reopening failed. With `resume_sessions_on_start` on (the
+default) plyd resumes the agent panes with a session at its start as well, so
+this method is for the panes whose resume failed and for a plyd with the
+setting off.
 Waits for a palette like `pane.create`. `spawn_failed` when `launch.json` is
 missing or unreadable, the directory is gone or the spawn fails;
 `cli_not_found`, `cli_too_old` and `bad_request` as for `pane.create`. Returns
@@ -329,8 +332,9 @@ connected).
 
 ### `usage.get`
 
-The plan usage Claude Code and Codex last recorded in their own local files
-(Ruling R59), for the app's hold-⌘U view. plyd reads, on a blocking thread and
+The plan usage Claude Code and Codex last reported (Ruling R59), for the app's
+hold-⌘U view. For Claude Code, the newest status line report of any Claude pane
+answers when it is newer than the cache. Otherwise plyd reads, on a blocking thread and
 never writing them (INV-8), Claude Code's `.claude.json` (in `CLAUDE_CONFIG_DIR`
 when the login shell sets it, else the home directory) and the ends of Codex's
 20 most recently written rollouts under `$CODEX_HOME/sessions/` (8 MiB at
@@ -357,7 +361,7 @@ is connected is dropped; a client learns the current state from `pane.list`,
 | `pane.removed` | `{pane_id}` | A pane was closed (`pane.close`, or a `kill:true` close whose process has now exited). |
 | `pane.status` | `{pane_id, status, detail?, exit_code?, at}` | The pane's status or its detail changed. `exit_code` is present exactly when `status` is `exited`; `at` is when plyd observed the change. An unchanged status and detail send nothing. |
 | `pane.progress` | `{pane_id, progress?}` | The agent's plan changed; no `progress` hides the bar. At most 4 a second per pane; the last value of a burst is never dropped. |
-| `pane.meta` | `{pane_id, model?, worktree?, cwd, branch?}` | What the session reports about itself changed. Absent fields are unknown. Claude Code's hooks, Codex's rollout and OSC 7 drive it; `branch` follows each directory change, from git (`docs/agents.md`). |
+| `pane.meta` | `{pane_id, model?, worktree?, cwd, branch?, project?, git_worktree?}` | What the session reports about itself changed. Absent fields are unknown. Claude Code's hooks, Codex's rollout and OSC 7 drive it; `branch`, `project` and `git_worktree` come from git and follow each directory change and each change of the repository's `HEAD` (`docs/agents.md`). |
 | `pane.exit` | `{pane_id, code, at}` | The pane's process ended, after its last output was published. `code` is 128 + signal for a signal death, -1 when plyd could not wait for it. Always preceded by `pane.status` `exited`. |
 | `daemon.stopping` | `{kill_panes}` | plyd is about to exit; `kill_panes` says whether the processes are being stopped too. |
 
@@ -386,6 +390,8 @@ Defined in `crates/proto/src/pane.rs`.
 | `model_seen` | string, optional | The model as the session reports it; ply never chooses it. |
 | `worktree_seen` | string, optional | The worktree name the CLI reports (INV-7). |
 | `branch` | string, optional | Git branch of `cwd`, display only. |
+| `project` | string, optional | The folder name of `cwd`'s repository (the main one for a linked worktree), else of `cwd`; display only. |
+| `git_worktree` | string, optional | The folder name of the linked worktree `cwd` is in, from git; display only. |
 | `session_ref` | string, optional | The CLI's own session id (Claude `session_id`, Codex thread id), used by `pane.resume`. |
 | `exit_code` | i32, optional | Present exactly when `status` is `exited`. |
 | `created_at` | u64 | |
@@ -410,6 +416,7 @@ created_at, closed_at?, last_activity_at?}`.
 | `accent` | `"blue"` \| `"mint"` \| `"violet"` \| `"sand"` | `blue` |
 | `option_as_meta` | `"off"` \| `"left"` \| `"right"` \| `"both"` | `off` |
 | `keep_awake_while_running` | bool | `true` |
+| `resume_sessions_on_start` | bool | `true` |
 | `use_ply_colours_in_claude` | bool | `true` |
 | `codex_plan_tool` | bool | `true` |
 | `scrollback_lines` | u32 | 10 000 |
@@ -555,7 +562,7 @@ where the whole object is shown elsewhere.
 → {"t":"hello","v":1,"client":"ply-app","app_version":"0.1.0"}
 ← {"t":"welcome","v":1,"daemon_version":"0.1.0+0a1b2c3d4e5f"}
 → {"t":"req","id":1,"m":"settings.get","p":{}}
-← {"t":"res","id":1,"ok":true,"r":{"accent":"blue","option_as_meta":"off","keep_awake_while_running":true,"use_ply_colours_in_claude":true,"codex_plan_tool":true,"scrollback_lines":10000,"font_size":12.5}}
+← {"t":"res","id":1,"ok":true,"r":{"accent":"blue","option_as_meta":"off","keep_awake_while_running":true,"resume_sessions_on_start":true,"use_ply_colours_in_claude":true,"codex_plan_tool":true,"scrollback_lines":10000,"font_size":12.5}}
 → {"t":"req","id":2,"m":"theme.set","p":{"palette":{"ansi":[…16 colours…],"fg":…,"bg":…,"cursor":…,"cursorText":…,"selectionBg":…,"selectionFg":…}}}
 ← {"t":"res","id":2,"ok":true,"r":{}}
 → {"t":"req","id":3,"m":"workspace.list","p":{}}

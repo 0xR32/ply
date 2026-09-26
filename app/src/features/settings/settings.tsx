@@ -26,9 +26,9 @@ const META: readonly SegmentItem<OptionAsMeta>[] = [
   { value: 'both', label: 'Both' },
 ];
 
-type Field = 'accent' | 'meta' | 'awake' | 'colours';
+type Field = 'accent' | 'meta' | 'awake' | 'colours' | 'resume';
 
-const ORDER: readonly Field[] = ['accent', 'meta', 'awake', 'colours'];
+const ORDER: readonly Field[] = ['accent', 'meta', 'awake', 'colours', 'resume'];
 
 function cycle<T extends string>(items: readonly SegmentItem<T>[], value: T, delta: number): T {
   const at = items.findIndex((i) => i.value === value);
@@ -64,6 +64,8 @@ export function Settings() {
       change({ keep_awake_while_running: !settings.keep_awake_while_running });
     } else if (press && at === 'colours') {
       change({ use_ply_colours_in_claude: !settings.use_ply_colours_in_claude });
+    } else if (press && at === 'resume') {
+      change({ resume_sessions_on_start: !settings.resume_sessions_on_start });
     }
   };
   const row = (title: string, hint: string, control: ReactNode) => (
@@ -178,6 +180,19 @@ export function Settings() {
                 change({ use_ply_colours_in_claude: !settings.use_ply_colours_in_claude })
               }
               {...tracked('colours')}
+            />,
+          )}
+          {toggle(
+            'Resume sessions when plyd starts',
+            'After a restart, a reboot or a logout, Claude Code and Codex panes reopen their session.',
+            <Switch
+              testId="settings-resume"
+              label="Resume sessions when plyd starts"
+              on={settings.resume_sessions_on_start}
+              onToggle={() =>
+                change({ resume_sessions_on_start: !settings.resume_sessions_on_start })
+              }
+              {...tracked('resume')}
             />,
           )}
         </div>

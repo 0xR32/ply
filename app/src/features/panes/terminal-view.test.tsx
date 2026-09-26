@@ -501,6 +501,39 @@ describe('TerminalView: links (⌘-click)', () => {
   });
 });
 
+describe('TerminalView: diff rows', () => {
+  test('a line a CLI marks with a green + gets a low-contrast band across the pane; other rows none', async () => {
+    const m = await mount();
+    try {
+      const diff = textRow(1, '  248 +    render(<AppShell />);');
+      diff.styles[6] = 1;
+      await m.deliver([
+        screen(['⏺ Update(app.tsx)', '', '  249      done'], {
+          styles: [
+            {
+              id: 1,
+              style: {
+                fg: { kind: 'indexed', index: 2 },
+                bg: { kind: 'default' },
+                underlineColor: { kind: 'default' },
+                attrs: 0,
+              },
+            },
+          ],
+          lines: [textRow(0, '⏺ Update(app.tsx)'), diff, textRow(2, '  249      done')],
+        }),
+      ]);
+      const band = m.renderer.findByTestId('terminal-diff-add');
+      const b = band ? m.renderer.getElementBounds(band.id) : null;
+      expect(b?.width).toBeCloseTo(Math.round(40 * cell.width), 0);
+      expect(b?.y).toBeCloseTo(m.body().y + cell.height, 0);
+      expect(m.renderer.findByTestId('terminal-diff-remove')).toBeUndefined();
+    } finally {
+      m.unmount();
+    }
+  });
+});
+
 describe('TerminalView: find (⌘F)', () => {
   test('finds in the lines held, selects the newest match, steps with ↑ and closes with esc', async () => {
     const m = await mount();
