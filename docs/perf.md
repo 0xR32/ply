@@ -1,7 +1,7 @@
 # Performance and commissioning
 
 The evidence for the success criteria of spec 1.2 (P1–P5, F1–F4), the journeys
-of spec 14 (J1–J6), one run each of the real `claude` and `codex` through the
+of spec 14 (J1–J6, and J7 for the task queue of Ruling R60), one run each of the real `claude` and `codex` through the
 app, and a shortened soak: how each was run and what it measured, marked
 against its target. This is work package 11 as Ruling R51 scoped it (no bundle,
 Ruling R41; a 20-minute soak instead of 8 hours).
@@ -59,9 +59,9 @@ at most one 16 ms render cadence of the terminal flush. The slow tail (the worst
 of each run: 40, 52, 56 ms) coincides with the two streaming panes' flushes and
 a machine at load 4–5; it was not investigated further.
 
-## Journeys J1–J6
+## Journeys J1–J7
 
-`just e2e`, all six passing in about 13 s (last run: see the list of runs at the
+`just e2e`, all six of J1–J6 passing in about 13 s on 2026-09-25; J7 was added with the task queue on 2026-09-26 (last run: see the list of runs at the
 end). Each starts from an empty `PLY_HOME`, lets the app start plyd, and checks
 what the window shows (terminal rows, status chips, strips, tab contents) and
 what plyd holds (a C1 client of its own).
@@ -74,6 +74,7 @@ what plyd holds (a C1 client of its own).
 | J4 terminal here | a Claude pane opened with the worktree switch on and the name `feature-x` runs `claude --worktree feature-x`, reports `<repo>/.claude/worktrees/feature-x` and shows "worktree feature-x"; ⌘D opens a shell whose directory is that worktree, and `pwd -P` typed into it prints it |
 | J5 quit and return | a Claude, a Codex and a shell pane with output; ⌘Q quits the app (through the app menu); the agents stay `idle` under the same plyd while more output is written; the reopened app shows all three panes with the output from before and during the quit, no CLI was launched again |
 | J6 daemon restart | plyd SIGKILLed; the app's launcher starts a new one; the Claude and Codex panes (with session ids) show "Lost" and a Resume button, the agent pane that never reported a session and the shell are back as fresh shells by themselves (R50); Resume brings Claude back with `--resume <id>` and Codex with `resume <thread>`, both idle; `session.list` keeps the ids |
+| J7 task queue | a Claude pane made busy by its own prompt; two tasks queued through ⌘E (Tab to Prompt, typed, ⌘⏎); the header badge counts 2 and the top bar pill says "2 queued"; the turn ends: the fake reads "first task", then "second task", each typed only after the previous turn ended (`sent_at` after the other's `ended_at`); both `ended`; badge and pill gone |
 
 ## The real Claude Code and Codex, through the app
 
@@ -141,6 +142,30 @@ by one addition only, Codex saving the trust decision it asked for:
 (`last_updated`, `last_revision` or any other) changed. Nothing of it came from
 ply: Codex received only the four `-c` overrides.
 
+## The task queue with the real Claude Code and Codex
+
+2026-09-26, Claude Code 2.1.283 and Codex 0.157.1, both signed in, the user's
+real `HOME`, `PLY_HOME` a throwaway directory, the release plyd of 4366b4c and a
+C1 client of the test's own (no app). Each task's text asked for a one-word
+reply and no tools.
+
+**Claude Code**, in an already trusted folder: a plain prompt, then the
+slash-command skill of an installed plugin (`/<plugin>:<skill>`) with arguments, both queued on
+an idle pane. Each was pasted (bracketed), entered 50 ms later and acknowledged
+by UserPromptSubmit: `sent` → `running` in 0.08–0.1 s, `running` → `ended`
+(Stop) in 1.8–2.6 s; the second was typed 1 s after the first ended. So Claude
+Code takes a bracketed paste and one Enter as one prompt, slash command and
+arguments included, and fires UserPromptSubmit for a skill.
+
+**Codex** opened, with a first prompt, on its own "Hooks need review" screen
+(hooks in `~/.codex` had changed): three choices, Enter to confirm. plyd showed
+the pane `idle` from its first output byte, as the status machine does for
+Codex, but the pane had reported no session, so the queued task stayed queued
+and nothing was typed into the dialog (the rule of 4366b4c; before it, the
+paste and Enter would have confirmed "Review hooks"). Trusting hooks is the
+user's decision, so the run stopped there: Codex taking a queued task is shown
+by the fake-Codex tests only.
+
 ## Soak
 
 `bun app/e2e/perf.ts soak 20`, 7d7ccfd, 20 minutes: two fake Claude Code panes,
@@ -200,6 +225,15 @@ used 12.6 % of a core on average and plyd 0.8 %.
   of the same bench (and the soak) did not repeat it, and the harness now
   reports how the app exits and keeps logs with `PLY_E2E_KEEP=<dir>`.
 
+- **J4** fails on this machine since 2026-09-26, on `main` as on the task
+  queue's branch: it reads `.claude/worktrees/feature-x` right after the pane
+  appears, before the fake Claude Code has created it.
+- **A Codex startup screen shows as "Your turn".** Codex is `idle` from its
+  first output byte, so its trust, hooks or update screens read as the user's
+  turn in the header. The task queue waits for a session there; the status
+  itself is unchanged.
+- **The real Codex run of the task queue** waits for the hooks review above.
+
 ## How the runs work
 
 All of them drive the full app, `bun app/src/main.tsx`, in its own process
@@ -215,7 +249,7 @@ configuration (INV-8), and no LaunchAgent is installed.
 |---|---|
 | `cargo build --release -p ply-daemon -p ply-hook` | the plyd the app starts |
 | `cargo build -p ply-daemon` | the debug plyd, whose `--replay-feed` feeds P1 and P2 |
-| `just e2e` | J1–J6 (`PLY_E2E=1 bun test ./app/e2e`, after the release build) |
+| `just e2e` | J1–J7 (`PLY_E2E=1 bun test ./app/e2e`, after the release build) |
 | `bun app/e2e/perf.ts p1 60` | P1: six replayed panes at 10× for 60 s |
 | `bun app/e2e/perf.ts p2` | P2: 300 keys with six idle panes, 300 with five of them streaming |
 | `bun app/e2e/perf.ts idle 10` | P3 and P4: six filled panes, 10 minutes idle |
@@ -247,6 +281,8 @@ All on 2026-09-25, Apple M1 Pro (8 cores, 16 GB), macOS 26.6; load averages as
 | `p2`, `p5 40`, `p5 100` | 7d7ccfd | 4–5 |
 | `soak 20` | 7d7ccfd | 3–5 |
 | the real Claude Code and Codex runs, the live checks | 999d77f | 4–5 |
+| J1–J7 (`just e2e`) on 2026-09-26, 6 of 7 passing (J4 failing as on `main`, see **Open**) | 4366b4c | about 3 |
+| the task queue with the real Claude Code and Codex, 2026-09-26 | 4366b4c | about 3 |
 
 Other work (cargo builds and test runs of the same checkout) ran on the machine
 throughout, so these are numbers of a busy machine. A quieter one should do

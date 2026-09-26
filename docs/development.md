@@ -26,7 +26,7 @@ hash. Never run `zig build` by hand inside the cached source: without the flags 
 |---|---|
 | `just check` (default) | `cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo doc --workspace --no-deps` with warnings as errors, `scripts/check-rules.ts`, `scripts/check-deps.ts`, `biome check`, `tsc -p app`, `tsc -p scripts` |
 | `just test` | `cargo nextest run --workspace`, the doctests (`cargo test --doc`) and `bun test ./app ./scripts` |
-| `just e2e` | `cargo build --release -p ply-daemon -p ply-hook`, then `PLY_E2E=1 bun test ./app/e2e`: journeys J1–J6 on the full app (`bun app/src/main.tsx` under GPUIX's stdio automation) with a throwaway `PLY_HOME` and `HOME` and the fake CLIs; needs a GUI session and opens windows without focus. Without `PLY_E2E=1` the journeys skip, so `just test` stays window-free |
+| `just e2e` | `cargo build --release -p ply-daemon -p ply-hook`, then `PLY_E2E=1 bun test ./app/e2e`: journeys J1–J7 on the full app (`bun app/src/main.tsx` under GPUIX's stdio automation) with a throwaway `PLY_HOME` and `HOME` and the fake CLIs; needs a GUI session and opens windows without focus. Without `PLY_E2E=1` the journeys skip, so `just test` stays window-free |
 | `just deny` | `cargo deny check` (licences, advisories, banned crates) |
 | `just gen` | `bun scripts/gen.ts`: runs ply-proto's `export_bindings` test with `PLY_GEN_OUT`, formats the ts-rs output with Biome and writes `app/src/ipc/proto.gen.ts` (`--check` compares instead) |
 | `just dev` | `bun --hot app/src/main.tsx` |

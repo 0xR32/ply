@@ -427,4 +427,61 @@ describe.if(E2E)('journeys on the full app and a real plyd', () => {
     },
     JOURNEY_MS,
   );
+
+  test(
+    'J7 task queue: two tasks queued with ⌘E on a busy Claude pane are typed one per turn, in order',
+    async () => {
+      const j = await start();
+      repo(j.sb, 'queue');
+      const pane = await open(j, 'cmd-t', 'claude', () =>
+        j.app.fill('new-pane-dir', '~/code/queue'),
+      );
+      await j.obs.waitPane(pane.id, (p) => p.status === 'idle', 'claude ready');
+      const fake = j.sb.fake(pane.id);
+      await fake.send('submit 1');
+      await fake.hook(
+        'UserPromptSubmit',
+        claudePayload(pane, 'UserPromptSubmit', { prompt: 'busy' }),
+      );
+      await j.obs.waitPane(
+        pane.id,
+        (p) => p.status === 'running',
+        'claude busy with its own prompt',
+      );
+
+      for (const text of ['first task', 'second task']) {
+        await j.app.keys('cmd-e');
+        await until(() => j.app.has('dispatch'), 'the task form');
+        await j.app.keys('tab');
+        await j.app.type(text);
+        await j.app.keys('cmd-enter');
+        await until(async () => !(await j.app.has('dispatch')), 'the task form to close');
+      }
+      await until(
+        async () => (await j.app.textIn(`pane-${pane.id}-queue`)).startsWith('2'),
+        'the header badge to count 2',
+      );
+      expect(await j.app.textIn('queue-pill')).toContain('2 queued');
+
+      await fake.hook('Stop', claudePayload(pane, 'Stop'));
+      const typedLog = join(j.sb.home, 'fake-claude-typed.log');
+      const typed = () =>
+        existsSync(typedLog) ? readFileSync(typedLog, 'utf8').trim().split('\n') : [];
+      await until(() => typed().length === 2, 'both tasks typed', 30_000);
+      expect(typed()).toEqual(['first task', 'second task']);
+      const done = await until(
+        async () => {
+          const list = await j.obs.client.request('task.list', { workspace_id: j.obs.workspaceId });
+          return list.tasks.every((t) => t.state === 'ended') ? list.tasks : undefined;
+        },
+        'both tasks ended',
+        30_000,
+      );
+      const [first, second] = [...done].sort((a, b) => a.id - b.id);
+      expect((second?.sent_at ?? 0) >= (first?.ended_at ?? Number.MAX_SAFE_INTEGER)).toBe(true);
+      await until(async () => !(await j.app.has(`pane-${pane.id}-queue`)), 'the badge to clear');
+      expect(await j.app.has('queue-pill')).toBe(false);
+    },
+    JOURNEY_MS,
+  );
 });
