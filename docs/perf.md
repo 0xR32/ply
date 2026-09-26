@@ -232,9 +232,10 @@ used 12.6 % of a core on average and plyd 0.8 %.
   of the same bench (and the soak) did not repeat it, and the harness now
   reports how the app exits and keeps logs with `PLY_E2E_KEEP=<dir>`.
 
-- **J4** fails on this machine since 2026-09-26, on `main` as on the task
-  queue's branch: it reads `.claude/worktrees/feature-x` right after the pane
-  appears, before the fake Claude Code has created it.
+- **F1 under load.** In one full `just e2e` run on 2026-09-26, at load 6,
+  J2's Codex needs-you strip painted 257 ms after the OSC 9, past the 250 ms
+  target; J2 alone three times and the full suite again right after measured
+  109–149 ms. Not investigated further.
 - **A Codex startup screen shows as "Your turn".** Codex is `idle` from its
   first output byte, so its trust, hooks or update screens read as the user's
   turn in the header. The task queue waits there for the process's first turn
@@ -291,6 +292,7 @@ All on 2026-09-25, Apple M1 Pro (8 cores, 16 GB), macOS 26.6; load averages as
 | J1–J7 (`just e2e`) on 2026-09-26, 6 of 7 passing (J4 failing as on `main`, see **Open**) | 4366b4c | about 3 |
 | the task queue with the real Claude Code and Codex, 2026-09-26 | 4366b4c | about 3 |
 | J1–J7 again, 6 of 7 (J4 as before), and the real Claude Code run again, after the review's fixes | 0d23e7c | about 3 |
+| J1–J7, 7 of 7, after J4 stopped resolving the worktree before the fake had created it (one earlier run of the day: J2's F1 at 257 ms, see **Open**) | 5773b46 with the J4 fix | 5–6 |
 
 Other work (cargo builds and test runs of the same checkout) ran on the machine
 throughout, so these are numbers of a busy machine. A quieter one should do

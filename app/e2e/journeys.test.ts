@@ -272,7 +272,7 @@ describe.if(E2E)('journeys on the full app and a real plyd', () => {
         await until(() => j.app.has('new-pane-worktree-name'), 'the worktree name field');
         await j.app.fill('new-pane-worktree-name', 'feature-x');
       });
-      const tree = realpathSync(join(dir, '.claude', 'worktrees', 'feature-x'));
+      const tree = join(realpathSync(dir), '.claude', 'worktrees', 'feature-x');
       const moved = await j.obs.waitPane(
         claude.id,
         (p) => p.cwd === tree && p.worktree_seen === 'feature-x',
