@@ -691,7 +691,9 @@ screenshots (3.5–8.6 MB) took 0.41–0.55 s to read, idle or with every core b
 and a 50 ms Enter was lost every time; 2 s is about four times that. A read
 that takes longer still leaves the task failing as not submitted, with its text
 in the input for the user's Enter. Files dropped on the ⌘E form put their paths
-into the task this way, one per line (`docs/terminal.md`).
+into the task this way, one per line; a ⌘⇧4 thumbnail's is the path of the copy
+ply kept, since its own file is gone before the task is typed
+(`docs/terminal.md`, **Dropped files**).
 
 **How it is followed**, from the signals the status machine already uses:
 

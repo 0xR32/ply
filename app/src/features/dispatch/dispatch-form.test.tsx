@@ -1,4 +1,7 @@
 import { describe, expect, test } from 'bun:test';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
 import { flushSync } from '@gpuix/react';
 import { hasNativeTestRenderer, type TestRenderer } from '@gpuix/react/testing';
 import type { Action } from '../../state/actions';
@@ -255,6 +258,34 @@ describe.if(hasNativeTestRenderer)('DispatchForm', () => {
       });
     } finally {
       unmount();
+    }
+  });
+
+  test('a ⌘⇧4 thumbnail dropped on the form joins the prompt as the path of a kept copy', () => {
+    const root = mkdtempSync(join(tmpdir(), 'ply-form-drop-'));
+    const home = process.env.PLY_HOME;
+    process.env.PLY_HOME = root;
+    const staged = join(root, 'T', 'TemporaryItems', 'NSIRD_screencaptureui_1', 'Screenshot 1.png');
+    mkdirSync(dirname(staged), { recursive: true });
+    writeFileSync(staged, 'png bytes');
+    const { renderer, seen, press, unmount } = mount();
+    try {
+      const el = renderer.findByTestId('dispatch-prompt');
+      const b = el && renderer.getElementBounds(el.id);
+      if (!b) throw new Error('dispatch-prompt did not paint');
+      renderer.nativeSimulateFileDrop(b.x + b.width / 2, b.y + b.height / 2, [staged]);
+      renderer.flush();
+      renderer.dispatchNativeEvents();
+      press('cmd-enter');
+      const added = seen.at(-1);
+      const text = added?.type === 'task/add' ? added.text : '';
+      expect(text.startsWith(`${root}/ply-drops/drop-`)).toBe(true);
+      expect(text.endsWith('/Screenshot\\ 1.png')).toBe(true);
+    } finally {
+      unmount();
+      if (home === undefined) delete process.env.PLY_HOME;
+      else process.env.PLY_HOME = home;
+      rmSync(root, { recursive: true, force: true });
     }
   });
 

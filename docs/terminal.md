@@ -377,11 +377,27 @@ each path with its shell metacharacters (space, tab and `\()[]{}<>"'`
 `` ` `` `!#$&;|*?`) backslash-escaped, joined by one space with none after, as
 one PASTE frame (`app/src/terminal/drop.ts`); the pane becomes the focused one.
 Claude Code strips the escapes and turns a pasted image path (png, jpeg, gif,
-webp) into its own `[Image #N]`; ply only types the path and never opens the
-file. Files dropped anywhere on the ⌘E form join its prompt instead, one
-escaped path per line, and reach the pane when the task is typed
-(`docs/agents.md`, **How it is typed**). An image on the pasteboard is Claude
-Code's own ⌃V, which reaches it as a key; ⌘V pastes text only.
+webp) into its own `[Image #N]`; ply types the path and never reads the file.
+Files dropped anywhere on the ⌘E form join its prompt instead, one escaped path
+per line, and reach the pane when the task is typed (`docs/agents.md`, **How it
+is typed**). An image on the pasteboard is Claude Code's own ⌃V, which reaches
+it as a key; ⌘V pastes text only.
+
+**The ⌘⇧4 thumbnail** offers a file AppKit staged in
+`…/TemporaryItems/NSIRD_screencaptureui_*/`, which screencaptureui deletes as
+soon as the drag ends; Claude Code reads a pasted image asynchronously, finds it
+gone and drops it without a word ([anthropics/claude-code#80980], in every
+terminal). So a dropped path under `/TemporaryItems/` is kept first:
+`keepDroppedFile` hard-links it (or copies it, when a link fails) into a fresh
+folder in `ply-drops` (`docs/configuration.md`) under its own name, and that path
+is typed or put into the prompt instead. It runs synchronously in the drop's
+event handler, which GPUIX calls in the event-loop turn right after AppKit's
+`performDragOperation`, before screencaptureui hears the drag ended; a real
+thumbnail drag logs `kept a dropped file its source deletes when the drag
+ends`. A staged file already gone, or one that cannot be kept, is typed as
+dropped and logged at `warn`. Any other path is typed as it is.
+
+[anthropics/claude-code#80980]: https://github.com/anthropics/claude-code/issues/80980
 
 Three GPUIX 0.10.0 limits shape this. It reports the drop alone, so nothing
 marks a pane while a file is dragged over it. GPUI counts no element hovered
@@ -578,7 +594,8 @@ p99 and 509 µs max, and 21 / 34 / 62 / 78 µs while another pane streamed
   dropped files, selection and ⌘C, mouse reporting with ⇧ bypass, wheel
   scrollback, ⌘A, ⌘-click links (opening, the reporting bypass, the hover
   underline), and the 2 000-node budget; `links.test.ts` for what counts as a
-  URL and where it ends; `drop.test.ts` for how dropped paths are escaped;
+  URL and where it ends; `drop.test.ts` for how dropped paths are escaped and
+  staged ones kept;
   `pane-grid.test.tsx` for a drop focusing its pane and never answering a
   dialog; `dispatch-form.test.tsx` for drops joining the prompt and clicking
   nothing.

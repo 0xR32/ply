@@ -24,6 +24,7 @@ and `app/src/ipc/log.ts`.
 | hook socket (C3) | `run/hook.sock`: agent panes get its path as `PLY_HOOK_SOCK`, and `ply-hook` writes one line per hook to it | same |
 | per-pane files | `run/panes/<id>/` (mode `0700`): `launch.json`, and `claude-settings.json` for Claude Code panes (mode `0600`) | same |
 | logs | `~/Library/Logs/ply/plyd.YYYY-MM-DD.log` and `app.YYYY-MM-DD.log`, 14 days each | `<dir>/logs/` |
+| kept drops | `ply-drops/drop-*/` in the temporary directory (`$TMPDIR`), written by the app: a hard link to, or copy of, each dropped file macOS staged in `TemporaryItems` (the ⌘⇧4 thumbnail), which macOS clears once unused for days | `<dir>/ply-drops/` |
 | LaunchAgent | `~/Library/LaunchAgents/dev.ply.app.plyd.plist` | never installed |
 | ghostty source (builds only) | `~/Library/Caches/ply/ghostty/<commit>/` | same |
 
@@ -206,7 +207,8 @@ PLY_HOME=/tmp/ply-dev bun run dev
   `target/debug/plyd`) as `plyd --foreground`, detached, with its output
   discarded.
 - plyd writes only under `/tmp/ply-dev`: the database, `config.toml`, the lock,
-  `run/` and `logs/`. The app logs to `/tmp/ply-dev/logs/app.*.log`.
+  `run/` and `logs/`. The app logs to `/tmp/ply-dev/logs/app.*.log` and keeps
+  dropped ⌘⇧4 thumbnails in `/tmp/ply-dev/ply-drops/`.
 - No LaunchAgent, no power assertion, nothing under `~/Library`.
 - The spawned plyd outlives the app, as it is meant to. Stop it with
   `kill $(cat /tmp/ply-dev/plyd.lock)` (SIGTERM, a clean stop) or a C1
@@ -226,7 +228,8 @@ The everyday setup.
   writes `~/Library/LaunchAgents/dev.ply.app.plyd.plist` naming that binary's
   path in the checkout and kickstarts it.
 - plyd writes `~/Library/Application Support/ply/` and `~/Library/Logs/ply/`,
-  and holds the keep-awake assertion while a pane runs.
+  and holds the keep-awake assertion while a pane runs. The app keeps dropped
+  ⌘⇧4 thumbnails in `$TMPDIR/ply-drops/`.
 - Quitting the app stops nothing; launchd keeps plyd and every pane running.
 - The plist names a path inside `target/`. After `cargo clean` the agent points
   at nothing until plyd is built again at the same path; a build at another
@@ -242,8 +245,9 @@ The same as without `PLY_HOME`, from `/Applications/ply.app`: the plist the app
 has plyd write names `/Applications/ply.app/Contents/MacOS/plyd`, and the data
 and log directories are the same ones, so the bundle and `bun run dev` share
 every session. Deleting or moving the app leaves the agent pointing at nothing
-until an app starts plyd again. The bundle writes nothing else: its Geist
-fonts are registered for its own process, not installed.
+until an app starts plyd again. The bundle writes nothing else but the kept
+⌘⇧4 drops in `$TMPDIR/ply-drops/`: its Geist fonts are registered for its own
+process, not installed.
 
 ### In both
 

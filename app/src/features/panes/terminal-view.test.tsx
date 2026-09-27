@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test';
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
 import type { TestRenderer } from '@gpuix/react/testing';
 import type { ReactNode } from 'react';
 import { makePane, makeState, mountWithStore } from '../../state/test-support';
@@ -362,6 +363,33 @@ describe('TerminalView: input', () => {
       ]);
     } finally {
       m.unmount();
+    }
+  });
+
+  test('a ⌘⇧4 thumbnail’s staged file is kept before macOS deletes it, and the kept path is pasted', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'ply-view-drop-'));
+    const home = process.env.PLY_HOME;
+    process.env.PLY_HOME = root;
+    const staged = join(root, 'T', 'TemporaryItems', 'NSIRD_screencaptureui_1', 'Screenshot 1.png');
+    mkdirSync(dirname(staged), { recursive: true });
+    writeFileSync(staged, 'png bytes');
+    const m = await mount();
+    try {
+      await m.deliver([screen(['> '])]);
+      const b = m.body();
+      m.renderer.nativeSimulateFileDrop(b.x + b.width / 2, b.y + b.height / 2, [staged]);
+      await settle(m.renderer, () => m.sent().some((f) => f.kind === 'paste'));
+      const paste = m.sent().find((f) => f.kind === 'paste');
+      const text = paste?.kind === 'paste' ? paste.text : '';
+      expect(text.startsWith(`${root}/ply-drops/drop-`)).toBe(true);
+      expect(text.endsWith('/Screenshot\\ 1.png')).toBe(true);
+      rmSync(dirname(staged), { recursive: true });
+      expect(existsSync(text.replaceAll('\\ ', ' '))).toBe(true);
+    } finally {
+      m.unmount();
+      if (home === undefined) delete process.env.PLY_HOME;
+      else process.env.PLY_HOME = home;
+      rmSync(root, { recursive: true, force: true });
     }
   });
 

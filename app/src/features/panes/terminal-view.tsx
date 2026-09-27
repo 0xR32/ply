@@ -13,7 +13,7 @@ import { keysOfEvent, terminalCommandForKeys } from '../../keymap/keymap';
 import type { TerminalTheme } from '../../state/actions';
 import { useAppSelector } from '../../state/store';
 import type { GridSize } from '../../terminal/data-client';
-import { droppedPathsText } from '../../terminal/drop';
+import { droppedPathsText, keepDroppedFile } from '../../terminal/drop';
 import { type Cursor, type KeyFrame, Modes, type Style } from '../../terminal/frames';
 import { defaultTerminalHost, TerminalHostContext } from '../../terminal/host';
 import { keyCode, keyFrame, modsOf, mouseButton, mouseFrame } from '../../terminal/input';
@@ -467,7 +467,7 @@ export function TerminalView({
     if (id !== undefined) renderer?.focusElement?.(id);
     // focusElement fires no onFocus (seen under GPUIX's test renderer), so the store is told directly.
     onFocus?.();
-    session.paste(droppedPathsText(e.paths ?? []));
+    session.paste(droppedPathsText((e.paths ?? []).map((p) => keepDroppedFile(p))));
   };
 
   const bounds = session.selection ? selectionBounds(session.selection, replica) : null;

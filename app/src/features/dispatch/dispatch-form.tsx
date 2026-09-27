@@ -11,7 +11,7 @@ import {
   statusView,
 } from '../../state/selectors';
 import { useAppSelector, useDispatch } from '../../state/store';
-import { escapedPath } from '../../terminal/drop';
+import { escapedPath, keepDroppedFile } from '../../terminal/drop';
 import { useChrome } from '../../theme/chrome';
 import { tokens } from '../../theme/tokens';
 import { Button } from '../../ui/button';
@@ -138,7 +138,7 @@ export function DispatchForm({ paneId }: { paneId?: number }) {
     dispatch({ type: 'task/add', target: where, text: body, ...(skill ? { skill } : {}) });
   };
   const onFileDrop = (event: EventPayload) => {
-    const paths = (event.paths ?? []).map(escapedPath);
+    const paths = (event.paths ?? []).map((p) => escapedPath(keepDroppedFile(p)));
     if (paths.length === 0) return;
     // A line each: Claude Code reads an image only for a piece of the paste that ends in its path.
     setText((old) => `${old}${old === '' || old.endsWith('\n') ? '' : '\n'}${paths.join('\n')}`);
