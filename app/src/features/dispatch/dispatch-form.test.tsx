@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { flushSync } from '@gpuix/react';
@@ -279,10 +279,67 @@ describe.if(hasNativeTestRenderer)('DispatchForm', () => {
       press('cmd-enter');
       const added = seen.at(-1);
       const text = added?.type === 'task/add' ? added.text : '';
-      expect(text.startsWith(`${root}/ply-drops/drop-`)).toBe(true);
+      expect(text.startsWith(`${root}/ply-drops/task-`)).toBe(true);
       expect(text.endsWith('/Screenshot\\ 1.png')).toBe(true);
     } finally {
       unmount();
+      if (home === undefined) delete process.env.PLY_HOME;
+      else process.env.PLY_HOME = home;
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test('closing the form deletes the thumbnails it kept that no queued task names', () => {
+    const root = mkdtempSync(join(tmpdir(), 'ply-form-close-'));
+    const home = process.env.PLY_HOME;
+    process.env.PLY_HOME = root;
+    const stage = (name: string) => {
+      const path = join(
+        root,
+        'T',
+        'TemporaryItems',
+        `NSIRD_screencaptureui_${name}`,
+        'Screenshot.png',
+      );
+      mkdirSync(dirname(path), { recursive: true });
+      writeFileSync(path, name);
+      return path;
+    };
+    const { renderer, store, seen, press, unmount } = mount();
+    try {
+      const el = renderer.findByTestId('dispatch-prompt');
+      const b = el && renderer.getElementBounds(el.id);
+      if (!b) throw new Error('dispatch-prompt did not paint');
+      const drop = (path: string) => {
+        renderer.nativeSimulateMouseMove(b.x + b.width / 2, b.y + b.height / 2);
+        renderer.nativeSimulateFileDrop(b.x + b.width / 2, b.y + b.height / 2, [path]);
+        renderer.flush();
+        renderer.dispatchNativeEvents();
+      };
+      drop(stage('queued'));
+      press('cmd-enter');
+      const added = seen.at(-1);
+      if (added?.type !== 'task/add') throw new Error('nothing was queued');
+      drop(stage('dropped-after'));
+      expect(readdirSync(join(root, 'ply-drops'))).toHaveLength(2);
+      flushSync(() =>
+        store.dispatch({
+          type: 'task/added',
+          task: makeTask({ id: 77, pane_id: 1, text: added.text }),
+        }),
+      );
+    } finally {
+      unmount();
+    }
+    try {
+      const left = readdirSync(join(root, 'ply-drops'));
+      expect(left).toHaveLength(1);
+      const [folder] = left;
+      expect(readdirSync(join(root, 'ply-drops', folder ?? ''))).toEqual(['Screenshot.png']);
+      expect(readFileSync(join(root, 'ply-drops', folder ?? '', 'Screenshot.png'), 'utf8')).toBe(
+        'queued',
+      );
+    } finally {
       if (home === undefined) delete process.env.PLY_HOME;
       else process.env.PLY_HOME = home;
       rmSync(root, { recursive: true, force: true });

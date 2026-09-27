@@ -397,6 +397,21 @@ thumbnail drag logs `kept a dropped file its source deletes when the drag
 ends`. A staged file already gone, or one that cannot be kept, is typed as
 dropped and logged at `warn`. Any other path is typed as it is.
 
+A kept copy goes once nothing will open it. Claude Code reads the image into
+memory at the paste (and numbers it `[Image #N]` by its own count, which only
+grows during a session), but it also tells the model `[Image source: <path>]`,
+so a tool in that turn may still open the file. A pane's copies
+(`ply-drops/pane-<id>-<ms>-*`) therefore live through the turn that sent them:
+when the pane starts a turn (its status becomes `running`), `state/effects.ts`
+deletes its copies made before the turn it started last, so a screenshot goes
+when the turn after the one that used it begins, and one removed from the
+input goes a turn later; all of them go when the pane is closed. A task's
+copies (`ply-drops/task-<ms>-*`) go when the task ends, fails or is cancelled
+(`releaseTaskDrops`, found by the paths in its text), and the ⌘E form deletes
+the ones it kept that no queued task names when it closes: removed from the
+prompt, or never queued. A prompt sent to a new pane keeps its copies, which
+the temporary directory's own cleanup removes.
+
 [anthropics/claude-code#80980]: https://github.com/anthropics/claude-code/issues/80980
 
 Three GPUIX 0.10.0 limits shape this. It reports the drop alone, so nothing
@@ -595,7 +610,7 @@ p99 and 509 µs max, and 21 / 34 / 62 / 78 µs while another pane streamed
   scrollback, ⌘A, ⌘-click links (opening, the reporting bypass, the hover
   underline), and the 2 000-node budget; `links.test.ts` for what counts as a
   URL and where it ends; `drop.test.ts` for how dropped paths are escaped and
-  staged ones kept;
+  staged ones kept and released; `effects.test.ts` for when they are released;
   `pane-grid.test.tsx` for a drop focusing its pane and never answering a
   dialog; `dispatch-form.test.tsx` for drops joining the prompt and clicking
   nothing.

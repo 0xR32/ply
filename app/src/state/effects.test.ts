@@ -6,10 +6,11 @@ import { createControlClient } from '../ipc/control-client';
 import { MockServer } from '../ipc/mock-server';
 import { accentAlternatives } from '../theme/tokens';
 import type { Action } from './actions';
-import { startEffects } from './effects';
+import { type EffectsOptions, startEffects } from './effects';
 import { type AppState, initialState } from './reducer';
 import { selectDirSuggestions, selectForeignDaemon } from './selectors';
 import { createStore } from './store';
+import { makeTask } from './test-support';
 
 const HOME = '/Users/example';
 const cleanups: (() => void)[] = [];
@@ -18,7 +19,10 @@ afterEach(() => {
   for (const c of cleanups.splice(0).reverse()) c();
 });
 
-async function setup(before: (server: MockServer) => void = () => {}) {
+async function setup(
+  before: (server: MockServer) => void = () => {},
+  extra: Partial<EffectsOptions> = {},
+) {
   const dir = mkdtempSync(join(tmpdir(), 'ply-fx-'));
   cleanups.push(() => rmSync(dir, { recursive: true, force: true }));
   const socketPath = join(dir, 'run', 'plyd.sock');
@@ -41,6 +45,7 @@ async function setup(before: (server: MockServer) => void = () => {}) {
       keyRepeat: async () => ({ delayMs: 225, intervalMs: 30 }),
       usageRefreshMs: 20,
       quit: () => quits.push(Date.now()),
+      ...extra,
     }),
   );
   const until = async (check: () => boolean, what: string) => {
@@ -485,5 +490,53 @@ describe('the task queue', () => {
       cli: 'claude',
       cwd: '/Users/example/code/ply',
     });
+  });
+});
+
+describe('kept drops (docs/terminal.md, Dropped files)', () => {
+  test("a pane's drops go one turn after the turn that sent them, all of them when it closes, and a task's when it finishes", async () => {
+    const panes: [number, number][] = [];
+    const tasks: string[] = [];
+    const drops = {
+      releasePane: (paneId: number, before: number) => void panes.push([paneId, before]),
+      releaseTask: (text: string) => void tasks.push(text),
+    };
+    const { server, state, until } = await setup(() => {}, { drops });
+    const id = Object.values(state().panes).find((p) => p.cli === 'claude')?.id ?? -1;
+    const turn = async () => {
+      server.setStatus(id, 'idle');
+      await until(() => state().panes[id]?.status === 'idle', 'idle');
+      const from = Date.now();
+      server.setStatus(id, 'running');
+      await until(() => state().panes[id]?.status === 'running', 'running');
+      return { from, to: Date.now() };
+    };
+    const first = await turn();
+    const counted = panes.length;
+    await turn();
+    expect(panes).toHaveLength(counted + 1);
+    const [pane, before] = panes.at(-1) ?? [0, 0];
+    expect(pane).toBe(id);
+    expect(before).toBeGreaterThanOrEqual(first.from);
+    expect(before).toBeLessThanOrEqual(first.to);
+
+    server.emit({ e: 'pane.removed', p: { pane_id: id } });
+    await until(
+      () => panes.some(([p, b]) => p === id && b === Number.POSITIVE_INFINITY),
+      'removal',
+    );
+
+    const workspace_id = state().workspace?.id ?? 0;
+    const task = makeTask({
+      id: 41,
+      workspace_id,
+      text: 'look\n/tmp/ply-drops/task-1-aaaaaa/x.png',
+    });
+    server.emit({ e: 'task.changed', p: task });
+    await until(() => state().tasks.tasks[41] !== undefined, 'the task');
+    expect(tasks).toEqual([]);
+    server.emit({ e: 'task.changed', p: { ...task, state: 'ended', ended_at: 1_790_000_100 } });
+    await until(() => tasks.length === 1, 'the finished task');
+    expect(tasks).toEqual([task.text]);
   });
 });

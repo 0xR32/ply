@@ -1,5 +1,5 @@
 import type { EventPayload, StyleDesc } from '@gpuix/react';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { AgentCli, DispatchTarget, Skill } from '../../state/actions';
 import type { AppState, PaneState } from '../../state/reducer';
 import {
@@ -10,8 +10,8 @@ import {
   selectPaneQueue,
   statusView,
 } from '../../state/selectors';
-import { useAppSelector, useDispatch } from '../../state/store';
-import { escapedPath, keepDroppedFile } from '../../terminal/drop';
+import { useAppSelector, useDispatch, useStore } from '../../state/store';
+import { escapedPath, keepDroppedFile, releaseTaskDrops } from '../../terminal/drop';
 import { useChrome } from '../../theme/chrome';
 import { tokens } from '../../theme/tokens';
 import { Button } from '../../ui/button';
@@ -55,6 +55,7 @@ function agentPanes(state: AppState): PaneState[] {
 /** The ⌘E form (Ruling R60): send a skill or a prompt to a pane, the next free pane or a new pane; dropped files join the prompt as paths, ⌘⏎ queues, esc closes. */
 export function DispatchForm({ paneId }: { paneId?: number }) {
   const dispatch = useDispatch();
+  const store = useStore();
   const { z, accent, fonts, type } = useChrome();
   const state = useAppSelector(selectState);
   const home = state.env.home;
@@ -71,6 +72,23 @@ export function DispatchForm({ paneId }: { paneId?: number }) {
   const [text, setText] = useState('');
   const [highlight, setHighlight] = useState(0);
   const [local, setLocal] = useState<{ text: string; refusal: string | null } | null>(null);
+  const kept = useRef<string[]>([]);
+  const openedPrompt = useRef<string | null>(null);
+  useEffect(
+    () => () => {
+      // A drop removed from the prompt, or a form closed unqueued, leaves a kept copy nothing will type.
+      const live = Object.values(store.getState().tasks.tasks)
+        .filter((t) => t.state === 'queued' || t.state === 'sent' || t.state === 'running')
+        .map((t) => t.text);
+      for (const path of kept.current) {
+        const typed = escapedPath(path);
+        if (!live.some((t) => t.includes(typed)) && !openedPrompt.current?.includes(typed)) {
+          releaseTaskDrops(typed);
+        }
+      }
+    },
+    [store],
+  );
   const pane = chosen === undefined ? undefined : state.panes[chosen];
   const skillCli: AgentCli = target === 'pane' ? (pane?.cli === 'codex' ? 'codex' : 'claude') : cli;
   const skillCwd = target === 'pane' ? pane?.cwd : expandHome(dir, home);
@@ -134,11 +152,16 @@ export function DispatchForm({ paneId }: { paneId?: number }) {
       where = { kind: target, cli, cwd };
     }
     setProblem(null);
+    openedPrompt.current = where.kind === 'new' ? body : null;
     const skill = picked && (body === picked || body.startsWith(`${picked} `)) ? picked : undefined;
     dispatch({ type: 'task/add', target: where, text: body, ...(skill ? { skill } : {}) });
   };
   const onFileDrop = (event: EventPayload) => {
-    const paths = (event.paths ?? []).map((p) => escapedPath(keepDroppedFile(p)));
+    const paths = (event.paths ?? []).map((p) => {
+      const path = keepDroppedFile(p, 'task');
+      if (path !== p) kept.current.push(path);
+      return escapedPath(path);
+    });
     if (paths.length === 0) return;
     // A line each: Claude Code reads an image only for a piece of the paste that ends in its path.
     setText((old) => `${old}${old === '' || old.endsWith('\n') ? '' : '\n'}${paths.join('\n')}`);

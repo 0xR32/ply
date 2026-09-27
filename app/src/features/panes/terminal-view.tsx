@@ -467,7 +467,9 @@ export function TerminalView({
     if (id !== undefined) renderer?.focusElement?.(id);
     // focusElement fires no onFocus (seen under GPUIX's test renderer), so the store is told directly.
     onFocus?.();
-    session.paste(droppedPathsText((e.paths ?? []).map((p) => keepDroppedFile(p))));
+    session.paste(
+      droppedPathsText((e.paths ?? []).map((p) => keepDroppedFile(p, { pane: paneId }))),
+    );
   };
 
   const bounds = session.selection ? selectionBounds(session.selection, replica) : null;

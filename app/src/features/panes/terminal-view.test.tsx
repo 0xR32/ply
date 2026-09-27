@@ -381,7 +381,7 @@ describe('TerminalView: input', () => {
       await settle(m.renderer, () => m.sent().some((f) => f.kind === 'paste'));
       const paste = m.sent().find((f) => f.kind === 'paste');
       const text = paste?.kind === 'paste' ? paste.text : '';
-      expect(text.startsWith(`${root}/ply-drops/drop-`)).toBe(true);
+      expect(text.startsWith(`${root}/ply-drops/pane-1-`)).toBe(true);
       expect(text.endsWith('/Screenshot\\ 1.png')).toBe(true);
       rmSync(dirname(staged), { recursive: true });
       expect(existsSync(text.replaceAll('\\ ', ' '))).toBe(true);

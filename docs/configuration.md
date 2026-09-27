@@ -24,7 +24,7 @@ and `app/src/ipc/log.ts`.
 | hook socket (C3) | `run/hook.sock`: agent panes get its path as `PLY_HOOK_SOCK`, and `ply-hook` writes one line per hook to it | same |
 | per-pane files | `run/panes/<id>/` (mode `0700`): `launch.json`, and `claude-settings.json` for Claude Code panes (mode `0600`) | same |
 | logs | `~/Library/Logs/ply/plyd.YYYY-MM-DD.log` and `app.YYYY-MM-DD.log`, 14 days each | `<dir>/logs/` |
-| kept drops | `ply-drops/drop-*/` in the temporary directory (`$TMPDIR`), written by the app: a hard link to, or copy of, each dropped file macOS staged in `TemporaryItems` (the ⌘⇧4 thumbnail), which macOS clears once unused for days | `<dir>/ply-drops/` |
+| kept drops | `ply-drops/pane-*/` and `ply-drops/task-*/` in the temporary directory (`$TMPDIR`), written by the app: a hard link to, or copy of, each dropped file macOS staged in `TemporaryItems` (the ⌘⇧4 thumbnail), deleted one turn after the turn that sent it, when its task finishes, or when its pane closes (`docs/terminal.md`) | `<dir>/ply-drops/` |
 | LaunchAgent | `~/Library/LaunchAgents/dev.ply.app.plyd.plist` | never installed |
 | ghostty source (builds only) | `~/Library/Caches/ply/ghostty/<commit>/` | same |
 

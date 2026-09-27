@@ -2,7 +2,8 @@ import { type ControlClient, RequestError } from '../ipc/control-client';
 import { completeDir, type DirSources, type DirVisit, recentDirs, scanRepos } from '../ipc/dirs';
 import { log } from '../ipc/log';
 import { readBuildId, readKeyRepeat, readReducedMotion } from '../ipc/os';
-import type { Layout, PaneCreateParams, Workspace } from '../ipc/proto.gen';
+import type { Layout, PaneCreateParams, Task, Workspace } from '../ipc/proto.gen';
+import { releasePaneDrops, releaseTaskDrops } from '../terminal/drop';
 import { terminalThemeFor } from '../theme/tokens';
 import type { Action, Event, KeyRepeat, NewPaneRequest } from './actions';
 import type { AppState } from './reducer';
@@ -35,6 +36,12 @@ export interface EffectsOptions {
   dirs?: DirSources;
   /** The native folder picker for "Browse…": the chosen folder, or `null` when cancelled; without it Browse does nothing. */
   promptForDirectory?: () => Promise<string | null>;
+  /** Deletes kept drops (`terminal/drop.ts`): a pane's made before a moment, and those a task's text names. */
+  drops?: { releasePane(paneId: number, before: number): void; releaseTask(text: string): void };
+}
+
+function finished(state: Task['state']): boolean {
+  return state === 'ended' || state === 'failed' || state === 'cancelled';
 }
 
 function message(error: unknown): string {
@@ -97,6 +104,8 @@ export function startEffects(store: Store, options: EffectsOptions): () => void 
   let listGeneration = 0;
   let usageTimer: ReturnType<typeof setTimeout> | null = null;
   let usageAsking = false;
+  const drops = options.drops ?? { releasePane: releasePaneDrops, releaseTask: releaseTaskDrops };
+  const turnStarts = new Map<number, number>();
 
   const dispatch = (action: Action) => {
     if (!stopped) store.dispatch(action);
@@ -363,6 +372,29 @@ export function startEffects(store: Store, options: EffectsOptions): () => void 
     });
   }
 
+  /** A pane's drops live through the turn that sent them (the CLI may still open the path) and go when the next one starts. */
+  function releaseDrops(action: Action, next: AppState, prev: AppState): void {
+    if (action.type === 'daemon/event' && action.event.e === 'pane.removed') {
+      drops.releasePane(action.event.p.pane_id, Number.POSITIVE_INFINITY);
+      turnStarts.delete(action.event.p.pane_id);
+    }
+    if (next.panes !== prev.panes) {
+      for (const pane of Object.values(next.panes)) {
+        if (pane.status !== 'running' || prev.panes[pane.id]?.status === 'running') continue;
+        const previous = turnStarts.get(pane.id);
+        if (previous !== undefined) drops.releasePane(pane.id, previous);
+        turnStarts.set(pane.id, Date.now());
+      }
+    }
+    if (next.tasks.tasks !== prev.tasks.tasks) {
+      for (const task of Object.values(next.tasks.tasks)) {
+        const was = prev.tasks.tasks[task.id]?.state;
+        if (finished(task.state) && (was === undefined || !finished(was)))
+          drops.releaseTask(task.text);
+      }
+    }
+  }
+
   function onAction(action: Action, next: AppState, prev: AppState): void {
     switch (action.type) {
       case 'pane/answer':
@@ -458,6 +490,7 @@ export function startEffects(store: Store, options: EffectsOptions): () => void 
       default:
         break;
     }
+    releaseDrops(action, next, prev);
     if (next.usage.shown && !prev.usage.shown) refreshUsage();
     else if (!next.usage.shown && prev.usage.shown) stopUsage();
     if (next.overlay?.kind === 'new-pane') {
