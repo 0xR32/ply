@@ -231,6 +231,8 @@ export const tokens = {
     usageWidth: 440,
     dispatchWidth: 600,
     dispatchHeight: 660,
+    dispatchSkillsHeight: 140,
+    dispatchPromptRows: 7,
     queueWidth: 640,
     queueHeight: 620,
   },

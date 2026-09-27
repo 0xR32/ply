@@ -212,8 +212,7 @@ export function DispatchForm({ paneId }: { paneId?: number }) {
     }
   };
 
-  const field = (focused: boolean, mono: boolean): StyleDesc => ({
-    height: z(36),
+  const fieldBox = (focused: boolean, mono: boolean): StyleDesc => ({
     paddingLeft: z(12),
     paddingRight: z(12),
     borderRadius: z(8),
@@ -223,6 +222,10 @@ export function DispatchForm({ paneId }: { paneId?: number }) {
     color: tokens.text,
     fontFamily: mono ? fonts.mono : fonts.ui,
     fontSize: mono ? type.terminal.fontSize : type.body.fontSize,
+  });
+  const field = (focused: boolean, mono: boolean): StyleDesc => ({
+    ...fieldBox(focused, mono),
+    height: z(36),
   });
   const label = (value: string, extra?: string) => (
     <div style={{ display: 'flex', alignItems: 'center', gap: z(6) }}>
@@ -373,15 +376,7 @@ export function DispatchForm({ paneId }: { paneId?: number }) {
               </div>
             )}
           </div>
-          <div
-            style={{
-              flexGrow: 1,
-              minHeight: 0,
-              display: 'flex',
-              flexDirection: 'column',
-              gap: z(8),
-            }}
-          >
+          <div style={{ flexShrink: 0, display: 'flex', flexDirection: 'column', gap: z(8) }}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
               {label('Skills', `on this machine, for ${skillCli}`)}
               <Text color={tokens.hint} variant="label" mono>
@@ -390,8 +385,7 @@ export function DispatchForm({ paneId }: { paneId?: number }) {
             </div>
             <div
               style={{
-                flexGrow: 1,
-                minHeight: 0,
+                height: z(tokens.layout.dispatchSkillsHeight),
                 display: 'flex',
                 flexDirection: 'column',
                 overflow: 'hidden',
@@ -450,7 +444,15 @@ export function DispatchForm({ paneId }: { paneId?: number }) {
               />
             </div>
           </div>
-          <div style={{ flexShrink: 0, display: 'flex', flexDirection: 'column', gap: z(8) }}>
+          <div
+            style={{
+              flexGrow: 1,
+              minHeight: 0,
+              display: 'flex',
+              flexDirection: 'column',
+              gap: z(8),
+            }}
+          >
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
               {label('Prompt')}
               {pickedSkill?.argument_hint ? (
@@ -465,9 +467,10 @@ export function DispatchForm({ paneId }: { paneId?: number }) {
               placeholder="Pick a skill above, or write what it should do"
               theme={{ caret: accent.base }}
               onChange={(e) => setText(noTabs(e.value))}
+              minRows={tokens.layout.dispatchPromptRows}
+              maxRows={tokens.layout.dispatchPromptRows}
               style={{
-                ...field(focus === 'prompt', true),
-                height: z(64),
+                ...fieldBox(focus === 'prompt', true),
                 paddingTop: z(10),
                 paddingBottom: z(10),
                 lineHeight: z(20),

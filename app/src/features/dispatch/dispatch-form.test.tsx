@@ -10,6 +10,7 @@ import {
   mountWithStore,
   testSkills,
 } from '../../state/test-support';
+import { tokens } from '../../theme/tokens';
 import { DispatchForm } from './dispatch-form';
 
 const CWD = '/Users/example/code/ply';
@@ -251,6 +252,33 @@ describe.if(hasNativeTestRenderer)('DispatchForm', () => {
           '/Users/example/third.gif',
           '/Users/example/last.png',
         ].join('\n'),
+      });
+    } finally {
+      unmount();
+    }
+  });
+
+  test('the prompt is the tall field and scrolls within its rows, and the skill list stays short', () => {
+    const { renderer, press, type, unmount } = mount();
+    const box = (testId: string) => {
+      const el = renderer.findByTestId(testId);
+      const b = el && renderer.getElementBounds(el.id);
+      if (!el || !b) throw new Error(`${testId} did not paint`);
+      return { id: el.id, height: b.height };
+    };
+    try {
+      const prompt = box('dispatch-prompt');
+      expect(prompt.height).toBeGreaterThan(box('dispatch-skills').height);
+      press('tab');
+      for (let i = 1; i <= tokens.layout.dispatchPromptRows + 4; i++) {
+        type(`line ${i}`);
+        press('shift-enter');
+      }
+      expect(box('dispatch-prompt').height).toBe(prompt.height);
+      // A textarea sized by rows scrolls to its caret; one given a fixed height paints past its box instead.
+      expect(renderer.getElement(prompt.id)?.customProps).toMatchObject({
+        minRows: tokens.layout.dispatchPromptRows,
+        maxRows: tokens.layout.dispatchPromptRows,
       });
     } finally {
       unmount();
