@@ -247,6 +247,8 @@ GPUIX's test renderer (`@gpuix/react/testing`) and the mock daemon
 - `docs/control-channel.md` — C1 in full: framing, handshake, every method, event and error code.
 - `docs/screen-protocol.md` — C2 in full: every frame's byte layout, flow control, history paging.
 - `docs/agents.md` — Claude Code and Codex: launch, hooks, notify, OSC 9, rollouts, progress, the status state machine.
+- `docs/task-queue.md` — the task queue and its dispatcher: the pieces, a task's life, the queue model, the dispatch
+  engine's gates and timings, pools, failures and restarts, the app's views.
 - `docs/terminal.md` — libghostty-vt, the engine options, input encoding, the React terminal view, measured numbers.
 - `docs/keybindings.md` — every binding, the reserved chords, how to add one.
 - `docs/configuration.md` — paths, `config.toml`, settings, environment variables, what a run writes to the machine.

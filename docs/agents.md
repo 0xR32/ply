@@ -621,6 +621,8 @@ exactly as written, into the pane's terminal as the user would, and nothing
 else: it never answers a dialog, passes an option or changes a prompt. Each
 agent process's `Agent` owns a small clocked machine for it
 (`crates/daemon/src/panes/dispatch.rs`); the registry holds the queue.
+`docs/task-queue.md` has the architecture: the pieces, the engine's phases,
+pools, failures and restarts.
 
 **When a task is typed.** Only into an agent pane whose running process has
 shown its prompt, that has been `idle` for 1 s (`SETTLE`), has no other task

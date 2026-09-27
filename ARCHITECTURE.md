@@ -162,7 +162,7 @@ tab under 2 000 host nodes. Keys, mouse, paste and focus go
 back as C2 events and plyd encodes them against the pane's live modes; the app
 never mirrors terminal modes. A queued task (Ruling R60) is typed the same way,
 by plyd: one paste and one Enter encoded against the pane's modes, only when it
-is the user's turn there (`docs/agents.md`, **Dispatching tasks**). `docs/terminal.md` has the details and the
+is the user's turn there (`docs/task-queue.md`). `docs/terminal.md` has the details and the
 measured numbers.
 
 ## Startup

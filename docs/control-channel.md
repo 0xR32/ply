@@ -360,7 +360,7 @@ each file.
 A task is text the user wrote or picked from `skill.list`. plyd keeps it in a
 queue and types it into its pane, verbatim, when it is the user's turn there;
 `docs/agents.md` (**Dispatching tasks**) has when plyd types and how it follows
-the task through the CLI's own signals. plyd never answers a dialog for a task
+the task through the CLI's own signals, and `docs/task-queue.md` the architecture. plyd never answers a dialog for a task
 and never changes its text.
 
 Every pane has a queue; tasks leave it in `position` order. A workspace also has
