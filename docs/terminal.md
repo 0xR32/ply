@@ -371,6 +371,31 @@ resends it with `allow_unsafe` while esc drops it. A program's OSC 52 write
 arrives as CLIPBOARD_WRITE and goes to the pasteboard the same way (an empty
 text clears it); a program can never read the pasteboard.
 
+**Dropped files.** Files dropped on a pane (GPUIX's `onFileDrop`, which gives
+absolute paths) are typed the way Ghostty, iTerm2 and Terminal.app type them:
+each path with its shell metacharacters (space, tab and `\()[]{}<>"'`
+`` ` `` `!#$&;|*?`) backslash-escaped, joined by one space with none after, as
+one PASTE frame (`app/src/terminal/drop.ts`); the pane becomes the focused one.
+Claude Code strips the escapes and turns a pasted image path (png, jpeg, gif,
+webp) into its own `[Image #N]`; ply only types the path and never opens the
+file. Files dropped anywhere on the ⌘E form join its prompt instead, one
+escaped path per line, and reach the pane when the task is typed
+(`docs/agents.md`, **How it is typed**). An image on the pasteboard is Claude
+Code's own ⌃V, which reaches it as a key; ⌘V pastes text only.
+
+Three GPUIX 0.10.0 limits shape this. It reports the drop alone, so nothing
+marks a pane while a file is dragged over it. GPUI counts no element hovered
+while the last input was a key, and a file drop does not end that
+(`Window::dispatch_event`), while a drag from another app brings the window
+drag events, not mouse moves: a file dropped right after typing, before the
+pointer has moved over the window, reaches nothing and is lost; move the pointer over ply once and drop again
+(`terminal-view.test.tsx` pins this). And GPUIX fires `onClick` on the drop's
+release, so a drop clicks what it lands on unless that element takes the drop
+itself: every clickable on the ⌘E form takes it, and the needs-you strip's Yes
+and No swallow it, so a drop never queues, closes or answers anything. Elsewhere
+(tabs, pane headers, the status bar) a drop still clicks, which at worst
+switches to or opens something.
+
 **Scrollback** stays in plyd (`scrollback_lines`, default 10 000). The wheel
 scrolls ply's own view of it and the session fetches the pages it shows
 (`docs/screen-protocol.md`); new output keeps a scrolled-back view in place,
@@ -550,9 +575,13 @@ p99 and 509 µs max, and 21 / 34 / 62 / 78 µs while another pane streamed
   attaching with the measured grid, painting a recorded Claude Code screen as
   style runs, the cursor, title, bell and exit callbacks, reconnecting,
   resizing, keys (⌘ chords never sent), focus, paste and its confirmation,
-  selection and ⌘C, mouse reporting with ⇧ bypass, wheel scrollback, ⌘A,
-  ⌘-click links (opening, the reporting bypass, the hover underline), and the
-  2 000-node budget; `links.test.ts` for what counts as a URL and where it ends.
+  dropped files, selection and ⌘C, mouse reporting with ⇧ bypass, wheel
+  scrollback, ⌘A, ⌘-click links (opening, the reporting bypass, the hover
+  underline), and the 2 000-node budget; `links.test.ts` for what counts as a
+  URL and where it ends; `drop.test.ts` for how dropped paths are escaped;
+  `pane-grid.test.tsx` for a drop focusing its pane and never answering a
+  dialog; `dispatch-form.test.tsx` for drops joining the prompt and clicking
+  nothing.
 - `crates/daemon/tests/lifecycle.rs`:
   `an_osc_11_query_is_answered_with_the_palette_background` and
   `a_shell_survives_detach_and_reattach_with_the_same_screen`.

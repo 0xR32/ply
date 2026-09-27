@@ -135,6 +135,13 @@ reports no modifier change. A binding that must notice a release (the ⌘U hold)
 ends on the key's repeats stopping, any other key, or a blur, as well as the
 key-up (`keymap/dispatcher.ts`, `docs/keybindings.md`).
 
+**A file drop is a mouse-up to GPUIX.** It fires `onClick` on the drop's
+release, so a clickable a file may land on takes `onFileDrop` itself (the ⌘E
+form, the needs-you strip). GPUI hovers nothing while the last input was a key
+and a drop does not end that, so a drop right after typing reaches no element;
+a test that presses a key first must move the mouse (`nativeSimulateMouseMove`)
+before `nativeSimulateFileDrop` (`docs/terminal.md`, **Dropped files**).
+
 **GPUIX is not the DOM.** Every `<text>` needs an explicit `color` (text does not
 inherit it); `div` is block until `display: "flex"`; a shrinking flex child needs
 `minWidth: 0`; style values are numbers, not CSS shorthand, and `boxShadow` is an

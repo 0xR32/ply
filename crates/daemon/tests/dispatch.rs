@@ -194,6 +194,36 @@ fn two_tasks_are_typed_into_a_claude_pane_one_per_turn() {
 }
 
 #[test]
+fn a_claude_task_holding_an_image_path_is_entered_only_after_the_image_delay() {
+    use ply_daemon::panes::dispatch::IMAGE_ENTER_DELAY;
+    let sb = Sandbox::new("typed-image");
+    install(&sb);
+    hook_program();
+    let _plyd = sb.start();
+    let (mut c, ws) = sb.control();
+    let pane = claude_pane(&mut c, &sb, ws, None);
+    let fake = Fake::ready(&sb, pane);
+    wait_status(&mut c, pane, PaneStatus::Idle, WAIT);
+    fake.send("submit 0");
+
+    let text = "fix the layout shown here\n/Users/example/Desktop/shot.png";
+    let task = add(&mut c, ws, pane, text);
+    changed(&mut c, task.id, TaskState::Sent);
+    let sent = std::time::Instant::now();
+    changed(&mut c, task.id, TaskState::Running);
+    assert!(
+        sent.elapsed() + Duration::from_millis(500) >= IMAGE_ENTER_DELAY,
+        "the Enter waited {:?}, not the image delay",
+        sent.elapsed()
+    );
+    assert_eq!(
+        typed(&sb, "claude"),
+        ["fix the layout shown here\\n/Users/example/Desktop/shot.png"],
+        "typed verbatim"
+    );
+}
+
+#[test]
 fn unsent_typing_blocks_the_queue_until_the_user_sends_the_task() {
     let sb = Sandbox::new("typed-block");
     install(&sb);

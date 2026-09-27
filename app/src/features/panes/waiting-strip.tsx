@@ -21,6 +21,9 @@ function waitText(pane: PaneState): string {
     : `${pane.cli} is waiting for your answer`;
 }
 
+// GPUIX 0.10.0 clicks on a file drop's release; a drop that lands here must never answer the CLI.
+const swallowDrop = () => {};
+
 /** The needs-you strip under a waiting pane; a permission dialog gets Yes and No through `pane.answer` (R55), the rest is answered in the pane. */
 export function WaitingStrip({ pane }: { pane: PaneState }) {
   const dispatch = useDispatch();
@@ -70,6 +73,7 @@ export function WaitingStrip({ pane }: { pane: PaneState }) {
                 gap={7}
                 radius={7}
                 onClick={() => dispatch({ type: 'pane/answer', paneId: pane.id, answer })}
+                onFileDrop={swallowDrop}
               >
                 <Kbd
                   label={key}

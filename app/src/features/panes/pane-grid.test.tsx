@@ -141,6 +141,23 @@ describe.if(hasNativeTestRenderer)('PaneGrid', () => {
     }
   });
 
+  test('a file dropped on another pane focuses it, so typing continues there', () => {
+    const { store, renderer, unmount } = mountWithStore(grid, panesIn(2), undefined, true);
+    try {
+      renderer.flush();
+      expect(store.getState().tabs[0]?.focus_pane_id).toBe(1);
+      const b = bounds(renderer, 'terminal-2');
+      renderer.nativeSimulateFileDrop(b.x + b.width / 2, b.y + b.height / 2, [
+        '/Users/example/Desktop/shot.png',
+      ]);
+      renderer.flush();
+      expect(store.getState().tabs[0]?.focus_pane_id).toBe(2);
+      expect(renderer.getFocusedElementId()).toBe(renderer.findByTestId('terminal-2')?.id ?? -1);
+    } finally {
+      unmount();
+    }
+  });
+
   test('⌘↓ moves focus from the top-left to the bottom-left quadrant, in four panes (R58)', () => {
     const { store, renderer, unmount } = mountWithStore(grid, panesIn(4), undefined, true);
     try {
@@ -389,6 +406,25 @@ describe.if(hasNativeTestRenderer)('PaneGrid', () => {
         { type: 'pane/answer', paneId: 2, answer: 'no' },
       ]);
       expect(renderer.findByTestId('pane-1-waiting')).toBeUndefined();
+    } finally {
+      unmount();
+    }
+  });
+
+  test('a file dropped on the needs-you strip’s Yes or No answers nothing', () => {
+    const { store, renderer, unmount } = mountWithStore(grid, demo());
+    const seen: Action[] = [];
+    store.addEffect((a) => seen.push(a));
+    try {
+      for (const answer of ['yes', 'no']) {
+        const b = bounds(renderer, `answer-2-${answer}`);
+        renderer.nativeSimulateMouseMove(b.x + b.width / 2, b.y + b.height / 2);
+        renderer.nativeSimulateFileDrop(b.x + b.width / 2, b.y + b.height / 2, [
+          '/Users/example/Desktop/shot.png',
+        ]);
+        renderer.flush();
+      }
+      expect(seen.filter((a) => a.type === 'pane/answer')).toEqual([]);
     } finally {
       unmount();
     }

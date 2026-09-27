@@ -1,4 +1,4 @@
-import type { PublicInstance, StyleDesc } from '@gpuix/react';
+import type { EventPayload, PublicInstance, StyleDesc } from '@gpuix/react';
 import type { ReactNode, Ref } from 'react';
 import { useChrome } from '../theme/chrome';
 import { tokens } from '../theme/tokens';
@@ -24,6 +24,8 @@ export interface ButtonProps {
   innerRef?: Ref<PublicInstance>;
   onFocus?: () => void;
   onBlur?: () => void;
+  /** Files dropped on the button; with it set a drop is not taken as a click, which GPUIX 0.10.0 fires on the drop's release. */
+  onFileDrop?: (event: EventPayload) => void;
 }
 
 /** A clickable box (GPUIX has no `<button>`): a `div` with `onClick`, a pointer cursor and a hover wash. */
@@ -44,6 +46,7 @@ export function Button({
   innerRef,
   onFocus,
   onBlur,
+  onFileDrop,
 }: ButtonProps) {
   const { z, accent } = useChrome();
   const look: Record<ButtonVariant, StyleDesc> = {
@@ -70,6 +73,7 @@ export function Button({
       aria-label={label}
       tabIndex={focusable ? 0 : undefined}
       onClick={onClick}
+      onFileDrop={onFileDrop}
       onFocus={onFocus}
       onBlur={onBlur}
       style={{

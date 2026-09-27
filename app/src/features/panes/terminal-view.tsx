@@ -13,6 +13,7 @@ import { keysOfEvent, terminalCommandForKeys } from '../../keymap/keymap';
 import type { TerminalTheme } from '../../state/actions';
 import { useAppSelector } from '../../state/store';
 import type { GridSize } from '../../terminal/data-client';
+import { droppedPathsText } from '../../terminal/drop';
 import { type Cursor, type KeyFrame, Modes, type Style } from '../../terminal/frames';
 import { defaultTerminalHost, TerminalHostContext } from '../../terminal/host';
 import { keyCode, keyFrame, modsOf, mouseButton, mouseFrame } from '../../terminal/input';
@@ -194,7 +195,7 @@ function FindBar({
   );
 }
 
-/** A live pane: rows of `<text>` runs drawn from plyd's C2 frames, with keys, mouse, paste, selection, scrollback and ⌘-click links. */
+/** A live pane: rows of `<text>` runs drawn from plyd's C2 frames, with keys, mouse, paste, dropped files, selection, scrollback and ⌘-click links. */
 export function TerminalView({
   paneId,
   focused,
@@ -461,6 +462,13 @@ export function TerminalView({
       session.scrollBy(steps);
     }
   };
+  const onFileDrop = (e: EventPayload) => {
+    const id = ref.current?.id;
+    if (id !== undefined) renderer?.focusElement?.(id);
+    // focusElement fires no onFocus (seen under GPUIX's test renderer), so the store is told directly.
+    onFocus?.();
+    session.paste(droppedPathsText(e.paths ?? []));
+  };
 
   const bounds = session.selection ? selectionBounds(session.selection, replica) : null;
   const top = session.viewTop;
@@ -520,6 +528,7 @@ export function TerminalView({
       onMouseMove={onMouseMove}
       onMouseUp={onMouseUp}
       onScroll={onScroll}
+      onFileDrop={onFileDrop}
       style={{
         flexGrow: 1,
         minHeight: 0,

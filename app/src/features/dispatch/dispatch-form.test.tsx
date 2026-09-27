@@ -211,6 +211,52 @@ describe.if(hasNativeTestRenderer)('DispatchForm', () => {
     }
   });
 
+  test('files dropped anywhere on the form join the prompt as escaped paths, a line each, and click nothing', () => {
+    const { renderer, seen, press, type, unmount } = mount();
+    const drop = (testId: string, paths: string[]) => {
+      const el = renderer.findByTestId(testId);
+      const b = el && renderer.getElementBounds(el.id);
+      if (!b) throw new Error(`${testId} did not paint`);
+      // GPUI ignores a drop while the last input was a key; the pointer reaching the window ends that.
+      renderer.nativeSimulateMouseMove(b.x + b.width / 2, b.y + b.height / 2);
+      renderer.nativeSimulateFileDrop(b.x + b.width / 2, b.y + b.height / 2, paths);
+      renderer.flush();
+      renderer.dispatchNativeEvents();
+      renderer.flush();
+    };
+    try {
+      press('tab');
+      type('fix the layout shown here');
+      press('shift-tab');
+      expect(focusedTestId(renderer)).toBe('dispatch-search');
+      drop('dispatch-skill-/review-pr', [
+        '/Users/example/Desktop/Screenshot 2026-09-27 at 10.15.32.png',
+      ]);
+      expect(focusedTestId(renderer)).toBe('dispatch-prompt');
+      drop('dispatch-send', ['/Users/example/Desktop/before.png']);
+      drop('dispatch-target-pool', ['/Users/example/after.jpg']);
+      drop('dispatch-pane-2', ['/Users/example/third.gif']);
+      expect(seen).not.toContainEqual(expect.objectContaining({ type: 'task/add' }));
+      expect(seen).not.toContainEqual({ type: 'overlay/close' });
+      drop('dispatch-prompt', ['/Users/example/last.png']);
+      press('cmd-enter');
+      expect(seen.at(-1)).toEqual({
+        type: 'task/add',
+        target: { kind: 'pane', paneId: 1 },
+        text: [
+          'fix the layout shown here',
+          '/Users/example/Desktop/Screenshot\\ 2026-09-27\\ at\\ 10.15.32.png',
+          '/Users/example/Desktop/before.png',
+          '/Users/example/after.jpg',
+          '/Users/example/third.gif',
+          '/Users/example/last.png',
+        ].join('\n'),
+      });
+    } finally {
+      unmount();
+    }
+  });
+
   test('an empty prompt is refused with a reason, and plyd’s refusal shows in the footer', () => {
     const { renderer, seen, press, store, unmount } = mount();
     try {

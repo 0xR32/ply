@@ -491,6 +491,38 @@ fn a_prompt_is_acknowledged_by_userpromptsubmit_in_claude_and_task_started_in_co
 }
 
 #[test]
+fn claude_reads_an_image_for_a_pasted_piece_ending_in_an_image_extension_and_codex_never_delays() {
+    let claude = adapter(AgentCli::Claude);
+    let codex = adapter(AgentCli::Codex);
+    for text in [
+        "/Users/example/Desktop/Screenshot\\ 2026-09-27\\ at\\ 10.15.32.png",
+        "Fix the layout shown here\n/Users/example/Desktop/shot.png",
+        "fix this /Users/example/shot.PNG",
+        "'/Users/example/My Shots/a.jpeg'",
+        "\"/Users/example/b.jpg\"",
+        "/tmp/a.gif /tmp/b.webp",
+        "/tmp/one.png\n\nthen compare it with the design",
+        "optimize logo.png",
+        "/tmp/a.pn\\g",
+        "see x.png C:\\notes",
+        "'/tmp/unbalanced.png",
+    ] {
+        assert!(claude.paste_reads_images(text), "{text:?}");
+        assert!(!codex.paste_reads_images(text), "{text:?}");
+    }
+    for text in [
+        "",
+        "/review-pr #1",
+        "look at /tmp/a.png please",
+        "/tmp/notes.pdf",
+        "/tmp/icon.svg",
+        "/tmp/a.png.txt",
+    ] {
+        assert!(!claude.paste_reads_images(text), "{text:?}");
+    }
+}
+
+#[test]
 fn only_a_signal_of_the_running_process_at_its_prompt_opens_the_task_queue() {
     use ply_agents::StatusSignal;
     use ply_proto::pane::AgentCli;

@@ -1,4 +1,4 @@
-import { type PublicInstance, useGpuix } from '@gpuix/react';
+import { type EventPayload, type PublicInstance, useGpuix } from '@gpuix/react';
 import { type ReactNode, useEffect, useRef } from 'react';
 import type { Skill } from '../../state/actions';
 import { SKILL_GROUPS } from '../../state/selectors';
@@ -15,6 +15,8 @@ export interface SkillListProps {
   error: string | null;
   onPick: (skill: Skill) => void;
   onHover: (index: number) => void;
+  /** Files dropped on a row; set so a drop does not pick it (GPUIX 0.10.0 clicks on the drop's release). */
+  onFileDrop: (event: EventPayload) => void;
 }
 
 /** The dispatch form's skill list: one group per source, each row the invocation, its description and its argument hint. */
@@ -26,6 +28,7 @@ export function SkillList({
   error,
   onPick,
   onHover,
+  onFileDrop,
 }: SkillListProps) {
   const { z, accent } = useChrome();
   const { renderer } = useGpuix();
@@ -84,6 +87,7 @@ export function SkillList({
           testId={`dispatch-skill-${skill.invocation}`}
           onMouseEnter={() => onHover(at)}
           onClick={() => onPick(skill)}
+          onFileDrop={onFileDrop}
           style={{
             height: z(34),
             flexShrink: 0,

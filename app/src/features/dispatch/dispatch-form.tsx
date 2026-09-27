@@ -11,6 +11,7 @@ import {
   statusView,
 } from '../../state/selectors';
 import { useAppSelector, useDispatch } from '../../state/store';
+import { escapedPath } from '../../terminal/drop';
 import { useChrome } from '../../theme/chrome';
 import { tokens } from '../../theme/tokens';
 import { Button } from '../../ui/button';
@@ -51,7 +52,7 @@ function agentPanes(state: AppState): PaneState[] {
     .filter((p): p is PaneState => p !== undefined && p.cli !== 'shell' && p.status !== 'exited');
 }
 
-/** The ⌘E form (Ruling R60): send a skill or a prompt to a pane, the next free pane or a new pane; ⌘⏎ queues, esc closes. */
+/** The ⌘E form (Ruling R60): send a skill or a prompt to a pane, the next free pane or a new pane; dropped files join the prompt as paths, ⌘⏎ queues, esc closes. */
 export function DispatchForm({ paneId }: { paneId?: number }) {
   const dispatch = useDispatch();
   const { z, accent, fonts, type } = useChrome();
@@ -135,6 +136,14 @@ export function DispatchForm({ paneId }: { paneId?: number }) {
     setProblem(null);
     const skill = picked && (body === picked || body.startsWith(`${picked} `)) ? picked : undefined;
     dispatch({ type: 'task/add', target: where, text: body, ...(skill ? { skill } : {}) });
+  };
+  const onFileDrop = (event: EventPayload) => {
+    const paths = (event.paths ?? []).map(escapedPath);
+    if (paths.length === 0) return;
+    // A line each: Claude Code reads an image only for a piece of the paste that ends in its path.
+    setText((old) => `${old}${old === '' || old.endsWith('\n') ? '' : '\n'}${paths.join('\n')}`);
+    setProblem(null);
+    fields.focus('prompt');
   };
   const cycle = <T,>(items: readonly T[], current: T | undefined, delta: number): T | undefined => {
     if (items.length === 0) return undefined;
@@ -257,6 +266,7 @@ export function DispatchForm({ paneId }: { paneId?: number }) {
     >
       <div
         onKeyDown={onKeyDown}
+        onFileDrop={onFileDrop}
         style={{ flexGrow: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}
       >
         <CardBar height={60} edge="top" paddingLeft={20} paddingRight={14} justify="space-between">
@@ -268,7 +278,12 @@ export function DispatchForm({ paneId }: { paneId?: number }) {
               Typed into the pane exactly as written, when it is your turn.
             </Text>
           </div>
-          <div testId="dispatch-close" onClick={close} style={{ cursor: 'pointer' }}>
+          <div
+            testId="dispatch-close"
+            onClick={close}
+            onFileDrop={onFileDrop}
+            style={{ cursor: 'pointer' }}
+          >
             <Kbd
               label="esc"
               height={22}
@@ -300,6 +315,7 @@ export function DispatchForm({ paneId }: { paneId?: number }) {
               items={TARGETS}
               value={target}
               onChange={setTarget}
+              onFileDrop={onFileDrop}
               focused={focus === 'target'}
               {...tracked('target')}
             />
@@ -326,6 +342,7 @@ export function DispatchForm({ paneId }: { paneId?: number }) {
                       pane={p}
                       chosen={p.id === chosen}
                       onPick={() => setChosen(p.id)}
+                      onFileDrop={onFileDrop}
                     />
                   ))
                 )}
@@ -338,6 +355,7 @@ export function DispatchForm({ paneId }: { paneId?: number }) {
                     items={CLIS}
                     value={cli}
                     onChange={setCli}
+                    onFileDrop={onFileDrop}
                     focused={focus === 'cli'}
                     {...tracked('cli')}
                   />
@@ -428,6 +446,7 @@ export function DispatchForm({ paneId }: { paneId?: number }) {
                 error={state.skills.key === skillKey ? state.skills.error : null}
                 onPick={pick}
                 onHover={setHighlight}
+                onFileDrop={onFileDrop}
               />
             </div>
           </div>
@@ -473,6 +492,7 @@ export function DispatchForm({ paneId }: { paneId?: number }) {
           <Button
             testId="dispatch-cancel"
             onClick={close}
+            onFileDrop={onFileDrop}
             focusable
             focused={focus === 'cancel'}
             {...tracked('cancel')}
@@ -483,6 +503,7 @@ export function DispatchForm({ paneId }: { paneId?: number }) {
             testId="dispatch-send"
             variant="primary"
             onClick={submit}
+            onFileDrop={onFileDrop}
             paddingRight={8}
             gap={10}
             focusable
@@ -505,10 +526,12 @@ function PaneChip({
   pane,
   chosen,
   onPick,
+  onFileDrop,
 }: {
   pane: PaneState;
   chosen: boolean;
   onPick: () => void;
+  onFileDrop: (event: EventPayload) => void;
 }) {
   const { z, accent } = useChrome();
   const place = useAppSelector((s) => panePlace(s, pane.id)?.pane ?? pane.id);
@@ -526,6 +549,7 @@ function PaneChip({
     <div
       testId={`dispatch-pane-${pane.id}`}
       onClick={onPick}
+      onFileDrop={onFileDrop}
       style={{
         flexGrow: 1,
         flexBasis: 0,

@@ -677,6 +677,22 @@ submitted without one. A paste the terminal refuses (text with line breaks for
 a CLI without bracketed paste, Ruling R21) fails the task and no Enter
 follows.
 
+**A task with an image path** waits 2 s for its Enter instead
+(`IMAGE_ENTER_DELAY`). Claude Code splits a paste at line breaks and at a space
+before `/`, and a piece that, trimmed, unquoted and unescaped, ends in `.png`,
+`.jpg`, `.jpeg`, `.gif` or `.webp` becomes an image it reads before it takes
+keys again, turning it into `[Image #N]` ahead of the rest of the text; an
+Enter that arrives meanwhile is dropped, where after a text-only paste it is
+replayed. It decides from the text alone, so `optimize logo.png` takes that
+path too, file or no file. `Adapter::paste_reads_images` applies the same rule
+(`crates/agents/src/claude/paste.rs`); for Codex it is always false. Measured
+with Claude Code 2.1.283 on an Apple-silicon Mac, one to three Retina
+screenshots (3.5–8.6 MB) took 0.41–0.55 s to read, idle or with every core busy,
+and a 50 ms Enter was lost every time; 2 s is about four times that. A read
+that takes longer still leaves the task failing as not submitted, with its text
+in the input for the user's Enter. Files dropped on the ⌘E form put their paths
+into the task this way, one per line (`docs/terminal.md`).
+
 **How it is followed**, from the signals the status machine already uses:
 
 | Signal | Task |

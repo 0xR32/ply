@@ -13,7 +13,8 @@
 //! the task anyway (`task.send`).
 //!
 //! A task is written as one paste (bracketed when the CLI enabled it) and, [`ENTER_DELAY`] later, one Enter, so an
-//! autocomplete pop-over the paste opens has settled; the Enter is left out when the pane stopped being `idle` or the
+//! autocomplete pop-over the paste opens has settled, or [`IMAGE_ENTER_DELAY`] later when the CLI reads images from the
+//! paste and would drop an Enter that came first; the Enter is left out when the pane stopped being `idle` or the
 //! user typed since the paste. The CLI's acknowledgement makes the task `running`: Claude Code's UserPromptSubmit,
 //! Codex's rollout `task_started` (the adapter names it). The turn ending (Stop, notify, `task_complete`, or the quiet
 //! timeout) makes it `ended`; a Codex Enter that started no turn, no acknowledgement within [`ACK_WAIT`], or the process
@@ -30,6 +31,9 @@ pub const SETTLE: Duration = Duration::from_secs(1);
 
 /// Time between a task's paste and its Enter.
 pub const ENTER_DELAY: Duration = Duration::from_millis(50);
+
+/// How long the Enter waits after a paste the CLI reads images from (`Adapter::paste_reads_images`): Claude Code 2.1.283 drops an Enter typed meanwhile, and took 0.41–0.55 s for one to three Retina screenshots on an Apple-silicon Mac, idle or with every core busy.
+pub const IMAGE_ENTER_DELAY: Duration = Duration::from_secs(2);
 
 /// How long the CLI has to acknowledge a typed task before it fails as not submitted.
 pub const ACK_WAIT: Duration = Duration::from_secs(10);
@@ -260,17 +264,28 @@ impl Dispatch {
         }
     }
 
-    /// The registry's answer to [`Action::Take`]: the task's text, or `None` when it is no longer the head.
-    pub fn taken(&mut self, task: TaskId, text: Option<String>, now: Instant) -> Vec<Action> {
+    /// The registry's answer to [`Action::Take`]: the task's text, or `None` when it is no longer the head; `reads_images` (the adapter's `paste_reads_images`) makes the Enter wait [`IMAGE_ENTER_DELAY`].
+    pub fn taken(
+        &mut self,
+        task: TaskId,
+        text: Option<String>,
+        reads_images: bool,
+        now: Instant,
+    ) -> Vec<Action> {
         if self.phase != (Phase::Taking { task }) {
             return Vec::new();
         }
         match text {
             Some(text) => {
                 self.interrupted = false;
+                let delay = if reads_images {
+                    IMAGE_ENTER_DELAY
+                } else {
+                    ENTER_DELAY
+                };
                 self.phase = Phase::Pasted {
                     task,
-                    enter_at: now + ENTER_DELAY,
+                    enter_at: now + delay,
                 };
                 vec![Action::Paste(text)]
             }
@@ -563,7 +578,7 @@ mod tests {
     fn the_head_is_pasted_then_entered_after_the_delay_and_waits_for_the_acknowledgement() {
         let (mut d, t) = ready(7);
         assert_eq!(
-            d.taken(7, Some("/review-pr #1".into()), t),
+            d.taken(7, Some("/review-pr #1".into()), false, t),
             [Action::Paste("/review-pr #1".into())]
         );
         assert_eq!(d.deadline(), Some(t + ENTER_DELAY));
@@ -591,9 +606,26 @@ mod tests {
     }
 
     #[test]
+    fn a_paste_the_cli_reads_images_from_is_entered_only_after_the_longer_delay() {
+        let (mut d, t) = ready(7);
+        let text = "Fix this\n/Users/example/Desktop/shot.png";
+        assert_eq!(
+            d.taken(7, Some(text.into()), true, t),
+            [Action::Paste(text.into())]
+        );
+        assert_eq!(d.deadline(), Some(t + IMAGE_ENTER_DELAY));
+        assert!(
+            d.tick(t + IMAGE_ENTER_DELAY - Duration::from_millis(1))
+                .is_empty()
+        );
+        assert_eq!(d.tick(t + IMAGE_ENTER_DELAY), [Action::Enter]);
+        assert_eq!(d.deadline(), Some(t + IMAGE_ENTER_DELAY + ACK_WAIT));
+    }
+
+    #[test]
     fn the_turn_ending_ends_the_task_and_the_next_one_waits_for_the_pane_to_settle_again() {
         let (mut d, t) = ready(7);
-        d.taken(7, Some("x".into()), t);
+        d.taken(7, Some("x".into()), false, t);
         d.tick(t + ENTER_DELAY);
         d.on_signal(
             &StatusSignal::PromptSubmitted,
@@ -618,7 +650,7 @@ mod tests {
     #[test]
     fn the_quiet_timeout_ends_a_claude_task_too() {
         let (mut d, t) = ready(7);
-        d.taken(7, Some("x".into()), t);
+        d.taken(7, Some("x".into()), false, t);
         d.tick(t + ENTER_DELAY);
         d.on_signal(
             &StatusSignal::PromptSubmitted,
@@ -635,7 +667,7 @@ mod tests {
     #[test]
     fn no_acknowledgement_or_no_codex_turn_fails_the_task() {
         let (mut d, t) = ready(7);
-        d.taken(7, Some("x".into()), t);
+        d.taken(7, Some("x".into()), false, t);
         d.tick(t + ENTER_DELAY);
         let late = t + ENTER_DELAY + ACK_WAIT;
         assert_eq!(
@@ -643,7 +675,7 @@ mod tests {
             [report(7, TaskState::Failed, Some(NOT_SUBMITTED))]
         );
         let (mut d, t) = ready(8);
-        d.taken(8, Some("x".into()), t);
+        d.taken(8, Some("x".into()), false, t);
         d.tick(t + ENTER_DELAY);
         assert_eq!(
             d.on_signal(&StatusSignal::NoTurnStarted, none(), PaneStatus::Idle, t),
@@ -654,7 +686,7 @@ mod tests {
     #[test]
     fn an_exit_fails_a_typed_task() {
         let (mut d, t) = ready(7);
-        d.taken(7, Some("x".into()), t);
+        d.taken(7, Some("x".into()), false, t);
         d.tick(t + ENTER_DELAY);
         d.on_signal(
             &StatusSignal::PromptSubmitted,
@@ -671,7 +703,7 @@ mod tests {
     #[test]
     fn a_submit_by_the_user_between_paste_and_enter_is_the_acknowledgement() {
         let (mut d, t) = ready(7);
-        d.taken(7, Some("x".into()), t);
+        d.taken(7, Some("x".into()), false, t);
         assert_eq!(
             d.on_signal(
                 &StatusSignal::PromptSubmitted,
@@ -687,7 +719,7 @@ mod tests {
     #[test]
     fn a_paste_the_engine_refuses_fails_the_task_without_an_enter() {
         let (mut d, t) = ready(7);
-        d.taken(7, Some("two\nlines".into()), t);
+        d.taken(7, Some("two\nlines".into()), false, t);
         assert_eq!(
             d.paste_refused(t),
             [report(7, TaskState::Failed, Some(PASTE_REFUSED))]
@@ -702,7 +734,7 @@ mod tests {
     #[test]
     fn a_take_the_registry_refuses_looks_at_the_queue_again() {
         let (mut d, t) = ready(7);
-        assert_eq!(d.taken(7, None, t), [Action::Check]);
+        assert_eq!(d.taken(7, None, false, t), [Action::Check]);
         assert!(d.offer(None, t).is_empty());
     }
 
@@ -900,7 +932,7 @@ mod tests {
     #[test]
     fn no_enter_once_the_pane_left_idle_or_the_user_typed_after_the_paste() {
         let (mut d, t) = ready(7);
-        d.taken(7, Some("x".into()), t);
+        d.taken(7, Some("x".into()), false, t);
         d.on_status(PaneStatus::WaitingPermission, t);
         assert!(
             d.tick(t + ENTER_DELAY).is_empty(),
@@ -911,7 +943,7 @@ mod tests {
             [report(7, TaskState::Failed, Some(NOT_SUBMITTED))]
         );
         let (mut d, t) = ready(8);
-        d.taken(8, Some("x".into()), t);
+        d.taken(8, Some("x".into()), false, t);
         d.on_user_input(b"y", t);
         assert!(
             d.tick(t + ENTER_DELAY).is_empty(),
@@ -937,12 +969,12 @@ mod tests {
     #[test]
     fn a_task_that_was_not_submitted_leaves_its_text_in_the_input() {
         let (mut d, t) = ready(7);
-        d.taken(7, Some("x".into()), t);
+        d.taken(7, Some("x".into()), false, t);
         d.tick(t + ENTER_DELAY);
         d.tick(t + ENTER_DELAY + ACK_WAIT);
         assert!(d.typed(), "the paste is still in the CLI's input");
         let (mut d, t) = ready(8);
-        d.taken(8, Some("x".into()), t);
+        d.taken(8, Some("x".into()), false, t);
         d.tick(t + ENTER_DELAY);
         d.on_signal(&StatusSignal::NoTurnStarted, none(), PaneStatus::Idle, t);
         assert!(d.typed());

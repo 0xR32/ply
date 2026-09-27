@@ -343,6 +343,48 @@ describe('TerminalView: input', () => {
     }
   });
 
+  test('files dropped on the pane are pasted as their escaped paths, as a terminal types them', async () => {
+    const m = await mount();
+    try {
+      await m.deliver([screen(['> '])]);
+      const b = m.body();
+      m.renderer.nativeSimulateFileDrop(b.x + b.width / 2, b.y + b.height / 2, [
+        '/Users/example/Desktop/Screenshot 2026-09-27 at 10.15.32.png',
+        '/Users/example/Desktop/plan.pdf',
+      ]);
+      await settle(m.renderer, () => m.sent().some((f) => f.kind === 'paste'));
+      expect(m.sent().filter((f) => f.kind === 'paste')).toEqual([
+        {
+          kind: 'paste',
+          allowUnsafe: false,
+          text: '/Users/example/Desktop/Screenshot\\ 2026-09-27\\ at\\ 10.15.32.png /Users/example/Desktop/plan.pdf',
+        },
+      ]);
+    } finally {
+      m.unmount();
+    }
+  });
+
+  test('a drop straight after a key reaches nothing until the pointer moves (GPUI hover suppression, GPUIX 0.10.0)', async () => {
+    const m = await mount();
+    try {
+      await m.deliver([screen(['> '])]);
+      const b = m.body();
+      const x = b.x + b.width / 2;
+      const y = b.y + b.height / 2;
+      pressed(m, 'a');
+      m.renderer.nativeSimulateFileDrop(x, y, ['/Users/example/Desktop/shot.png']);
+      await settle(m.renderer);
+      expect(m.sent().filter((f) => f.kind === 'paste')).toEqual([]);
+      m.renderer.nativeSimulateMouseMove(x, y);
+      m.renderer.nativeSimulateFileDrop(x, y, ['/Users/example/Desktop/shot.png']);
+      await settle(m.renderer, () => m.sent().some((f) => f.kind === 'paste'));
+      expect(m.sent().filter((f) => f.kind === 'paste')).toHaveLength(1);
+    } finally {
+      m.unmount();
+    }
+  });
+
   test('a drag selects cells and ⌘C copies them; the selection never sends ^C', async () => {
     const m = await mount();
     try {

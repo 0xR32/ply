@@ -324,15 +324,19 @@ impl Agent {
                     let text = shared
                         .registry()
                         .take_task(self.pane_id, task, forced, unix_now());
+                    let reads_images = text
+                        .as_deref()
+                        .is_some_and(|t| self.adapter.paste_reads_images(t));
                     if text.is_some() {
                         tracing::info!(
                             pane_id = self.pane_id,
                             task_id = task,
                             forced,
+                            reads_images,
                             "typing a queued task"
                         );
                     }
-                    queue.extend(self.dispatch.taken(task, text, now));
+                    queue.extend(self.dispatch.taken(task, text, reads_images, now));
                 }
                 Action::Paste(text) => self.writes.push(Typed::Paste(text)),
                 Action::Enter => self.writes.push(Typed::Enter),

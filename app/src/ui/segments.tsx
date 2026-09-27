@@ -1,4 +1,4 @@
-import type { PublicInstance } from '@gpuix/react';
+import type { EventPayload, PublicInstance } from '@gpuix/react';
 import type { Ref } from 'react';
 import { useChrome } from '../theme/chrome';
 import { tokens } from '../theme/tokens';
@@ -23,6 +23,8 @@ export interface SegmentsProps<T extends string> {
   autoFocus?: boolean;
   onFocus?: () => void;
   onBlur?: () => void;
+  /** Files dropped on a segment; with it set a drop does not choose it (GPUIX 0.10.0 clicks on the drop's release). */
+  onFileDrop?: (event: EventPayload) => void;
 }
 
 /** A segmented control: equal-width segments, the chosen one raised with an accent ring. */
@@ -36,6 +38,7 @@ export function Segments<T extends string>({
   autoFocus = false,
   onFocus,
   onBlur,
+  onFileDrop,
 }: SegmentsProps<T>) {
   const { z, accent } = useChrome();
   return (
@@ -63,6 +66,7 @@ export function Segments<T extends string>({
             key={item.value}
             testId={testId ? `${testId}-${item.value}` : undefined}
             onClick={() => onChange(item.value)}
+            onFileDrop={onFileDrop}
             style={{
               height: z(32),
               flexGrow: 1,

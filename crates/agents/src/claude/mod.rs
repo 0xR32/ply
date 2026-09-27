@@ -1,5 +1,6 @@
 //! Claude Code adapter (spec 6.1, ADR-0003): launch with a hooks-only `--settings` file, and hook payloads to signals.
 
+pub mod paste;
 pub mod progress;
 pub mod settings;
 pub mod usage;
@@ -136,6 +137,11 @@ impl Adapter for ClaudeAdapter {
             signal,
             StatusSignal::Ready | StatusSignal::PromptSubmitted | StatusSignal::TurnComplete
         )
+    }
+
+    /// Claude Code reads the images before it takes keys again and drops an Enter that came meanwhile (2.1.283).
+    fn paste_reads_images(&self, text: &str) -> bool {
+        paste::reads_images(text)
     }
 }
 
