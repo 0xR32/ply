@@ -300,20 +300,13 @@ describe.if(hasNativeTestRenderer)('PaneGrid', () => {
     }
   });
 
-  test('headers show position, title, branch, progress, CLI with the tracked model, and status', () => {
+  test('headers show position, branch, progress, CLI with the tracked model, and status, but no title', () => {
     const { renderer, unmount } = mountWithStore(grid, demo());
     try {
       const text = renderer.getAllText();
+      expect(text).not.toContain('Tab bar polish');
       expect(text).toEqual(
-        expect.arrayContaining([
-          '1',
-          'Tab bar polish',
-          'feat/tab-bar',
-          '3/5',
-          'claude',
-          'claude-opus-5',
-          'Running',
-        ]),
+        expect.arrayContaining(['1', 'feat/tab-bar', '3/5', 'claude', 'claude-opus-5', 'Running']),
       );
       expect(textOf(renderer, 'pane-2-progress')).toBe('2/4');
       expect(renderer.findByTestId('pane-2-model')).toBeUndefined();

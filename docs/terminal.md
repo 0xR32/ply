@@ -253,8 +253,9 @@ unmounts the old views, which detach, and mounts the new ones, which attach and
 receive a Snapshot each. Hidden panes keep running and emulating in plyd; their
 status keeps arriving over C1.
 
-**Title, bell and exit** reach the pane header through TerminalView's callbacks
-(`pane-frame.tsx`): a TITLE replaces the pane's name, a BELL marks a pane that
+**Title, bell and exit** reach the pane through TerminalView's callbacks
+(`pane-frame.tsx`): a TITLE replaces the pane's name in the palette and the
+close confirmation (the header shows no title), a BELL marks a pane that
 is not the focused one with a bell until it is, and an EXIT marks the pane
 `exited` with its code at once (C1 `pane.exit` says the same a moment later).
 
@@ -262,7 +263,7 @@ is not the focused one with a bell until it is, and an EXIT marks the pane
 view does (every 250 ms) and, in unscaled pixels (its width over the font
 scale, since everything grows with ⌘=), drops the plan's numbers below 480,
 the model below 400, the plan bar below 330, the branch below 290 and the CLI
-label below 240; the title and the branch ellipsize, and the header clips
+label below 240; the project and the branch ellipsize, and the header clips
 rather than letting items overlap (`pane-header.tsx`, `headerFit`). The status
 bar's key hints wrap onto a hidden second line, so hints that do not fit drop
 whole from the right (`large-font.test.tsx` checks both at the largest font

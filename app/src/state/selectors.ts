@@ -232,7 +232,7 @@ export function tabName(cwd: string, home: string): string {
   return basename(cwd) || cwd;
 }
 
-/** The title a pane header shows: the terminal's own title when set, else plyd's title, else the CLI name. */
+/** The name the palette and the close confirmation give a pane: the terminal's own title when set, else plyd's title, else the CLI name. */
 export function paneTitle(pane: PaneState): string {
   return pane.terminalTitle || pane.title || pane.cli;
 }

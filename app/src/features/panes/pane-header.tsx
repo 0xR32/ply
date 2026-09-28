@@ -3,7 +3,6 @@ import { type RefObject, useEffect, useRef, useState } from 'react';
 import type { AppState, PaneState } from '../../state/reducer';
 import {
   isDone,
-  paneTitle,
   type StatusTone,
   selectActiveTask,
   selectPaneQueue,
@@ -172,7 +171,7 @@ export function folderName(path: string): string | undefined {
   return path.split('/').filter(Boolean).at(-1);
 }
 
-/** The 42 px pane header: position key, project, title, a bell mark until the pane is looked at, branch, plan progress, the task queue badge, CLI and model, status chip; narrow, it drops the progress numbers, the model, the bar, the branch, the badge and the CLI in that order and clips rather than overlaps. */
+/** The 42 px pane header: position key, project, a bell mark until the pane is looked at, branch, plan progress, the task queue badge, CLI and model, status chip; narrow, it drops the progress numbers, the model, the bar, the branch, the badge and the CLI in that order and clips rather than overlaps. */
 export function PaneHeader({ pane, position, focused, onActivate }: PaneHeaderProps) {
   const chrome = useChrome();
   const { z, accent } = chrome;
@@ -238,9 +237,6 @@ export function PaneHeader({ pane, position, focused, onActivate }: PaneHeaderPr
             </Text>
           </div>
         ) : null}
-        <Text color={tokens.text2} weight={500} ellipsis testId={`pane-${pane.id}-title`}>
-          {paneTitle(pane)}
-        </Text>
         {pane.bell ? (
           <div testId={`pane-${pane.id}-bell`} style={{ flexShrink: 0, display: 'flex' }}>
             <Icon name="bell" size={12} color={tokens.amber} />
