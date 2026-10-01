@@ -230,6 +230,50 @@ fn a_restart_resumes_the_agent_sessions_by_itself() {
 }
 
 #[test]
+fn a_login_shell_too_slow_at_startup_still_gives_the_resume_its_path() {
+    let sb = Sandbox::new("slowshell");
+    install(&sb);
+    hook_program();
+    let mut plyd = sb.start();
+    let (mut c, ws) = sb.control();
+    let claude = create(&mut c, ws, json!({"cli": "claude", "cwd": sb.home}));
+    wait_listed(
+        &mut c,
+        ws,
+        claude,
+        "session_ref",
+        &json!(claude_session(claude)),
+    );
+    drop(c);
+    plyd.child.kill().unwrap();
+    plyd.child.wait().unwrap();
+
+    // Both startup probes (interactive login, then login) hang past their budget, as a cold shell just after login does.
+    let profile = std::fs::read_to_string(sb.home.join(".profile")).unwrap();
+    std::fs::write(
+        sb.home.join(".profile"),
+        format!(
+            "n=$(cat \"$HOME/slow-probes\" 2>/dev/null || echo 0)\nif [ \"$n\" -gt 0 ]; then echo $((n - 1)) > \"$HOME/slow-probes\"; exec sleep 30; fi\n{profile}"
+        ),
+    )
+    .unwrap();
+    std::fs::write(sb.home.join("slow-probes"), "2").unwrap();
+    let _plyd = sb.start();
+    let mut c = Control::connect(&sb.control_socket()).unwrap();
+    wait_listed(&mut c, ws, claude, "status", &json!("idle"));
+    let claude_runs = launches(&sb, "claude");
+    assert!(
+        claude_runs
+            .last()
+            .unwrap()
+            .contains(&format!("--resume {}", claude_session(claude))),
+        "{claude_runs:?}"
+    );
+    let codex = create(&mut c, ws, json!({"cli": "codex", "cwd": sb.home}));
+    Fake::ready(&sb, codex);
+}
+
+#[test]
 fn a_pane_without_a_session_id_reopens_as_a_fresh_shell_by_itself() {
     let sb = Sandbox::new("fresh");
     install(&sb);

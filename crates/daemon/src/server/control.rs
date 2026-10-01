@@ -304,7 +304,7 @@ async fn dispatch(shared: &Arc<Shared>, call: Call) -> Result<Value, ErrorBody> 
         Call::SettingsSet(p) => settings_set(shared, p.settings).await,
         Call::DaemonShutdown(_) => ok(&Empty {}),
         Call::UsageGet(Empty {}) => {
-            let sources = UsageSources::from_env(&shared.login.base);
+            let sources = UsageSources::from_env(&shared.login.get().base);
             ok(&shared.usage.get(sources).await)
         }
         Call::SkillList(p) => {
@@ -315,7 +315,7 @@ async fn dispatch(shared: &Arc<Shared>, call: Call) -> Result<Value, ErrorBody> 
                     "cwd must be an absolute path",
                 ));
             }
-            let sources = SkillSources::from_env(&shared.login.base);
+            let sources = SkillSources::from_env(&shared.login.get().base);
             ok(&shared.skills.get(sources, p.cli, cwd).await)
         }
         Call::TaskList(p) => ok(&shared.registry().tasks_of(p.workspace_id)?),

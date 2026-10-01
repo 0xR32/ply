@@ -51,10 +51,14 @@ the pane's row (`pane.meta`), and `FindRollout` to the tailer.
 CLI:
 
 1. **The program.** `claude` or `codex` is the first executable of that name on
-   the login shell's `PATH`, which plyd reads once at startup from an
+   the login shell's `PATH`, which plyd reads at startup from an
    interactive login shell, `$SHELL -l -i -c`, falling back to `$SHELL -l -c`
    (`crates/daemon/src/login.rs`), because launchd gives plyd a
-   minimal environment. Not found is `cli_not_found`. A shell pane runs the
+   minimal environment. When neither answers in time (a cold shell in the
+   first minute after login can take longer than 5 s), plyd asks again in the
+   background with 30 s per mode, and a CLI launch waits for that answer instead
+   of searching launchd's `PATH`; after a miss it asks again at most once a
+   minute, on the next CLI launch. Not found is `cli_not_found`. A shell pane runs the
    login shell as `<shell> -l`.
 2. **The version**, read without running the CLI (see **The version check**).
 3. **The pane directory**, `run/panes/<id>/`, mode `0700`, holding the

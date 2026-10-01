@@ -7,7 +7,10 @@
 //! `claude` and `codex` binaries (Ruling R42). A shell that fails or hangs interactively is asked again as a plain
 //! login shell (`-l -c`); the log says which one answered. The same probe reports the [`CAPTURED`] variables the shell
 //! exports (Ruling R52: the CLIs' homes, proxies, CA certificates, locale), and nothing else, so no API key an rc
-//! file sets ever reaches plyd; when no shell answers, plyd's own values of them are used. Children start from a
+//! file sets ever reaches plyd; when no shell answers, plyd's own values of them are used. That fallback is held only
+//! until the shell answers: [`Login`] asks it again in the background with [`LATE_PROBE_TIMEOUT`], since a shell
+//! started in the first minute after login can miss the startup budget, and a CLI launch waits for that answer
+//! ([`Login::settled`]) rather than look for the CLI on launchd's `PATH`. Children start from a
 //! cleared environment (`env_clear`) with only [`LoginEnv::base`]: a short allow-list of plyd's own variables (home,
 //! user, temp dir, locale, SSH agent), `SHELL`, the login `PATH`, the captured variables, `TERM=xterm-256color` and
 //! `COLORTERM=truecolor`, plus the launch spec's additions. `LANG` defaults to `en_US.UTF-8` when neither plyd nor
@@ -18,9 +21,11 @@ use std::collections::BTreeMap;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
-use std::time::Duration;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use tokio::process::Command;
+use tokio::sync::{Mutex, watch};
 
 /// `PATH` used when the login shell cannot report one.
 pub const FALLBACK_PATH: &str = "/usr/bin:/bin:/usr/sbin:/sbin";
@@ -34,8 +39,14 @@ pub const DEFAULT_LANG: &str = "en_US.UTF-8";
 /// Longest wait for one probe (`dscl`, `id`).
 pub const PROBE_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// Longest wait for one `PATH` probe of the login shell.
+/// Longest wait for one `PATH` probe of the login shell at startup, which holds back plyd's sockets meanwhile.
 pub const PATH_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Longest wait for one `PATH` probe asked again after the startup probes went unanswered.
+pub const LATE_PROBE_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// How long after an unanswered late probe the shell is left alone before a CLI launch asks it again.
+pub const LATE_PROBE_INTERVAL: Duration = Duration::from_secs(60);
 
 const PASSTHROUGH: &[&str] = &[
     "HOME",
@@ -86,41 +97,80 @@ struct ShellReport {
     vars: BTreeMap<String, String>,
 }
 
-/// The login shell and the base environment of every pane process; resolved once, then read-only.
+/// The login shell and the base environment of every pane process; read-only, replaced whole by [`Login`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LoginEnv {
     /// Absolute path of the login shell; shell panes run it as `<shell> -l`.
     pub shell: PathBuf,
     /// Variables every child starts with, `PATH` (the login shell's) included.
     pub base: BTreeMap<String, String>,
+    /// Whether the login shell reported `PATH`; `false` while plyd's own `PATH` and variables stand in.
+    pub from_shell: bool,
+    probe_env: BTreeMap<String, String>,
 }
 
 impl LoginEnv {
     /// Resolves the shell and its login `PATH` from plyd's environment; never fails (each step falls back and logs).
-    /// Runs up to three short child processes, each bounded by [`PROBE_TIMEOUT`].
+    /// Runs up to four short child processes: `dscl` and `id` bounded by [`PROBE_TIMEOUT`], the shell by [`PATH_PROBE_TIMEOUT`].
     pub async fn resolve() -> Self {
         let own: BTreeMap<String, String> = std::env::vars().collect();
         let shell = login_shell(&own).await;
-        let mut base = base_env(&own, &shell);
-        base.extend(captured(&own));
-        let report = match login_path(&shell, &base).await {
-            Some(report) => report,
+        let mut probe_env = base_env(&own, &shell);
+        probe_env.extend(captured(&own));
+        let fallback = own
+            .get("PATH")
+            .cloned()
+            .unwrap_or_else(|| FALLBACK_PATH.to_owned());
+        Self::probed(shell, probe_env, fallback, PATH_PROBE_TIMEOUT).await
+    }
+
+    /// Asks `shell` for its `PATH`, each mode bounded by `timeout`; without an answer `fallback` stands in.
+    async fn probed(
+        shell: PathBuf,
+        probe_env: BTreeMap<String, String>,
+        fallback: String,
+        timeout: Duration,
+    ) -> Self {
+        match login_path_within(&shell, &probe_env, timeout).await {
+            Some(report) => Self::from_report(shell, probe_env, report, true),
             None => {
-                let path = own
-                    .get("PATH")
-                    .cloned()
-                    .unwrap_or_else(|| FALLBACK_PATH.to_owned());
-                tracing::warn!(shell = %shell.display(), %path, "the login shell reported no PATH; using plyd's PATH and variables");
-                ShellReport {
-                    path,
+                tracing::warn!(shell = %shell.display(), path = %fallback, "the login shell reported no PATH; using plyd's PATH and variables until it answers");
+                let report = ShellReport {
+                    path: fallback,
                     vars: BTreeMap::new(),
-                }
+                };
+                Self::from_report(shell, probe_env, report, false)
             }
-        };
+        }
+    }
+
+    /// Asks the shell once more with `timeout` per mode; `None` when it still does not answer.
+    async fn ask_again(&self, timeout: Duration) -> Option<Self> {
+        let report = login_path_within(&self.shell, &self.probe_env, timeout).await?;
+        Some(Self::from_report(
+            self.shell.clone(),
+            self.probe_env.clone(),
+            report,
+            true,
+        ))
+    }
+
+    fn from_report(
+        shell: PathBuf,
+        probe_env: BTreeMap<String, String>,
+        report: ShellReport,
+        from_shell: bool,
+    ) -> Self {
         tracing::info!(variables = ?report.vars.keys().collect::<Vec<_>>(), "variables taken from the login shell");
+        let mut base = probe_env.clone();
         base.extend(report.vars);
         base.insert("PATH".to_owned(), report.path);
-        Self { shell, base }
+        Self {
+            shell,
+            base,
+            from_shell,
+            probe_env,
+        }
     }
 
     /// The login `PATH`.
@@ -138,6 +188,61 @@ impl LoginEnv {
     /// The first executable file named `name` on the login `PATH`; `None` when there is none (`cli_not_found`).
     pub fn which(&self, name: &str) -> Option<PathBuf> {
         which_in(self.path(), name)
+    }
+}
+
+/// The login environment children start with: the one resolved at startup, replaced once a late probe answers.
+#[derive(Debug)]
+pub struct Login {
+    env: watch::Sender<Arc<LoginEnv>>,
+    late_probe: Mutex<Option<Instant>>,
+    late_timeout: Duration,
+}
+
+impl Login {
+    /// Holds `env`; a late probe, when one is needed, waits [`LATE_PROBE_TIMEOUT`] per mode.
+    pub fn new(env: LoginEnv) -> Self {
+        Self::with_late_timeout(env, LATE_PROBE_TIMEOUT)
+    }
+
+    fn with_late_timeout(env: LoginEnv, late_timeout: Duration) -> Self {
+        Self {
+            env: watch::Sender::new(Arc::new(env)),
+            late_probe: Mutex::new(None),
+            late_timeout,
+        }
+    }
+
+    /// The environment as known now; never waits.
+    pub fn get(&self) -> Arc<LoginEnv> {
+        Arc::clone(&self.env.borrow())
+    }
+
+    /// The environment once the shell has answered or missed a late probe (at most one per [`LATE_PROBE_INTERVAL`], shared by concurrent callers); waits up to twice [`LATE_PROBE_TIMEOUT`], never fails.
+    pub async fn settled(&self) -> Arc<LoginEnv> {
+        let current = self.get();
+        if current.from_shell {
+            return current;
+        }
+        let mut missed = self.late_probe.lock().await;
+        let current = self.get();
+        if current.from_shell || missed.is_some_and(|at| at.elapsed() < LATE_PROBE_INTERVAL) {
+            return current;
+        }
+        match current.ask_again(self.late_timeout).await {
+            Some(env) => {
+                tracing::info!(path = %env.path(), "the login shell answered a later probe; children start with its PATH from now on");
+                let env = Arc::new(env);
+                self.env.send_replace(Arc::clone(&env));
+                *missed = None;
+                env
+            }
+            None => {
+                tracing::warn!(shell = %current.shell.display(), "the login shell did not answer the later probe either; keeping plyd's PATH");
+                *missed = Some(Instant::now());
+                current
+            }
+        }
     }
 }
 
@@ -215,10 +320,6 @@ async fn login_shell(own: &BTreeMap<String, String>) -> PathBuf {
         "no login shell found in $SHELL, dscl or id"
     );
     PathBuf::from(FALLBACK_SHELL)
-}
-
-async fn login_path(shell: &Path, base: &BTreeMap<String, String>) -> Option<ShellReport> {
-    login_path_within(shell, base, PATH_PROBE_TIMEOUT).await
 }
 
 async fn login_path_within(
@@ -437,6 +538,39 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn a_late_answer_replaces_the_fallback_for_every_later_launch() {
+        let body = format!(
+            "n=$(cat \"$HOME/slow\" 2>/dev/null || echo 0)\nif [ \"$n\" -gt 0 ]; then echo $((n - 1)) > \"$HOME/slow\"; exec sleep 30; fi\nPATH=/example/late:/bin\nexport PATH\n{RUN_LAST_ARG}"
+        );
+        let (shell, base) = fake_shell("late", &body);
+        std::fs::write(Path::new(&base["HOME"]).join("slow"), "2").unwrap();
+        let fallback = "/usr/bin:/bin".to_owned();
+        let env = LoginEnv::probed(shell, base, fallback, Duration::from_millis(300)).await;
+        assert!(!env.from_shell, "both startup probes hung");
+        assert_eq!(env.path(), "/usr/bin:/bin");
+        let login = Login::with_late_timeout(env, Duration::from_secs(5));
+        let settled = login.settled().await;
+        assert!(settled.from_shell);
+        assert_eq!(settled.path(), "/example/late:/bin");
+        assert_eq!(login.get().path(), "/example/late:/bin");
+    }
+
+    #[tokio::test]
+    async fn a_missed_late_probe_is_not_repeated_within_the_interval() {
+        let (shell, base) = fake_shell("mute", "exec sleep 30");
+        let fallback = "/usr/bin:/bin".to_owned();
+        let env = LoginEnv::probed(shell, base, fallback, Duration::from_millis(200)).await;
+        let login = Login::with_late_timeout(env, Duration::from_millis(200));
+        assert!(!login.settled().await.from_shell);
+        let started = Instant::now();
+        assert_eq!(login.settled().await.path(), "/usr/bin:/bin");
+        assert!(
+            started.elapsed() < Duration::from_millis(200),
+            "no second probe within LATE_PROBE_INTERVAL"
+        );
+    }
+
     #[test]
     fn the_path_is_read_between_the_markers() {
         let out = format!("motd\n{PATH_BEGIN}/a:/b{PATH_END}\ntrailing");
@@ -463,7 +597,10 @@ mod tests {
             )]),
             Path::new("/bin/sh"),
         );
-        let path = login_path(Path::new("/bin/sh"), &base).await.unwrap().path;
+        let path = login_path_within(Path::new("/bin/sh"), &base, PATH_PROBE_TIMEOUT)
+            .await
+            .unwrap()
+            .path;
         assert!(path.split(':').any(|d| d == "/bin"), "{path}");
     }
 }

@@ -25,7 +25,7 @@ use tokio::sync::{broadcast, watch};
 use crate::config::Config;
 use crate::db::Db;
 use crate::error::{Result, io};
-use crate::login::LoginEnv;
+use crate::login::{Login, LoginEnv};
 use crate::panes::launch;
 use crate::panes::pane::PaneCmd;
 use crate::panes::registry::Registry;
@@ -70,7 +70,7 @@ pub struct Shared {
     /// Resolved paths.
     pub paths: Paths,
     /// Login shell and base environment of children.
-    pub login: LoginEnv,
+    pub login: Login,
     /// `ply-hook`, passed to agent launch specs.
     pub hook_program: PathBuf,
     /// C1 event broadcast.
@@ -220,7 +220,7 @@ pub async fn run(options: Options) -> Result<()> {
     let (shutdown, _) = watch::channel(None);
     let shared = Arc::new(Shared {
         paths,
-        login,
+        login: Login::new(login),
         hook_program: options.hook_program,
         events,
         palette: watch::Sender::new(palette),
@@ -245,6 +245,10 @@ pub async fn run(options: Options) -> Result<()> {
         hooks = %shared.paths.hook_socket().display(),
         "plyd is serving"
     );
+    if !shared.login.get().from_shell {
+        let shared = Arc::clone(&shared);
+        tokio::spawn(async move { shared.login.settled().await });
+    }
     tokio::spawn(launch::reopen_lost(Arc::clone(&shared)));
     tokio::spawn(crate::branch::watch_heads(Arc::clone(&shared)));
     let control_task = tokio::spawn(control::serve(control_listener, Arc::clone(&shared)));

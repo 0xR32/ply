@@ -70,9 +70,9 @@ pub async fn create(shared: &Arc<Shared>, p: PaneCreateParams) -> MethodResult<P
         ));
     }
     let palette = wait_palette(shared, None).await?;
-    let program = resolve_program(shared, None, p.cli)?;
+    let program = resolve_program(shared, None, p.cli).await?;
     let settings = shared.registry().settings();
-    let title = default_title(p.cli, &shared.login.shell);
+    let title = default_title(p.cli, &shared.login.get().shell);
     let status = initial_status(p.cli);
     let new = NewPane {
         workspace_id: p.workspace_id,
@@ -254,7 +254,7 @@ async fn relaunch(
         .filter(|_| stored.cli != Cli::Shell);
     let spec = match session {
         Some(session) => {
-            let program = resolve_program(shared, Some(pane_id), stored.cli)?;
+            let program = resolve_program(shared, Some(pane_id), stored.cli).await?;
             let options = LaunchOptions {
                 program: &program,
                 cwd: Path::new(&stored.cwd),
@@ -277,8 +277,9 @@ async fn relaunch(
                         format!("{} no longer exists", pane.cwd),
                     )
                 })?;
+            let login = shared.login.get();
             let options = LaunchOptions {
-                program: &shared.login.shell,
+                program: &login.shell,
                 cwd,
                 settings: &settings,
                 worktree: None,
@@ -290,7 +291,7 @@ async fn relaunch(
     };
     if spec.cli != pane.cli {
         tracing::info!(pane_id, from = ?pane.cli, "no session id to resume; reopening the pane as a shell");
-        let title = default_title(spec.cli, &shared.login.shell);
+        let title = default_title(spec.cli, &shared.login.get().shell);
         shared
             .registry()
             .set_cli(pane_id, spec.cli, &title, unix_now());
@@ -341,7 +342,7 @@ pub fn restore(shared: &Arc<Shared>) {
             PaneSeed {
                 id: pane.id,
                 cli: pane.cli,
-                default_title: default_title(pane.cli, &shared.login.shell),
+                default_title: default_title(pane.cli, &shared.login.get().shell),
                 engine,
                 geometry,
                 launch: None,
@@ -438,22 +439,30 @@ fn agent_cli(cli: Cli) -> Option<AgentCli> {
     }
 }
 
-/// The program for `cli` from the login PATH, version-checked; `pane_id` is the pane being resumed, if any, for the log.
-fn resolve_program(shared: &Shared, pane_id: Option<PaneId>, cli: Cli) -> MethodResult<PathBuf> {
+/// The program for `cli` from the login PATH once the shell has had its late probe ([`crate::login::Login::settled`]), version-checked; `pane_id` is the pane being resumed, if any, for the log.
+async fn resolve_program(
+    shared: &Shared,
+    pane_id: Option<PaneId>,
+    cli: Cli,
+) -> MethodResult<PathBuf> {
     let Some(agent) = agent_cli(cli) else {
-        return Ok(shared.login.shell.clone());
+        return Ok(shared.login.get().shell.clone());
     };
     let name = ply_agents::cli_name(agent);
-    let Some(program) = shared.login.which(name) else {
+    let login = shared.login.settled().await;
+    let Some(program) = login.which(name) else {
         tracing::warn!(
             ?pane_id,
             cli = name,
+            from_shell = login.from_shell,
             "the CLI is not on the login shell's PATH"
         );
-        return Err(refuse(
-            ErrorCode::CliNotFound,
-            format!("{name} is not on the login shell's PATH"),
-        ));
+        let msg = if login.from_shell {
+            format!("{name} is not on the login shell's PATH")
+        } else {
+            format!("{name} is not on plyd's PATH, and the login shell has not reported its own")
+        };
+        return Err(refuse(ErrorCode::CliNotFound, msg));
     };
     let adapter = adapter(agent);
     match adapter.installed_version(&program) {
@@ -517,7 +526,7 @@ fn build_launch(
         Some(agent) => {
             let hook_socket = shared.paths.hook_socket();
             let status_line = match agent {
-                AgentCli::Claude => user_status_line(pane_id, o.cwd, &shared.login.base),
+                AgentCli::Claude => user_status_line(pane_id, o.cwd, &shared.login.get().base),
                 AgentCli::Codex => None,
             };
             let request = LaunchRequest {
@@ -654,7 +663,7 @@ fn spawn(
     spec: &LaunchSpec,
     geometry: Geometry,
 ) -> MethodResult<Started> {
-    let env = shared.login.env_for(&spec.env);
+    let env = shared.login.get().env_for(&spec.env);
     let request = SpawnSpec {
         pane_id,
         argv: &spec.argv,

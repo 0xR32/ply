@@ -182,12 +182,13 @@ fn canonical(path: &Path) -> PathBuf {
 
 /// The trimmed output of one git run in `cwd`, `None` when it fails, times out or prints nothing.
 async fn git(shared: &Shared, pane_id: PaneId, cwd: &str, args: &[&str]) -> Option<String> {
-    let git = shared.login.which("git")?;
+    let login = shared.login.get();
+    let git = login.which("git")?;
     let mut cmd = Command::new(&git);
     cmd.args(args)
         .current_dir(cwd)
         .env_clear()
-        .envs(&shared.login.base)
+        .envs(&login.base)
         .env("GIT_OPTIONAL_LOCKS", "0")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())

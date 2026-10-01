@@ -413,7 +413,7 @@ fn codex_tailer(
     pane_id: PaneId,
     spec: &LaunchSpec,
 ) -> Option<(Tailer, mpsc::Receiver<TailMsg>)> {
-    let env = shared.login.env_for(&spec.env);
+    let env = shared.login.get().env_for(&spec.env);
     let codex_home = env.get("CODEX_HOME").map(PathBuf::from).or_else(|| {
         env.get("HOME")
             .map(|home| PathBuf::from(home).join(".codex"))

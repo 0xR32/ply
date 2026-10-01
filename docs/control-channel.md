@@ -208,7 +208,9 @@ In order, plyd:
    queries before its child's first byte (`invalid_state` "send theme.set
    first" when none comes);
 4. resolves the program: the login shell for `shell`, else `claude` or `codex`
-   on the login shell's `PATH` (`cli_not_found`), and reads the CLI's version
+   on the login shell's `PATH` (`cli_not_found`), first waiting up to 60 s for
+   a late answer when the shell did not report its `PATH` at startup
+   (`docs/agents.md`), and reads the CLI's version
    from its install layout without running it (`cli_too_old` below the minimum;
    an unknown version is logged and allowed; `docs/agents.md`);
 5. records the pane (`not_found` for an unknown workspace or a `tab_id` outside
