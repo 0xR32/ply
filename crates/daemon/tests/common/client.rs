@@ -24,8 +24,13 @@ pub struct Control {
 }
 
 impl Control {
-    /// Connects and completes `hello`/`welcome`.
+    /// Connects and completes `hello`/`welcome` as `ply-cli`.
     pub fn connect(path: &Path) -> io::Result<Self> {
+        Self::connect_as(path, "ply-cli")
+    }
+
+    /// [`Control::connect`] with another client name in `hello` (`ply-app` is the app).
+    pub fn connect_as(path: &Path, client: &str) -> io::Result<Self> {
         let stream = UnixStream::connect(path)?;
         let mut c = Self {
             reader: BufReader::new(stream.try_clone()?),
@@ -34,7 +39,7 @@ impl Control {
             next_id: 1,
             events: VecDeque::new(),
         };
-        c.send_line(&json!({"t":"hello","v":1,"client":"ply-cli","app_version":"0.1.0"}))?;
+        c.send_line(&json!({"t":"hello","v":1,"client":client,"app_version":"0.1.0"}))?;
         match c.read_msg(Duration::from_secs(10))? {
             Some(ServerMsg::Welcome(_)) => Ok(c),
             other => Err(io::Error::other(format!("expected welcome, got {other:?}"))),

@@ -68,7 +68,9 @@ below 2^53, so a JavaScript number holds them. Times are Unix seconds, UTC.
 
 1. The client sends `hello` as its first line: `v` is the protocol version it
    speaks, `client` its name (`"ply-app"` for the app) and `app_version` its
-   build version.
+   build version. A `ply-app` connection also moves the agent panes at rest
+   onto their CLI's update (`docs/agents.md`, **A CLI updated under its
+   panes**).
 2. If `v` equals plyd's `PROTOCOL_VERSION` (1, `crates/proto/src/version.rs`),
    plyd answers `welcome` with its own `v` and `daemon_version`, its build id
    `<package version>+<commit>`: the first 12 hex digits of the checkout's

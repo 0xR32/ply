@@ -34,6 +34,9 @@ use crate::usage::UsageSources;
 /// Responses queued towards one connection's writer.
 pub const RESPONSE_CAPACITY: usize = 64;
 
+/// The `hello.client` of the app, whose connection moves idle agent panes to their CLI's update ([`launch::reload_updated`]).
+pub const APP_CLIENT: &str = "ply-app";
+
 /// Accepts C1 connections until the task is aborted.
 pub async fn serve(listener: UnixListener, shared: Arc<Shared>) {
     loop {
@@ -95,6 +98,9 @@ async fn connection(stream: UnixStream, shared: Arc<Shared>) {
         return;
     }
     tracing::debug!(conn, client = %hello.client, version = %hello.app_version, "C1 client connected");
+    if hello.client == APP_CLIENT {
+        tokio::spawn(launch::reload_updated(Arc::clone(&shared)));
+    }
     let (tx, rx) = mpsc::channel(RESPONSE_CAPACITY);
     let writer = tokio::spawn(write_loop(wr, rx, events, conn));
     loop {

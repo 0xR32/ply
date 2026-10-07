@@ -81,6 +81,10 @@ pub enum PaneCmd {
     SetOptionAsMeta(OptionAsMeta),
     /// SIGHUP to the process group, SIGKILL after [`KILL_GRACE`] (Ruling R7).
     Kill,
+    /// Stop an agent process at rest ([`Agent::may_reload`]) for a relaunch onto its CLI's update: the pane turns
+    /// `starting`, and `stopped` is answered once the process exited and the terminal was reset, with no exit reported.
+    /// A busy pane drops `stopped` at once; one closed meanwhile drops it at the exit, which it reports as usual.
+    Reload(oneshot::Sender<()>),
     /// The process about to be spawned from this spec (`pane.resume`): prepares the agent integration for it.
     Launch(Box<LaunchSpec>),
     /// The spawn prepared by [`PaneCmd::Launch`] failed; the prepared agent integration is dropped.
@@ -187,6 +191,7 @@ pub fn spawn_task(shared: Arc<Shared>, seed: PaneSeed) -> mpsc::Sender<PaneCmd> 
         exit_grace: None,
         kill_at: None,
         kill_pending: false,
+        reloading: None,
         writes: WriteQueue::default(),
         cadence: Cadence::default(),
         sync: SyncHold::default(),
@@ -274,6 +279,7 @@ struct PaneTask {
     exit_grace: Option<Instant>,
     kill_at: Option<Instant>,
     kill_pending: bool,
+    reloading: Option<oneshot::Sender<()>>,
     writes: WriteQueue,
     cadence: Cadence,
     sync: SyncHold,
@@ -565,6 +571,7 @@ impl PaneTask {
             }
             PaneCmd::SetOptionAsMeta(option) => self.engine.set_option_as_meta(option),
             PaneCmd::Kill => self.kill(now),
+            PaneCmd::Reload(stopped) => self.reload(stopped, now),
             PaneCmd::Launch(spec) => self.prepare(&spec),
             PaneCmd::LaunchFailed => {
                 self.agent = None;
@@ -583,6 +590,55 @@ impl PaneTask {
                 }
             },
             PaneCmd::Stop => self.stop = true,
+        }
+    }
+
+    fn reload(&mut self, stopped: oneshot::Sender<()>, now: Instant) {
+        let at_rest = self.process.is_some()
+            && self.exit_code.is_none()
+            && self.reloading.is_none()
+            && self
+                .agent
+                .as_ref()
+                .is_some_and(|a| a.may_reload(&self.shared, now));
+        if !at_rest {
+            tracing::info!(
+                pane_id = self.id,
+                "the pane is busy or has no session to resume; its process stays on the CLI version it runs"
+            );
+            return;
+        }
+        if let Some(mut agent) = self.agent.take() {
+            agent.exit(&self.shared, now);
+        }
+        tracing::info!(
+            pane_id = self.id,
+            "stopping the pane's process to resume it on its CLI's update"
+        );
+        self.shared.set_status(self.id, PaneStatus::Starting, None);
+        self.reloading = Some(stopped);
+        self.kill(now);
+    }
+
+    /// The reloading process exited: what is left of its group is killed, its pty dropped and the terminal reset (RIS), so the resumed CLI starts as on a new terminal.
+    fn finish_reload(&mut self, stopped: oneshot::Sender<()>, now: Instant) {
+        if self.kill_at.take().is_some() {
+            self.kill_group();
+        }
+        self.process = None;
+        self.output = None;
+        self.input = None;
+        self.writes.clear();
+        self.exit_code = None;
+        let out = self.engine.write(b"\x1bc");
+        self.on_effects(out);
+        self.after_change(now);
+        self.publish(now);
+        if stopped.send(()).is_err() {
+            tracing::warn!(
+                pane_id = self.id,
+                "nobody waits to resume the reloaded pane; it stays starting"
+            );
         }
     }
 
@@ -1028,6 +1084,13 @@ impl PaneTask {
         while let Some(Ok(chunk)) = self.output.as_mut().map(mpsc::Receiver::try_recv) {
             let out = self.engine.write(&chunk);
             self.on_effects(out);
+        }
+        if let Some(stopped) = self.reloading.take()
+            && !self.shared.registry().closes_on_exit(self.id)
+        {
+            tracing::info!(pane_id = self.id, code, "the reloading process exited");
+            self.finish_reload(stopped, now);
+            return;
         }
         self.after_change(now);
         self.publish(now);

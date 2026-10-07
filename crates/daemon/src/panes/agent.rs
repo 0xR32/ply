@@ -59,6 +59,7 @@ pub struct Agent {
     turn_wait: Option<Instant>,
     tailer: Option<Tailer>,
     tail: Option<mpsc::Receiver<TailMsg>>,
+    conversation: Option<String>,
 }
 
 impl std::fmt::Debug for Agent {
@@ -97,6 +98,7 @@ impl Agent {
             turn_wait: None,
             tailer,
             tail,
+            conversation: spec.resume.clone(),
         }
     }
 
@@ -140,6 +142,20 @@ impl Agent {
             self.machine.status(),
             self.machine.detail().map(str::to_owned),
         )
+    }
+
+    /// Whether the process can be stopped and its session resumed without losing a turn, a dialog, a queued task or the
+    /// user's unsent typing ([`Dispatch::at_rest`]), and the pane's session is one the CLI can resume: this process took
+    /// a prompt in it or was launched to resume it (a session without a prompt has nothing saved to resume).
+    pub fn may_reload(&self, shared: &Shared, now: Instant) -> bool {
+        let session = shared
+            .registry()
+            .entry(self.pane_id)
+            .and_then(|e| e.pane.session_ref.clone());
+        self.machine.status() == PaneStatus::Idle
+            && self.dispatch.at_rest(now)
+            && session.is_some()
+            && session == self.conversation
     }
 
     /// A C3 envelope for this pane (hook or notify); any hook also counts as activity for the quiet timer.
@@ -366,6 +382,12 @@ impl Agent {
             acknowledges: self.adapter.acknowledges_prompt(signal),
             shows_prompt: self.adapter.shows_prompt(signal),
         };
+        if sense.acknowledges {
+            self.conversation = shared
+                .registry()
+                .entry(self.pane_id)
+                .and_then(|e| e.pane.session_ref.clone());
+        }
         let before = self.machine.status();
         match self.machine.apply(signal) {
             Step::To { status, detail } => {

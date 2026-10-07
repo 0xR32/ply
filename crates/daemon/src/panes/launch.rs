@@ -21,7 +21,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use ply_agents::{LAUNCH_FILE, LaunchRequest, LaunchSpec, adapter};
+use ply_agents::{CliVersion, LAUNCH_FILE, LaunchRequest, LaunchSpec, adapter};
 use ply_proto::control::{ErrorCode, PaneCreateParams};
 use ply_proto::pane::{AgentCli, Cli, Pane, PaneId, PaneStatus, Settings};
 use ply_term::{Engine, Palette};
@@ -70,7 +70,7 @@ pub async fn create(shared: &Arc<Shared>, p: PaneCreateParams) -> MethodResult<P
         ));
     }
     let palette = wait_palette(shared, None).await?;
-    let program = resolve_program(shared, None, p.cli).await?;
+    let (program, version) = resolve_program(shared, None, p.cli).await?;
     let settings = shared.registry().settings();
     let title = default_title(p.cli, &shared.login.get().shell);
     let status = initial_status(p.cli);
@@ -121,6 +121,7 @@ pub async fn create(shared: &Arc<Shared>, p: PaneCreateParams) -> MethodResult<P
     }
     let pane = {
         let mut reg = shared.registry();
+        reg.set_cli_version(pane.id, version);
         reg.announce(pane.id, handle);
         reg.entry(pane.id).map_or(pane, |e| e.pane.clone())
     };
@@ -199,9 +200,20 @@ pub async fn resume(shared: &Arc<Shared>, pane_id: PaneId) -> MethodResult<Pane>
         .begin_resume(pane_id, PaneStatus::Starting, unix_now())?;
     tracing::info!(pane_id, session = ?pane.session_ref, "resuming the pane");
     let resumed = relaunch(shared, &pane, &handle).await;
-    let close = shared
-        .registry()
-        .end_resume(pane_id, resumed.is_ok(), unix_now());
+    end_relaunch(shared, pane_id, &handle, resumed.is_ok()).await;
+    resumed?;
+    let reg = shared.registry();
+    Ok(reg.entry(pane_id).map_or(pane, |e| e.pane.clone()))
+}
+
+/// Ends a `pane.resume` or a reload (see [`Registry::end_resume`](crate::panes::registry::Registry::end_resume)), closing a pane whose close waited for a process that did not start.
+async fn end_relaunch(
+    shared: &Shared,
+    pane_id: PaneId,
+    handle: &mpsc::Sender<PaneCmd>,
+    started: bool,
+) {
+    let close = shared.registry().end_resume(pane_id, started, unix_now());
     if close {
         tracing::info!(
             pane_id,
@@ -221,9 +233,87 @@ pub async fn resume(shared: &Arc<Shared>, pane_id: PaneId) -> MethodResult<Pane>
         }
     }
     shared.update_power();
-    resumed?;
-    let reg = shared.registry();
-    Ok(reg.entry(pane_id).map_or(pane, |e| e.pane.clone()))
+}
+
+/// When the app connects: moves each agent pane whose process runs another version of its CLI than the install on the
+/// login `PATH` now names onto that version, through the CLI's resume, if the pane is at rest and has a session id. A
+/// busy pane keeps its process until a later connection; a version unknown or below the minimum reloads nothing.
+pub async fn reload_updated(shared: Arc<Shared>) {
+    let panes: Vec<(PaneId, AgentCli, CliVersion)> = {
+        let reg = shared.registry();
+        reg.live_panes()
+            .into_iter()
+            .filter_map(|id| {
+                let entry = reg.entry(id)?;
+                let cli = agent_cli(entry.pane.cli)?;
+                let at_rest = entry.pane.status == PaneStatus::Idle
+                    && entry.pane.session_ref.is_some()
+                    && !entry.resuming;
+                if !at_rest {
+                    return None;
+                }
+                Some((id, cli, entry.cli_version.clone()?))
+            })
+            .collect()
+    };
+    let mut installed = Vec::new();
+    for cli in [AgentCli::Claude, AgentCli::Codex] {
+        if panes.iter().any(|&(_, c, _)| c == cli)
+            && let Some(version) = installed_version(&shared, cli).await
+        {
+            installed.push((cli, version));
+        }
+    }
+    for (pane_id, cli, running) in panes {
+        let Some((_, update)) = installed.iter().find(|&&(c, _)| c == cli) else {
+            continue;
+        };
+        if *update == running {
+            continue;
+        }
+        let update = update.clone();
+        let shared = Arc::clone(&shared);
+        tokio::spawn(async move {
+            match reload(&shared, pane_id).await {
+                Ok(true) => {
+                    tracing::info!(pane_id, from = %running, to = %update, "resumed the pane on its CLI's update");
+                }
+                Ok(false) => {
+                    tracing::info!(pane_id, from = %running, to = %update, "the pane was busy; it moves to its CLI's update at a later app start");
+                }
+                Err(e) => {
+                    tracing::warn!(pane_id, from = %running, to = %update, error = %e.msg, "cannot move the pane to its CLI's update");
+                }
+            }
+        });
+    }
+}
+
+/// Stops the pane's process at rest and resumes its session in the same pane and terminal; `Ok(false)` when the pane
+/// was busy or closed instead. Fails like `pane.resume` once the process stopped, leaving the pane `lost`.
+async fn reload(shared: &Arc<Shared>, pane_id: PaneId) -> MethodResult<bool> {
+    if shared.is_stopping() {
+        return Err(refuse(ErrorCode::ShuttingDown, "plyd is shutting down"));
+    }
+    let handle = {
+        let mut reg = shared.registry();
+        let handle = reg.require(pane_id)?.handle.clone();
+        let Some(handle) = handle else {
+            return Err(refuse(ErrorCode::InvalidState, "the pane has no task"));
+        };
+        reg.begin_reload(pane_id)?;
+        handle
+    };
+    let (stopped, exited) = oneshot::channel();
+    let asked = handle.send(PaneCmd::Reload(stopped)).await.is_ok();
+    if !asked || exited.await.is_err() {
+        shared.registry().end_resume(pane_id, true, unix_now());
+        return Ok(false);
+    }
+    let pane = shared.registry().require(pane_id)?.pane.clone();
+    let resumed = relaunch(shared, &pane, &handle).await;
+    end_relaunch(shared, pane_id, &handle, resumed.is_ok()).await;
+    resumed.map(|()| true)
 }
 
 async fn relaunch(
@@ -252,9 +342,9 @@ async fn relaunch(
         .session_ref
         .as_deref()
         .filter(|_| stored.cli != Cli::Shell);
-    let spec = match session {
+    let (spec, version) = match session {
         Some(session) => {
-            let program = resolve_program(shared, Some(pane_id), stored.cli).await?;
+            let (program, version) = resolve_program(shared, Some(pane_id), stored.cli).await?;
             let options = LaunchOptions {
                 program: &program,
                 cwd: Path::new(&stored.cwd),
@@ -263,7 +353,10 @@ async fn relaunch(
                 resume: Some(session),
                 prompt: None,
             };
-            build_launch(shared, pane_id, stored.cli, &options)?
+            (
+                build_launch(shared, pane_id, stored.cli, &options)?,
+                version,
+            )
         }
         None => {
             let cwd = [pane.cwd.as_str(), stored.cwd.as_str()]
@@ -286,7 +379,7 @@ async fn relaunch(
                 resume: None,
                 prompt: None,
             };
-            build_launch(shared, pane_id, Cli::Shell, &options)?
+            (build_launch(shared, pane_id, Cli::Shell, &options)?, None)
         }
     };
     if spec.cli != pane.cli {
@@ -311,6 +404,7 @@ async fn relaunch(
         }
         return Err(e);
     }
+    shared.registry().set_cli_version(pane_id, version);
     Ok(())
 }
 
@@ -439,14 +533,14 @@ fn agent_cli(cli: Cli) -> Option<AgentCli> {
     }
 }
 
-/// The program for `cli` from the login PATH once the shell has had its late probe ([`crate::login::Login::settled`]), version-checked; `pane_id` is the pane being resumed, if any, for the log.
+/// The program for `cli` from the login PATH once the shell has had its late probe ([`crate::login::Login::settled`]), version-checked, with the version when its install names one; `pane_id` is the pane being resumed, if any, for the log.
 async fn resolve_program(
     shared: &Shared,
     pane_id: Option<PaneId>,
     cli: Cli,
-) -> MethodResult<PathBuf> {
+) -> MethodResult<(PathBuf, Option<CliVersion>)> {
     let Some(agent) = agent_cli(cli) else {
-        return Ok(shared.login.get().shell.clone());
+        return Ok((shared.login.get().shell.clone(), None));
     };
     let name = ply_agents::cli_name(agent);
     let login = shared.login.settled().await;
@@ -472,12 +566,33 @@ async fn resolve_program(
                 return Err(refuse(ErrorCode::CliTooOld, e.to_string()));
             }
             tracing::debug!(?pane_id, cli = name, %version, "CLI version accepted");
+            Ok((program, Some(version)))
         }
         Err(e) => {
             tracing::warn!(?pane_id, cli = name, program = %program.display(), error = %e, "CLI version unknown; launching anyway");
+            Ok((program, None))
         }
     }
-    Ok(program)
+}
+
+/// The version of `cli` a launch would run now, when the login PATH has it, its install names a version and that version is supported.
+async fn installed_version(shared: &Shared, cli: AgentCli) -> Option<CliVersion> {
+    let name = ply_agents::cli_name(cli);
+    let program = shared.login.settled().await.which(name)?;
+    let adapter = adapter(cli);
+    match adapter.installed_version(&program) {
+        Ok(version) => match adapter.check_version(&version) {
+            Ok(()) => Some(version),
+            Err(e) => {
+                tracing::warn!(cli = name, %version, error = %e, "the installed CLI is below the supported minimum; no pane moves to it");
+                None
+            }
+        },
+        Err(e) => {
+            tracing::debug!(cli = name, program = %program.display(), error = %e, "the installed CLI's version is unknown; no pane moves to it");
+            None
+        }
+    }
 }
 
 fn default_title(cli: Cli, shell: &Path) -> String {

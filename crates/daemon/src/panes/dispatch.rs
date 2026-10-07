@@ -148,6 +148,12 @@ impl Dispatch {
         self.live && !self.typed()
     }
 
+    /// Whether the process can stop without losing anything: the pane settled `idle` (as before typing a task), no task
+    /// in flight or forced, and nothing of the user's in its input.
+    pub fn at_rest(&self, now: Instant) -> bool {
+        self.settled_at().is_some_and(|at| at <= now) && !self.typed && self.force.is_none()
+    }
+
     /// The pane's queue changed: look at it again once the pane is settled.
     pub fn nudge(&mut self, now: Instant) -> Vec<Action> {
         self.check = true;
@@ -521,6 +527,31 @@ mod tests {
             [Action::Check],
             "settled already: asked at once"
         );
+    }
+
+    #[test]
+    fn a_pane_is_at_rest_once_settled_with_nothing_typed_or_in_flight() {
+        let t0 = Instant::now();
+        let mut d = live(t0);
+        assert!(!d.at_rest(at(t0, 999)), "not yet settled");
+        assert!(d.at_rest(at(t0, 1000)));
+        d.on_user_input(b"draft", at(t0, 2000));
+        assert!(!d.at_rest(at(t0, 9000)), "the user's unsent typing");
+        d.on_user_input(b"\x15", at(t0, 9000));
+        assert!(!d.at_rest(at(t0, 9999)), "quiet after the user's last key");
+        assert!(d.at_rest(at(t0, 10_000)), "Ctrl+U cleared the input");
+        d.on_signal(
+            &StatusSignal::PromptSubmitted,
+            ack(),
+            PaneStatus::Running,
+            at(t0, 11_000),
+        );
+        assert!(!d.at_rest(at(t0, 20_000)), "a turn runs");
+
+        let (mut d, t) = ready(7);
+        assert!(!d.at_rest(t), "a task is being typed");
+        d.taken(7, Some("task".to_owned()), false, t);
+        assert!(!d.at_rest(at(t0, 60_000)));
     }
 
     #[test]

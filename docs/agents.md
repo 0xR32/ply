@@ -816,6 +816,39 @@ and a "Resume <pane>" palette command. The screen is not restored: plyd does
 not keep screens across its own restarts, so a resumed pane starts on an empty
 terminal and the CLI repaints it.
 
+## A CLI updated under its panes
+
+Claude Code and Codex update themselves (or Homebrew or npm updates them) while
+their panes run, and a running process stays on the version it started with.
+plyd records the version of every agent process it starts, read from the
+install as for the version check (a pane whose version is unknown is never
+moved). When the app connects (a `hello` with `client` `ply-app`, so at every
+start of the app; `reload_updated` in `crates/daemon/src/panes/launch.rs`), plyd
+reads the version the CLI on the login `PATH` names now and moves each agent
+pane whose process runs another one onto it, when the pane is at rest:
+
+- `idle` for the settle time (1 s) and past the quiet time after the user's last
+  key, as before typing a queued task;
+- none of the user's unsent typing in its input (Ctrl+C, Ctrl+U or a submitted
+  prompt clear it, as for a queued task);
+- no queued task being typed or running; and
+- a session its CLI can resume: one the process took a prompt in (Claude Code's
+  UserPromptSubmit, Codex's `task_started`) or was launched to resume. A new
+  pane, or one after `/clear` or `/new`, has a session id but nothing saved
+  for `--resume` to load yet, so it stays.
+
+The pane's task stops the process as `pane.close {kill:true}` does (SIGHUP,
+SIGKILL after 2 s), the pane turns `starting` with no `pane.exit` and no EXIT
+frame, the terminal is reset (RIS), and plyd relaunches it as `pane.resume`
+does: `claude --resume <session_ref>` or `codex resume <session_ref>`, in the
+stored directory and with the stored worktree option. Queued tasks stay queued
+for the resumed process. A pane that is running, waiting for the user, starting
+or holding typing keeps its process and moves at a later start of the app; a new
+version that is unknown or below the minimum moves no pane. A relaunch that
+fails leaves the pane `lost` for `pane.resume`, and a `pane.close {kill:true}`
+during the reload closes it. Other clients' connections (`ply-cli`, the tests)
+move nothing.
+
 ## Tests
 
 - `crates/agents/tests/launch.rs`: the exact argv, environment and settings file
@@ -873,6 +906,13 @@ terminal and the CLI repaints it.
   Codex pane lost mid-turn resuming `idle` with its plan and no replayed turn,
   and F3 (closed sessions keep status, times, exit codes and session ids across
   app and plyd restarts).
+- `crates/daemon/tests/update.rs`: a fake Claude Code updated as its native
+  installer does and a fake Codex updated in place, moved onto the new version
+  with their session resumed when the app connects (not another client), a
+  running pane left until a later connection, a view attached across the reload
+  seeing the reset terminal and no exit, unsent typing keeping a pane on its
+  old version until Ctrl+U clears it, and a session without a prompt (a new
+  pane, one after `/clear`) staying.
 - `crates/daemon/tests/lifecycle.rs`:
   `an_agent_pane_runs_the_cli_from_the_login_path_with_its_launch_spec` (a fake
   `claude` on the login `PATH` gets the adapter's argv, environment and files)

@@ -106,7 +106,7 @@ crates/daemon/src
 ├── panes/           registry.rs (workspaces, tabs, panes, mirrored to SQLite) · pane.rs (one task per pane:
 │                    the only owner of its Engine, pty channels and attached clients) · agent.rs (one agent
 │                    process's session, status machine, progress limit, tailer and task dispatch) · state.rs (the
-│                    spec 6.3 machine) · launch.rs (create, resume, restore) · queue.rs (the task queue's state,
+│                    spec 6.3 machine) · launch.rs (create, resume, restore, the move onto a CLI's update) · queue.rs (the task queue's state,
 │                    R60) · dispatch.rs (when a queued task is typed and how it is followed) · mod.rs
 ├── tail.rs          C4: finding and tailing a Codex pane's rollout
 ├── usage.rs         usage.get: Claude panes' status line reports, else the CLIs' own files, bounded, cached 5 s

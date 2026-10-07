@@ -13,7 +13,7 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
 
-use ply_agents::SessionMeta;
+use ply_agents::{CliVersion, SessionMeta};
 use ply_proto::control::{
     ErrorBody, ErrorCode, Event, PaneExit, PaneMeta, PaneProgress, PaneRemoved, PaneStatusChanged,
     TaskAddParams,
@@ -70,8 +70,10 @@ pub struct PaneEntry {
     pub close_on_exit: bool,
     /// Clients know the pane: it was announced with `pane.added` or restored at startup; `pane.list` shows only these.
     pub announced: bool,
-    /// A `pane.resume` is relaunching the pane's process; a second one is refused.
+    /// A `pane.resume` or a reload onto the CLI's update is relaunching the pane's process; a second one is refused.
     pub resuming: bool,
+    /// The CLI version the pane's process was launched with, when its install named one; `None` for a shell.
+    pub cli_version: Option<CliVersion>,
     /// The last worktree the CLI reported, which the stored session record keeps after the live label cleared.
     pub recorded_worktree: Option<String>,
 }
@@ -197,6 +199,7 @@ impl Registry {
                     close_on_exit: false,
                     announced: true,
                     resuming: false,
+                    cli_version: None,
                 },
             );
         }
@@ -454,6 +457,7 @@ impl Registry {
                 close_on_exit: false,
                 announced: false,
                 resuming: false,
+                cli_version: None,
                 recorded_worktree: None,
             },
         );
@@ -518,7 +522,36 @@ impl Registry {
         Ok(entry.pane.clone())
     }
 
-    /// Ends a `pane.resume`; a failed one is `lost` again, and `true` means a `pane.close {kill:true}` during it wants the pane closed now (no process will exit to close it).
+    /// Starts reloading the `idle` pane `id` onto its CLI's update: marks it resuming, so `pane.resume` and a second reload are refused until [`Registry::end_resume`].
+    /// Fails with `not_found`, or `invalid_state` when the pane is not idle, is resuming or is closing.
+    pub fn begin_reload(&mut self, id: PaneId) -> MethodResult<()> {
+        let entry = self
+            .panes
+            .get_mut(&id)
+            .ok_or_else(|| refuse(ErrorCode::NotFound, format!("no pane {id}")))?;
+        if entry.resuming || entry.close_on_exit || entry.pane.status != PaneStatus::Idle {
+            return Err(refuse(
+                ErrorCode::InvalidState,
+                "the pane is not idle, or is resuming or closing",
+            ));
+        }
+        entry.resuming = true;
+        Ok(())
+    }
+
+    /// Records the CLI version of the process the pane just started (see [`PaneEntry::cli_version`]).
+    pub fn set_cli_version(&mut self, id: PaneId, version: Option<CliVersion>) {
+        if let Some(entry) = self.panes.get_mut(&id) {
+            entry.cli_version = version;
+        }
+    }
+
+    /// Whether a `pane.close {kill:true}` waits for the pane's process to exit.
+    pub fn closes_on_exit(&self, id: PaneId) -> bool {
+        self.panes.get(&id).is_some_and(|e| e.close_on_exit)
+    }
+
+    /// Ends a `pane.resume` or a reload; a failed one is `lost` again, and `true` means a `pane.close {kill:true}` during it wants the pane closed now (no process will exit to close it).
     pub fn end_resume(&mut self, id: PaneId, started: bool, now: UnixSeconds) -> bool {
         let Some(entry) = self.panes.get_mut(&id) else {
             return false;
