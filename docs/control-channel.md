@@ -87,9 +87,11 @@ below 2^53, so a JavaScript number holds them. Times are Unix seconds, UTC.
 The rule is equality, not "at least". Version 1 is frozen; a change to any
 message bumps it, with three exceptions whose mismatch is already loud:
 `pane.answer`'s R55 field, which `deny_unknown_fields` turns into `bad_request`
-(see there); the `usage.get` method (Ruling R59); and the task queue and skill
+(see there); the `usage.get` method (Ruling R59); the task queue and skill
 list (Rulings R60 and R61: the `task.*`, `queue.pause` and `skill.list` methods
-and the `task.changed` and `queue.changed` events). A plyd from before answers
+and the `task.changed` and `queue.changed` events); and the Claude account
+switch (the `account.list` and `account.switch` methods and the
+`account.changed` event). A plyd from before answers
 the new methods `unknown_method`, and an app from before ignores events it does
 not know. The client checks `welcome.v` the same way.
 
@@ -162,10 +164,13 @@ the results are made of are under **Records**.
 | `task.send` | `{task_id}` | `{}` |
 | `queue.pause` | `{pane_id, paused}` | `{}` |
 | `skill.list` | `{cli, cwd}` | `SkillList` |
+| `account.list` | `{}` | `ClaudeAccounts` |
+| `account.switch` | `{workspace_id, account?}` | `Pane` |
 
 The implementations are `crates/daemon/src/server/control.rs` (`dispatch`),
 `crates/daemon/src/panes/launch.rs`, `crates/daemon/src/panes/registry.rs`,
-`crates/daemon/src/usage.rs` and `crates/daemon/src/skills.rs`.
+`crates/daemon/src/usage.rs`, `crates/daemon/src/skills.rs` and
+`crates/daemon/src/accounts.rs`.
 
 ### `workspace.list`
 
@@ -441,6 +446,33 @@ preinstalled `.system` skills, `~/.agents/skills` and `$CODEX_HOME/prompts`.
 and logged, never an error; an answer is reused for 10 s. `docs/agents.md`
 (**Skills**) has the layouts and the limits.
 
+### The Claude account switch: `account.list` and `account.switch`
+
+**`account.list`** runs `claude auth status --json` (the login `PATH`'s
+`claude`, at most 10 s, 64 KiB read) and answers which claude.ai account Claude
+Code is signed in to, `current` (absent when signed out or signed in with an API
+key or a cloud provider), with every account plyd saw signed in, `known`, the
+most recently signed in to first, and `signing_in`, the pane of a switch under
+way. The current account joins `known` when it is new. `cli_not_found` without
+`claude`, `internal` when the command fails or prints something unreadable.
+
+**`account.switch`** opens a new tab named `Claude sign-in` in the workspace,
+its one pane running `claude auth login --claudeai`, with `--email <email>` when
+`account` names one, in the workspace's directory, and returns that pane (a
+`shell` pane in every other way; it is announced with `pane.added` like any
+other). The user finishes Claude's own sign-in there; ply holds no credential.
+When the process exits, plyd reads `claude auth status` again and sends
+`account.changed`: a sign-in to another account than before closes the pane and
+has every live Claude pane restart on the new one once it is at rest
+(`docs/agents.md`, **Switching the Claude account**); the same account closes
+the pane and restarts nothing; a failed sign-in leaves the pane `exited` with
+what `claude auth login` printed. Closing the pane first (`pane.close
+{kill:true}`) cancels the switch. One switch runs at a time: another
+`account.switch` meanwhile is `invalid_state`. `bad_request` for an email
+`claude auth login` cannot take (empty, over 254 bytes, whitespace or control
+characters, no `@`, a leading `-`); `not_found`, `cli_not_found`,
+`spawn_failed` and `shutting_down` as for `pane.create`.
+
 ## Events
 
 ```
@@ -463,6 +495,7 @@ is connected is dropped; a client learns the current state from `pane.list`,
 | `daemon.stopping` | `{kill_panes}` | plyd is about to exit; `kill_panes` says whether the processes are being stopped too. |
 | `task.changed` | a `Task` | A task was added, changed state, moved or was taken by a pane from its pool: the whole record. |
 | `queue.changed` | a `QueueState` | A pane's queue was paused, resumed, blocked or unblocked. |
+| `account.changed` | `{pane_id, outcome, account?, panes}` | An `account.switch` ended. `outcome` is `signed_in` (to the account asked for, or any when none was), `other_account` (signed in, but to another email or organization than asked), `unchanged` (the account signed in before), `failed` or `cancelled`; `account` is the sign-in now, when known; `panes` counts the Claude panes that restart on it, 0 unless the account changed. After `signed_in`, `other_account` and `unchanged` the sign-in pane's `pane.removed` comes first. |
 
 `pane.status` values are `starting`, `idle`, `running`, `waiting_permission`,
 `waiting_input`, `exited` and `lost`; `docs/agents.md` has the machine behind
@@ -576,6 +609,14 @@ plugin?}`: `invocation` is what the user types to run it (`/name`,
 
 **`SkillList`** — `{skills}`, project first, then user, plugin, system and
 prompt, each invocation once.
+
+**`ClaudeAccount`** — `{email, org_id?, org_name?, plan?}`, as `claude auth
+status` reports a claude.ai sign-in (`email`, `orgId`, `orgName`,
+`subscriptionType`). `plan` is `free`, `pro` or `max` for a personal account,
+`team` or `enterprise` for an organization's; one email in two organizations is
+two accounts, told apart by `org_id`. No credential is part of it.
+
+**`ClaudeAccounts`** — `{current?, known, signing_in?}`: see `account.list`.
 
 **`TerminalTheme`** (the `palette` of `theme.set`) — camelCase keys, colours as
 `"#RRGGBB"` strings (either case read, upper case written):

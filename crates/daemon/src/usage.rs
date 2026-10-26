@@ -330,6 +330,12 @@ impl UsageCache {
         }
     }
 
+    /// Drops Claude Code's status line numbers and the last file reading, which belong to the account signed in before a switch.
+    pub async fn forget_claude(&self) {
+        self.status_lines.lock().await.clear();
+        *self.last.lock().await = None;
+    }
+
     async fn newest_status_line(&self) -> Option<CliUsage> {
         let reports = self.status_lines.lock().await;
         reports.values().max_by_key(|r| r.since).map(|r| CliUsage {

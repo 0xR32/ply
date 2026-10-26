@@ -1,6 +1,9 @@
 import { baseFontSize, fontSizeRange } from '../theme/tokens';
 import type {
+  AccountChanged,
   Action,
+  ClaudeAccount,
+  ClaudeAccounts,
   CommandId,
   ConnectionState,
   Event,
@@ -19,13 +22,16 @@ import type {
   Workspace,
 } from './actions';
 import {
+  ACCOUNT_QUERY,
   abbreviateHome,
+  accountLabel,
   FULL_TAB_NOTICE,
   isAlive,
   isTabFull,
   nextWaitingPane,
   type PaneDirection,
   paneNeighbour,
+  SIGN_IN_TAB,
   selectActiveTab,
   selectFocusedPane,
   tabName,
@@ -105,6 +111,17 @@ export interface SkillsView {
   error: string | null;
 }
 
+/** Claude Code's sign-ins as plyd reports them, for the palette's account switch. */
+export interface AccountsView {
+  /** False until `account.list` answered, and when plyd predates it or cannot run `claude`. */
+  available: boolean;
+  current: ClaudeAccount | null;
+  /** The accounts seen signed in, the most recently signed in to first. */
+  known: readonly ClaudeAccount[];
+  /** The pane `claude auth login` runs in while a switch waits for it. */
+  signingIn: number | null;
+}
+
 /** Progress of the dispatch form's submit: pending while `task.add` runs, `error` after a failure. */
 export interface DispatchStatus {
   pending: boolean;
@@ -132,6 +149,7 @@ export interface AppState {
   tasks: TaskQueueView;
   skills: SkillsView;
   taskForm: DispatchStatus;
+  accounts: AccountsView;
   reducedMotion: boolean;
   env: Environment;
 }
@@ -166,6 +184,7 @@ export function initialState(env: Environment): AppState {
     tasks: { available: false, tasks: {}, queues: {} },
     skills: { key: null, list: [], loading: false, error: null },
     taskForm: { pending: false, error: null },
+    accounts: { available: false, current: null, known: [], signingIn: null },
     reducedMotion: false,
     env,
   };
@@ -345,7 +364,53 @@ function applyEvent(state: AppState, event: Event): AppState {
       return upsertTask(state, event.p);
     case 'queue.changed':
       return setQueue(state, event.p);
+    case 'account.changed':
+      return accountChanged(state, event.p);
   }
+}
+
+function loadAccounts(state: AppState, accounts: ClaudeAccounts | null): AppState {
+  if (!accounts) return { ...state, accounts: { ...state.accounts, available: false } };
+  return {
+    ...state,
+    accounts: {
+      available: true,
+      current: accounts.current ?? null,
+      known: accounts.known,
+      signingIn: accounts.signing_in ?? null,
+    },
+  };
+}
+
+function restarting(panes: number): string {
+  if (panes === 0) return '';
+  return ` · ${panes} Claude ${panes === 1 ? 'pane restarts' : 'panes restart'} on it once idle`;
+}
+
+/** What the status bar says when a switch ends. */
+export function accountNotice(change: AccountChanged): string {
+  const label = change.account ? accountLabel(change.account) : 'another account';
+  switch (change.outcome) {
+    case 'signed_in':
+      return `Signed in to Claude as ${label}${restarting(change.panes)}`;
+    case 'other_account':
+      return `Signed in to Claude as ${label}, not the account picked${restarting(change.panes)}`;
+    case 'unchanged':
+      return `Still signed in to Claude as ${label}`;
+    case 'failed':
+      return 'The Claude sign-in did not finish; its tab shows why';
+    case 'cancelled':
+      return 'The Claude sign-in was closed before it finished';
+  }
+}
+
+function accountChanged(state: AppState, change: AccountChanged): AppState {
+  const accounts: AccountsView = {
+    ...state.accounts,
+    signingIn: null,
+    current: change.account ?? state.accounts.current,
+  };
+  return showNotice({ ...state, accounts }, accountNotice(change));
 }
 
 function isFinished(task: Task): boolean {
@@ -533,6 +598,17 @@ function runCommand(state: AppState, id: CommandId): AppState {
       return state.usage.shown ? state : { ...state, usage: { ...state.usage, shown: true } };
     case 'task.dispatch':
       return openDispatch(state);
+    case 'account.switch': {
+      const { available, signingIn } = state.accounts;
+      if (signingIn !== null && state.panes[signingIn]) return focusPane(state, signingIn);
+      if (!available) {
+        return showNotice(
+          state,
+          'The Claude account switch needs claude auth status, which plyd could not run',
+        );
+      }
+      return { ...state, overlay: { kind: 'palette', query: ACCOUNT_QUERY } };
+    }
     case 'task.queue':
       return { ...state, overlay: { kind: 'queue' } };
     default: {
@@ -683,6 +759,16 @@ function reduceAction(state: AppState, action: Action): AppState {
       return state.skills.key === action.key
         ? { ...state, skills: { ...state.skills, loading: false, error: action.message } }
         : state;
+    case 'accounts/loaded':
+      return loadAccounts(state, action.accounts);
+    case 'account/switch':
+      return state;
+    case 'account/opened': {
+      const tabs = state.tabs.map((t) =>
+        t.pane_ids.includes(action.paneId) ? { ...t, name: SIGN_IN_TAB } : t,
+      );
+      return { ...state, tabs, accounts: { ...state.accounts, signingIn: action.paneId } };
+    }
     case 'env/buildId': {
       if ((state.env.buildId ?? null) === action.value) return state;
       const { buildId: _old, ...env } = state.env;

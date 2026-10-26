@@ -24,6 +24,7 @@ use tokio::net::unix::OwnedWriteHalf;
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::{broadcast, mpsc};
 
+use crate::accounts;
 use crate::daemon::{Shared, unix_now};
 use crate::panes::launch;
 use crate::panes::pane::PaneCmd;
@@ -388,6 +389,8 @@ async fn dispatch(shared: &Arc<Shared>, call: Call) -> Result<Value, ErrorBody> 
             nudge(shared, Some(p.pane_id)).await;
             ok(&Empty {})
         }
+        Call::AccountList(Empty {}) => ok(&accounts::list(shared).await?),
+        Call::AccountSwitch(p) => ok(&accounts::switch(shared, p).await?),
     }
 }
 

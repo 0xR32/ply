@@ -54,14 +54,24 @@ function largeFontState() {
     ],
     [{ id: 1, name: 'ply' }],
   );
-  return { ...state, settings: { ...state.settings, font_size: fontSizeRange.max } };
+  const account = {
+    email: 'someone.with.a.long.name@example.com',
+    org_id: 'org-b',
+    org_name: 'Example Team With A Long Name',
+    plan: 'team',
+  };
+  return {
+    ...state,
+    settings: { ...state.settings, font_size: fontSizeRange.max },
+    accounts: { available: true, current: account, known: [account], signingIn: null },
+  };
 }
 
 const HEADER_ITEMS = ['focus', 'progress-bar', 'progress', 'cli', 'status'];
 
 describe.if(hasNativeTestRenderer)('the chrome at the largest font size', () => {
   for (const width of [1440, 1100, 720]) {
-    test(`at ${width} px the pane headers drop items instead of overlapping, and the status gives way to the search field`, async () => {
+    test(`at ${width} px the pane headers drop items instead of overlapping, and the status and the account give way to the search field`, async () => {
       const store = createStore(largeFontState());
       const root = createTestRoot({ width, height: 900, ...windowKeyListeners(store) });
       root.render(<App store={store} />);
@@ -84,9 +94,11 @@ describe.if(hasNativeTestRenderer)('the chrome at the largest font size', () => 
           expect(right).toBeLessThanOrEqual(header.x + header.width + 0.5);
         }
         const status = box(renderer, 'statusbar');
+        const account = box(renderer, 'account-chip');
         const search = box(renderer, 'palette-button');
-        if (!status || !search) throw new Error('the top bar did not paint');
-        expect(status.x + status.width).toBeLessThanOrEqual(search.x + 0.5);
+        if (!status || !account || !search) throw new Error('the top bar did not paint');
+        expect(status.x + status.width).toBeLessThanOrEqual(account.x + 0.5);
+        expect(account.x + account.width).toBeLessThanOrEqual(search.x + 0.5);
       } finally {
         root.unmount();
       }

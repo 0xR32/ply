@@ -23,7 +23,9 @@ rewrites a prompt or picks a model; everything it knows about a session comes
 from the CLI's own hooks, notify payloads, OSC 9 notifications and Codex's
 rollout files, and the plan usage ⌘U shows is what the CLIs last reported:
 Claude Code's status line payload in any Claude pane, else what the CLIs
-recorded on disk (`usage.get`).
+recorded on disk (`usage.get`). Switching the Claude account runs Claude
+Code's own `claude auth login` in a pane and restarts the Claude panes on the
+new sign-in; ply keeps only the accounts' emails and organizations.
 
 ## Three boundaries
 
@@ -31,10 +33,11 @@ recorded on disk (`usage.get`).
 line, `#[serde(deny_unknown_fields)]` on every struct, `PROTOCOL_VERSION = 1`
 checked at `hello`. Requests carry an id and a method (`workspace.*`, `pane.*`,
 `session.list`, `theme.set`, `layout.*`, `settings.*`, `daemon.shutdown`,
-`usage.get`, and the task queue's `task.*`, `queue.pause` and `skill.list`);
-plyd broadcasts events (`pane.added`, `pane.removed`, `pane.status`,
-`pane.progress`, `pane.meta`, `pane.exit`, `daemon.stopping`, `task.changed`,
-`queue.changed`) to every client.
+`usage.get`, the task queue's `task.*`, `queue.pause` and `skill.list`, and
+the Claude account switch's `account.*`); plyd broadcasts events (`pane.added`,
+`pane.removed`, `pane.status`, `pane.progress`, `pane.meta`, `pane.exit`,
+`daemon.stopping`, `task.changed`, `queue.changed`, `account.changed`) to every
+client.
 The Rust types in `crates/proto/src/control.rs` and `pane.rs` are the single
 source; `bun run gen` writes `app/src/ipc/proto.gen.ts` from them with ts-rs, and
 `check-rules` fails when that file is stale. C1 carries no pty bytes (INV-2).
@@ -88,7 +91,8 @@ crates/term/src      (feature `engine` = plyd only)
 crates/agents/src
 ├── adapter.rs       Adapter and AgentSession: launch specs and signals, the contract plyd drives
 ├── claude/          mod.rs (launch, hook payloads → signals) · settings.rs (the hooks-only --settings file) ·
-│                    progress.rs (TodoWrite and Task tools) · usage.rs (status line rate limits, the .claude.json cache)
+│                    progress.rs (TodoWrite and Task tools) · usage.rs (status line rate limits, the .claude.json cache) ·
+│                    account.rs (`claude auth status` and `claude auth login` argv, the status parser)
 ├── codex/           mod.rs (launch, -c overrides, thread binding) · notify.rs · osc9.rs (classification) ·
 │                    rollout.rs (records, update_plan, discovery) · literal.rs (code-mode JS literals) ·
 │                    usage.rs (token_count rate limits)
@@ -111,6 +115,7 @@ crates/daemon/src
 ├── tail.rs          C4: finding and tailing a Codex pane's rollout
 ├── usage.rs         usage.get: Claude panes' status line reports, else the CLIs' own files, bounded, cached 5 s
 ├── skills.rs        skill.list: the folders each CLI reads its skills from, bounded, read-only, cached 10 s
+├── accounts.rs      account.list / account.switch: `claude auth status`, the sign-in pane, the restart on a new sign-in
 ├── osc.rs · branch.rs   OSC 7/9 and typed input; the git branch label
 ├── publisher.rs     the C2 delivery rules as small clocked state machines
 ├── pty.rs           rustix pty + Command, setsid/TIOCSCTTY in the one audited pre_exec block
@@ -183,7 +188,7 @@ that `daemon-launcher.ts` finds its plyd beside the app's own executable in
 ## Layering rules
 
 - No ply crate depends on `gpui`; the UI is plain GPUIX + React
-  (`checkInv3NoGpui`). GPUIX is used exactly as released at 0.10.0, with no
+  (`checkInv3NoGpui`). GPUIX is used exactly as released at 0.11.0, with no
   patches, overrides or local builds (`checkInv13Gpuix`).
 - libghostty-vt is linked only by plyd: `ghostty-sys` is reached through
   ply-term's `engine` feature, and only ply-daemon enables it

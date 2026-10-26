@@ -21,9 +21,9 @@ map. `docs/` has one document per subject (see the doc map below).
 
 | | |
 |---|---|
-| the app | `app/` — Bun + React on GPUIX (`@gpuix/react` and `@gpuix/native` 0.10.0 from npm, used as released). `app/src/main.tsx` is the entry, `app/src/theme/tokens.ts` the only palette |
+| the app | `app/` — Bun + React on GPUIX (`@gpuix/react` and `@gpuix/native` 0.11.0 from npm, used as released). `app/src/main.tsx` is the entry, `app/src/theme/tokens.ts` the only palette |
 | the terminal view | `app/src/terminal/` (C2 codec, replica, runs, input, selection) and `app/src/features/panes/terminal-view.tsx` |
-| the daemon | `crates/daemon` (`plyd`): ptys, one libghostty-vt terminal per pane, the C1 and C2 servers, SQLite, the LaunchAgent, the task queue and its dispatch (`panes/queue.rs`, `panes/dispatch.rs`), `skill.list`, `usage.get` (Claude panes' status line reports and the CLIs' own usage records, read-only) |
+| the daemon | `crates/daemon` (`plyd`): ptys, one libghostty-vt terminal per pane, the C1 and C2 servers, SQLite, the LaunchAgent, the task queue and its dispatch (`panes/queue.rs`, `panes/dispatch.rs`), `skill.list`, `usage.get` (Claude panes' status line reports and the CLIs' own usage records, read-only), the Claude account switch (`accounts.rs`) |
 | the terminal engine | `crates/term` (`ply-term`) over `crates/ghostty-sys`, whose `build.rs` downloads pristine ghostty 44f2a44 (SHA-256-verified) and builds libghostty-vt from it with Zig |
 | the agent adapters | `crates/agents` (`ply-agents`): launch specs, the Claude hooks file, hook/notify/OSC 9/rollout parsing, progress, the version check, the plan-usage parsers, skill discovery (`skills.rs`, read-only) |
 | the hook helper | `crates/hook` (`ply-hook`): one hook or notify payload → one C3 line to plyd; as `ply-hook statusline`, Claude Code's status line in a pane |
@@ -41,7 +41,7 @@ fields and the app never opens a pty (`checkInv2NoPtyBytes`).
 **No network, no GPUI, GPUIX as released.** No `fetch`, `WebSocket`,
 `XMLHttpRequest` or remote `<img>` in `app/` (`checkInv1NoNetwork`); no ply crate
 depends on `gpui` or an HTTP client (`checkInv3NoGpui`, `cargo deny`);
-`@gpuix/*` are pinned exactly at 0.10.0 with no patches, overrides or local
+`@gpuix/*` are pinned exactly at 0.11.0 with no patches, overrides or local
 builds (`checkInv13Gpuix`). Solve UI problems with GPUIX's public API; never
 patch or fork a dependency or drop to GPUI in Rust.
 
@@ -127,8 +127,11 @@ permission-skipping flags to `claude` or `codex`.
 
 **GPUIX owns ⌘Q, ⌘H, ⌥⌘H, ⌘M and ⌘W.** Its app menu binds them and they never
 reach the app: ⌘W closes the window (sessions keep running). Close pane is
-⌘⇧W. GPUIX binds neither Tab nor ⇧Tab, so both reach the terminal; JS key
-handlers cannot stop propagation.
+⌘⇧W. GPUIX moves focus on Tab and ⇧Tab and dims every focusable element but
+the focused one by default; ply turns both off (`WINDOW_KEY_DEFAULTS` in
+`keymap/dispatcher.ts`, which `windowKeyListeners` and `mountWithStore` pass to
+every `render()` and `createTestRoot()`), so Tab and ⇧Tab reach the terminal and
+the forms step their own fields.
 
 **AppKit sends no key-up for a key released while ⌘ is down**, and GPUIX
 reports no modifier change. A binding that must notice a release (the ⌘U hold)
@@ -140,7 +143,12 @@ release, so a clickable a file may land on takes `onFileDrop` itself (the ⌘E
 form, the needs-you strip). GPUI hovers nothing while the last input was a key
 and a drop does not end that, so a drop right after typing reaches no element;
 a test that presses a key first must move the mouse (`nativeSimulateMouseMove`)
-before `nativeSimulateFileDrop` (`docs/terminal.md`, **Dropped files**).
+by 8 px or more, which GPUIX 0.11 needs to end keyboard mode, before
+`nativeSimulateFileDrop` (`docs/terminal.md`, **Dropped files**).
+
+**GPUIX reports the border box.** `getElementBounds` is the element's border
+box, and a scroll container's bounds stay put while its rows move with its
+scroll offset (`palette.tsx`, `skill-list.tsx`).
 
 **GPUIX is not the DOM.** Every `<text>` needs an explicit `color` (text does not
 inherit it); `div` is block until `display: "flex"`; a shrinking flex child needs
@@ -152,7 +160,7 @@ are each placed absolutely at `round(col × cell width)` (`terminal-row.tsx`,
 since 22e57db), and rows are memoized and keyed by content. Every host node
 costs about 0.01 ms per frame.
 
-**Fonts.** GPUIX has no font-loading API, so Geist and Geist Mono
+**Fonts.** ply loads no font file (GPUIX 0.11's `registerFont` is unused), so Geist and Geist Mono
 (`app/assets/fonts/`) are used only when installed in `~/Library/Fonts`
 (`just fonts` copies them there; the owner runs it); otherwise the app falls
 back to Menlo and the system font.
@@ -266,6 +274,7 @@ GPUIX's test renderer (`@gpuix/react/testing`) and the mock daemon
 - GPUIX (React on Zed's GPUI) — npm `@gpuix/react` / `@gpuix/native`, source at remorses/gpuix.
 - libghostty-vt — ghostty-org/ghostty at 44f2a44, downloaded pristine by `crates/ghostty-sys/build.rs` into
   `~/Library/Caches/ply/ghostty/`.
-- `claude` and `codex` — the user's own installs, found on the login-shell `PATH`; ply never installs,
-  updates or signs them in.
+- `claude` and `codex` — the user's own installs, found on the login-shell `PATH`; ply never installs or
+  updates them, and never signs them in itself: an account switch runs Claude Code's own `claude auth login`
+  in a pane for the user to complete (`crates/daemon/src/accounts.rs`).
 - The design canvas (visual reference) and the published specification are claude.ai artifacts, not files here.

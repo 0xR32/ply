@@ -9,8 +9,9 @@
 //! [`TURN_START_WAIT`] the pane is `idle` again, and meanwhile the tailer looks for a thread `/new` may have started
 //! (R49). It also owns the pane's [`Dispatch`] (Ruling R60): every signal and status goes through it, it asks the
 //! registry for the queue's head and records a typed task's progress there, and it leaves the paste and the Enter it
-//! decides on in [`Agent::take_writes`] for the pane task, which owns the terminal. It runs entirely on the pane task,
-//! one event at a time.
+//! decides on in [`Agent::take_writes`] for the pane task, which owns the terminal. A reload asked for by an account
+//! switch ([`Agent::want_reload`]) holds the queue back until the pane task carries it out at rest. It runs entirely on
+//! the pane task, one event at a time.
 
 use std::collections::VecDeque;
 use std::path::PathBuf;
@@ -60,6 +61,7 @@ pub struct Agent {
     tailer: Option<Tailer>,
     tail: Option<mpsc::Receiver<TailMsg>>,
     conversation: Option<String>,
+    reload_wanted: bool,
 }
 
 impl std::fmt::Debug for Agent {
@@ -99,6 +101,7 @@ impl Agent {
             tailer,
             tail,
             conversation: spec.resume.clone(),
+            reload_wanted: false,
         }
     }
 
@@ -148,14 +151,36 @@ impl Agent {
     /// user's unsent typing ([`Dispatch::at_rest`]), and the pane's session is one the CLI can resume: this process took
     /// a prompt in it or was launched to resume it (a session without a prompt has nothing saved to resume).
     pub fn may_reload(&self, shared: &Shared, now: Instant) -> bool {
+        self.machine.status() == PaneStatus::Idle
+            && self.dispatch.at_rest(now)
+            && self.resumable(shared)
+    }
+
+    /// Whether the pane's session is one the CLI can resume: this process took a prompt in it or was launched to resume it.
+    pub fn resumable(&self, shared: &Shared) -> bool {
         let session = shared
             .registry()
             .entry(self.pane_id)
             .and_then(|e| e.pane.session_ref.clone());
-        self.machine.status() == PaneStatus::Idle
+        session.is_some() && session == self.conversation
+    }
+
+    /// Asks for the process to be stopped and relaunched once at rest, whatever its session; queued tasks wait for the relaunched one.
+    pub fn want_reload(&mut self) {
+        self.reload_wanted = true;
+    }
+
+    /// Whether the reload [`Agent::want_reload`] asked for may run now: `idle`, settled, nothing typed or in flight.
+    pub fn reload_due(&self, now: Instant) -> bool {
+        self.reload_wanted
+            && self.machine.status() == PaneStatus::Idle
             && self.dispatch.at_rest(now)
-            && session.is_some()
-            && session == self.conversation
+    }
+
+    /// Gives up the wanted reload (it could not start), letting the queue's next task through again.
+    pub fn drop_reload(&mut self, shared: &Arc<Shared>, now: Instant) {
+        self.reload_wanted = false;
+        self.nudge(shared, now);
     }
 
     /// A C3 envelope for this pane (hook or notify); any hook also counts as activity for the quiet timer.
@@ -219,7 +244,7 @@ impl Agent {
         std::mem::take(&mut self.writes)
     }
 
-    /// The next moment [`Agent::on_tick`] has work: the quiet timeout of a running Claude pane, a Codex turn wait, a held progress value or the dispatch's next step.
+    /// The next moment [`Agent::on_tick`] has work: the quiet timeout of a running Claude pane, a Codex turn wait, a held progress value, the dispatch's next step or the rest a wanted reload waits for.
     pub fn deadline(&self) -> Option<Instant> {
         let quiet = self.quiet_deadline();
         [
@@ -227,6 +252,9 @@ impl Agent {
             self.turn_wait,
             self.progress.due(),
             self.dispatch.deadline(),
+            self.reload_wanted
+                .then(|| self.dispatch.rest_at())
+                .flatten(),
         ]
         .into_iter()
         .flatten()
@@ -330,6 +358,12 @@ impl Agent {
         let mut queue: VecDeque<Action> = actions.into();
         while let Some(action) = queue.pop_front() {
             match action {
+                Action::Check if self.reload_wanted => {
+                    tracing::debug!(
+                        pane_id = self.pane_id,
+                        "the queue waits for the pane's reload"
+                    );
+                }
                 Action::Check => {
                     let claim_pool = self.dispatch.may_claim();
                     let head = shared.registry().next_task(self.pane_id, claim_pool);

@@ -47,6 +47,7 @@ const SPEC_7_2: CommandId[] = [
   'usage.show',
   'task.dispatch',
   'task.queue',
+  'account.switch',
 ];
 
 function key(

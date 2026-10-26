@@ -22,6 +22,7 @@ use tokio::net::UnixListener;
 use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::{broadcast, watch};
 
+use crate::accounts::Accounts;
 use crate::config::Config;
 use crate::db::Db;
 use crate::error::{Result, io};
@@ -83,6 +84,8 @@ pub struct Shared {
     pub skills: SkillCache,
     /// The git `HEAD` of each pane, watched for branch switches.
     pub heads: crate::branch::HeadWatches,
+    /// The Claude accounts seen signed in and the account switch under way.
+    pub accounts: Accounts,
     registry: Mutex<Registry>,
     geometry: Mutex<Geometry>,
     power: KeepAwake,
@@ -218,6 +221,7 @@ pub async fn run(options: Options) -> Result<()> {
         unix_now(),
     )?;
     let (shutdown, _) = watch::channel(None);
+    let accounts = Accounts::load(&paths.accounts());
     let shared = Arc::new(Shared {
         paths,
         login: Login::new(login),
@@ -227,6 +231,7 @@ pub async fn run(options: Options) -> Result<()> {
         usage: UsageCache::default(),
         skills: SkillCache::default(),
         heads: crate::branch::HeadWatches::default(),
+        accounts,
         registry: Mutex::new(registry),
         geometry: Mutex::new(DEFAULT_GEOMETRY),
         power: KeepAwake::new(options.keep_awake),

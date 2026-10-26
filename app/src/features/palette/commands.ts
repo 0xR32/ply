@@ -3,6 +3,8 @@ import type { Action, CommandId } from '../../state/actions';
 import type { AppState } from '../../state/reducer';
 import {
   abbreviateHome,
+  accountKind,
+  accountLabel,
   FULL_TAB_NOTICE,
   isLost,
   isTabFull,
@@ -12,6 +14,7 @@ import {
   panePlace,
   paneTitle,
   resumeHow,
+  sameAccount,
   selectActiveTab,
   selectFocusedPane,
   selectForeignDaemon,
@@ -125,6 +128,7 @@ function commands(state: AppState): PaletteItem[] {
       'dim',
     ),
     ...taskItems(state),
+    ...accountItems(state),
     command('settings.open', 'Settings', 'accent, ⌥ as Meta, keep awake', 'dim'),
     command('font.up', 'Bigger text', `${state.settings.font_size} pt now`, 'dim'),
     command('font.down', 'Smaller text', `${state.settings.font_size} pt now`, 'dim'),
@@ -177,6 +181,49 @@ function taskItems(state: AppState): PaletteItem[] {
       });
     }
   }
+  return items;
+}
+
+/** Claude Code's sign-in: back to an account seen before (personal and Team ones apart), or another, through `claude auth login` in a tab of its own. */
+function accountItems(state: AppState): PaletteItem[] {
+  const { available, current, known, signingIn } = state.accounts;
+  if (!available) return [];
+  if (signingIn !== null) {
+    const place = panePlace(state, signingIn);
+    return [
+      {
+        id: 'account-signing-in',
+        section: 'Commands',
+        label: 'Go to the Claude sign-in',
+        hint: `${place ? `tab ${place.tab} · ` : ''}the account switch waits for the browser`,
+        keys: commandKeyLabel('account.switch'),
+        dot: 'amber',
+        actions: [{ type: 'overlay/close' }, { type: 'pane/focus', paneId: signingIn }],
+      },
+    ];
+  }
+  const items = known
+    .filter((account) => !current || !sameAccount(account, current))
+    .map(
+      (account): PaletteItem => ({
+        id: `account-switch-${account.email}-${account.org_id ?? ''}`,
+        section: 'Commands',
+        label: `Switch Claude account to ${account.email}`,
+        hint: `${accountKind(account)} · signs in, then Claude panes restart on it`,
+        keys: '',
+        dot: 'accent',
+        actions: [{ type: 'overlay/close' }, { type: 'account/switch', account }],
+      }),
+    );
+  items.push({
+    id: 'account-sign-in',
+    section: 'Commands',
+    label: 'Sign in to another Claude account',
+    hint: `${current ? `now ${accountLabel(current)}` : 'signed out now'} · claude auth login in a new tab`,
+    keys: '',
+    dot: 'dim',
+    actions: [{ type: 'overlay/close' }, { type: 'account/switch' }],
+  });
   return items;
 }
 

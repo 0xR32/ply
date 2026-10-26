@@ -151,7 +151,13 @@ impl Dispatch {
     /// Whether the process can stop without losing anything: the pane settled `idle` (as before typing a task), no task
     /// in flight or forced, and nothing of the user's in its input.
     pub fn at_rest(&self, now: Instant) -> bool {
-        self.settled_at().is_some_and(|at| at <= now) && !self.typed && self.force.is_none()
+        self.rest_at().is_some_and(|at| at <= now)
+    }
+
+    /// When [`Dispatch::at_rest`] turns true if nothing else happens; `None` while the pane is not idle, a task is in flight or forced, or the user's typing is in its input.
+    pub fn rest_at(&self) -> Option<Instant> {
+        self.settled_at()
+            .filter(|_| !self.typed && self.force.is_none())
     }
 
     /// The pane's queue changed: look at it again once the pane is settled.

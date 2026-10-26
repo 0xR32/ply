@@ -96,6 +96,11 @@ impl Paths {
         self.data_dir.join("config.toml")
     }
 
+    /// The Claude accounts an account switch offers (`account.list`): emails and organizations, never a credential.
+    pub fn accounts(&self) -> PathBuf {
+        self.data_dir.join("accounts.json")
+    }
+
     /// The single-instance lock; it sits beside the database, the resource two plyds must never share.
     pub fn lock(&self) -> PathBuf {
         self.data_dir.join("plyd.lock")

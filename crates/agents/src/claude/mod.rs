@@ -1,5 +1,6 @@
 //! Claude Code adapter (spec 6.1, ADR-0003): launch with a hooks-only `--settings` file, and hook payloads to signals.
 
+pub mod account;
 pub mod paste;
 pub mod progress;
 pub mod settings;

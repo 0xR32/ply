@@ -1,7 +1,8 @@
 import { describe, expect, test } from 'bun:test';
-import type { Action, Event, Skill, Task } from './actions';
-import { type AppState, type PaneState, reduce } from './reducer';
+import type { AccountChanged, Action, Event, Skill, Task } from './actions';
+import { type AppState, accountNotice, type PaneState, reduce } from './reducer';
 import {
+  accountKind,
   FULL_TAB_NOTICE,
   gridShape,
   isLost,
@@ -758,5 +759,83 @@ describe('task queue (R60)', () => {
     expect(matchSkills(skills, 'diff')).toEqual([]);
     expect(matchSkills(skills, 'full')).toEqual([]);
     expect(matchSkills(skills, '  ')).toHaveLength(3);
+  });
+});
+
+describe('the Claude account switch', () => {
+  const team = {
+    email: 'someone@example.com',
+    org_id: 'org-b',
+    org_name: 'Example Team',
+    plan: 'team',
+  };
+  const changed = (p: Omit<AccountChanged, 'pane_id'>): Action => ({
+    type: 'daemon/event',
+    event: { e: 'account.changed', p: { pane_id: 9, ...p } },
+  });
+
+  test('its end clears the sign-in, takes the new account and says how it ended', () => {
+    const open = reduce(
+      reduce(makeState([]), { type: 'accounts/loaded', accounts: { known: [], signing_in: 9 } }),
+      { type: 'account/opened', paneId: 9 },
+    );
+    expect(open.accounts).toMatchObject({ available: true, signingIn: 9, current: null });
+    const done = reduce(open, changed({ outcome: 'signed_in', account: team, panes: 1 }));
+    expect(done.accounts).toMatchObject({ signingIn: null, current: team });
+    expect(done.notice?.text).toBe(
+      'Signed in to Claude as someone@example.com · Team · Example Team · 1 Claude pane restarts on it once idle',
+    );
+    const failed = reduce(open, changed({ outcome: 'failed', panes: 0 }));
+    expect(failed.accounts.signingIn).toBeNull();
+    expect(failed.notice?.text).toBe('The Claude sign-in did not finish; its tab shows why');
+  });
+
+  test('⌘⇧A opens the palette on the account rows, goes to an open sign-in, and says when there is no switch', () => {
+    const panes = [makePane({ id: 1 }), makePane({ id: 2, tab_id: 2 })];
+    const tabs = [
+      { id: 1, name: 'ply' },
+      { id: 2, name: 'Claude sign-in' },
+    ];
+    const signedIn = run(makeState(panes, tabs), {
+      type: 'accounts/loaded',
+      accounts: { current: team, known: [team] },
+    });
+    const opened = run(signedIn, { type: 'command', id: 'account.switch' });
+    expect(opened.overlay).toEqual({ kind: 'palette', query: 'Claude account' });
+    const going = run(
+      signedIn,
+      { type: 'account/opened', paneId: 2 },
+      { type: 'command', id: 'account.switch' },
+    );
+    expect(going.overlay).toBeNull();
+    expect(going.activeTabId).toBe(2);
+    const none = run(makeState(panes, tabs), { type: 'command', id: 'account.switch' });
+    expect(none.overlay).toBeNull();
+    expect(none.notice?.text).toBe(
+      'The Claude account switch needs claude auth status, which plyd could not run',
+    );
+  });
+
+  test('the plan, then the organization or "personal"', () => {
+    expect(accountKind({ email: 'a@example.com', plan: 'max' })).toBe('Max · personal');
+    expect(accountKind({ email: 'a@example.com', plan: 'free' })).toBe('Free · personal');
+    expect(accountKind({ email: 'a@example.com', plan: 'team', org_name: 'Example Team' })).toBe(
+      'Team · Example Team',
+    );
+    expect(accountKind({ email: 'a@example.com', plan: 'enterprise' })).toBe('Enterprise');
+    expect(accountKind({ email: 'a@example.com' })).toBe('claude.ai · personal');
+  });
+
+  test('each outcome has its own words', () => {
+    const personal = { email: 'someone@example.com', plan: 'pro' };
+    expect(
+      accountNotice({ pane_id: 1, outcome: 'other_account', account: personal, panes: 0 }),
+    ).toBe('Signed in to Claude as someone@example.com · Pro · personal, not the account picked');
+    expect(accountNotice({ pane_id: 1, outcome: 'unchanged', account: personal, panes: 0 })).toBe(
+      'Still signed in to Claude as someone@example.com · Pro · personal',
+    );
+    expect(accountNotice({ pane_id: 1, outcome: 'cancelled', panes: 0 })).toBe(
+      'The Claude sign-in was closed before it finished',
+    );
   });
 });

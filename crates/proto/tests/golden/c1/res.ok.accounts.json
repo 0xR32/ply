@@ -1,0 +1,28 @@
+{
+  "t": "res",
+  "id": 28,
+  "ok": true,
+  "r": {
+    "current": {
+      "email": "someone@example.com",
+      "org_id": "00000000-0000-4000-8000-0000000000a1",
+      "org_name": "someone@example.com's Organization",
+      "plan": "max"
+    },
+    "known": [
+      {
+        "email": "someone@example.com",
+        "org_id": "00000000-0000-4000-8000-0000000000a1",
+        "org_name": "someone@example.com's Organization",
+        "plan": "max"
+      },
+      {
+        "email": "someone@example.com",
+        "org_id": "00000000-0000-4000-8000-0000000000a2",
+        "org_name": "Example Team",
+        "plan": "team"
+      }
+    ],
+    "signing_in": 9
+  }
+}

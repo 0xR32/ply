@@ -12,7 +12,7 @@ import {
 } from './lib/repo';
 
 const ROOT = normalize(join(import.meta.dir, '..'));
-const GPUIX_VERSION = '0.10.0';
+const GPUIX_VERSION = '0.11.0';
 
 const PLY_CRATES = ['ply-proto', 'ghostty-sys', 'ply-term', 'ply-agents', 'ply-daemon', 'ply-hook'];
 const GPUI_CRATES = ['gpui', 'gpuix-native'];
@@ -346,7 +346,7 @@ function stripJsonTrailingCommas(text: string): string {
   return text.replace(/,(\s*[}\]])/g, '$1');
 }
 
-/** INV-13 (ADR-0011): @gpuix/react and @gpuix/native pinned exactly at 0.10.0 from npm, unpatched. */
+/** INV-13 (ADR-0011): @gpuix/react and @gpuix/native pinned exactly at 0.11.0 from npm, unpatched. */
 export function checkInv13Gpuix(root: string): CheckResult {
   const res = ok();
   const manifests = ['package.json', 'app/package.json'];

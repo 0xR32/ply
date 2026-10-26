@@ -61,8 +61,9 @@ async function setup(
 }
 
 describe('effects', () => {
-  test('on connect it sends the palette first, then loads settings, workspace, layout and panes', async () => {
-    const { server, state } = await setup();
+  test('on connect it sends the palette first, then loads settings, workspace, layout and panes, and the Claude account last', async () => {
+    const { server, state, until } = await setup();
+    await until(() => state().accounts.available, 'account.list');
     expect(server.requests.map((r) => r.m)).toEqual([
       'settings.get',
       'theme.set',
@@ -70,6 +71,7 @@ describe('effects', () => {
       'layout.get',
       'pane.list',
       'task.list',
+      'account.list',
     ]);
     expect(server.palette?.cursor).toBe(accentAlternatives.blue);
     expect(state().tabs.map((t) => t.pane_ids)).toEqual([[1, 2, 3], [4]]);
@@ -538,5 +540,87 @@ describe('kept drops (docs/terminal.md, Dropped files)', () => {
     server.emit({ e: 'task.changed', p: { ...task, state: 'ended', ended_at: 1_790_000_100 } });
     await until(() => tasks.length === 1, 'the finished task');
     expect(tasks).toEqual([task.text]);
+  });
+});
+
+describe('the Claude account switch', () => {
+  const personal = {
+    email: 'someone@example.com',
+    org_id: '00000000-0000-4000-8000-0000000000a1',
+    org_name: "someone@example.com's Organization",
+    plan: 'max',
+  };
+  const team = {
+    email: 'someone@example.com',
+    org_id: '00000000-0000-4000-8000-0000000000a2',
+    org_name: 'Example Team',
+    plan: 'team',
+  };
+
+  test('switching opens the sign-in pane focused, and its end re-reads the account and says so', async () => {
+    const { server, store, state, until, seen } = await setup((server) => {
+      server.accounts = { current: personal, known: [personal, team] };
+    });
+    await until(() => state().accounts.available, 'the accounts');
+    expect(state().accounts.current).toEqual(personal);
+    store.dispatch({ type: 'account/switch', account: team });
+    await until(() => state().accounts.signingIn !== null, 'the sign-in pane');
+    const paneId = state().accounts.signingIn ?? -1;
+    expect(server.requests.find((r) => r.m === 'account.switch')?.p).toEqual({
+      workspace_id: 1,
+      account: team,
+    });
+    expect(state().panes[paneId]?.cli).toBe('shell');
+    const tab = state().tabs.find((t) => t.id === state().activeTabId);
+    expect(tab?.focus_pane_id).toBe(paneId);
+    expect(tab?.name).toBe('Claude sign-in');
+    await until(
+      () =>
+        server.layout?.tabs.some((t) => t.id === tab?.id && t.name === 'Claude sign-in') ?? false,
+      'the named tab saved',
+    );
+
+    const lists = server.requests.filter((r) => r.m === 'account.list').length;
+    server.endSignIn({ outcome: 'signed_in', account: team, panes: 2 });
+    await until(() => state().accounts.current?.org_id === team.org_id, 'the new account');
+    await until(
+      () => server.requests.filter((r) => r.m === 'account.list').length === lists + 1,
+      'account.list again',
+    );
+    expect(state().accounts.signingIn).toBeNull();
+    expect(state().panes[paneId]).toBeUndefined();
+    expect(seen).toContainEqual({
+      type: 'daemon/event',
+      event: {
+        e: 'account.changed',
+        p: { outcome: 'signed_in', account: team, panes: 2, pane_id: paneId },
+      },
+    });
+    expect(state().notice?.text).toBe(
+      'Signed in to Claude as someone@example.com · Team · Example Team · 2 Claude panes restart on it once idle',
+    );
+  });
+
+  test('a refused switch says why, and a plyd from before it hides the switch', async () => {
+    const { store, seen, state, until } = await setup((server) => {
+      server.accounts = { current: personal, known: [personal], signing_in: 3 };
+      server.refuseNext('account.switch', 'invalid_state', 'a Claude sign-in is open in pane 3');
+    });
+    await until(() => state().accounts.available, 'the accounts');
+    store.dispatch({ type: 'account/switch' });
+    await until(() => seen.some((a) => a.type === 'notice/show'), 'the notice');
+    expect(seen).toContainEqual({
+      type: 'notice/show',
+      text: 'Switching the Claude account failed: a Claude sign-in is open in pane 3',
+    });
+
+    const old = await setup((server) =>
+      server.refuseNext('account.list', 'unknown_method', 'unknown method "account.list"'),
+    );
+    await old.until(
+      () => old.seen.some((a) => a.type === 'accounts/loaded'),
+      'the account.list answer',
+    );
+    expect(old.state().accounts.available).toBe(false);
   });
 });

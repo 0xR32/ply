@@ -1,6 +1,16 @@
 import { basename, resolve } from 'node:path';
 import { MAX_PANES_PER_TAB } from '../ipc/proto.gen';
-import type { Cli, Pane, QueueState, Skill, SkillSource, Split, Tab, Task } from './actions';
+import type {
+  ClaudeAccount,
+  Cli,
+  Pane,
+  QueueState,
+  Skill,
+  SkillSource,
+  Split,
+  Tab,
+  Task,
+} from './actions';
 import { type DirCandidate, type DirSuggestion, rankDirs } from './dir-match';
 import type { AppState, DirSearch, PaneState } from './reducer';
 
@@ -476,3 +486,42 @@ export const SKILL_GROUPS: readonly { source: SkillSource; label: string }[] = [
   { source: 'system', label: 'Built into the CLI' },
   { source: 'prompt', label: 'Prompts' },
 ];
+
+/** The tab `account.switch` opens for `claude auth login`, named as plyd names it (`accounts::SIGN_IN_TAB`). */
+export const SIGN_IN_TAB = 'Claude sign-in';
+
+/** The palette query ⌘⇧A opens with: every account row says both words, and nothing else in the palette does. */
+export const ACCOUNT_QUERY = 'Claude account';
+
+const PLANS: Readonly<Record<string, string>> = {
+  free: 'Free',
+  pro: 'Pro',
+  max: 'Max',
+  team: 'Team',
+  enterprise: 'Enterprise',
+};
+
+/** Whether `a` and `b` are one Claude sign-in: one email, ignoring case, and one organization when both name it (plyd's `same_account`). */
+export function sameAccount(a: ClaudeAccount, b: ClaudeAccount): boolean {
+  return (
+    a.email.toLowerCase() === b.email.toLowerCase() &&
+    (a.org_id === undefined || b.org_id === undefined || a.org_id === b.org_id)
+  );
+}
+
+/** Whether the account is a Team or Enterprise organization's rather than a personal plan. */
+export function isOrganization(account: ClaudeAccount): boolean {
+  return account.plan === 'team' || account.plan === 'enterprise';
+}
+
+/** The plan and what tells one account from another under the same email: `Team · <org name>` for an organization, `Max · personal` otherwise. */
+export function accountKind(account: ClaudeAccount): string {
+  const plan = account.plan ? (PLANS[account.plan] ?? account.plan) : 'claude.ai';
+  if (!isOrganization(account)) return `${plan} · personal`;
+  return account.org_name ? `${plan} · ${account.org_name}` : plan;
+}
+
+/** One line naming an account: `someone@example.com · Team · Example Team`. */
+export function accountLabel(account: ClaudeAccount): string {
+  return `${account.email} · ${accountKind(account)}`;
+}

@@ -91,6 +91,60 @@ describe.if(hasNativeTestRenderer)('App', () => {
     }
   });
 
+  test('the top bar names the Claude account by email, plan and organization or "personal", and ⌘⇧A opens the palette on the accounts', async () => {
+    const team = {
+      email: 'someone@example.com',
+      org_id: 'org-b',
+      org_name: 'Example Team',
+      plan: 'team',
+    };
+    const personal = { email: 'someone@example.com', org_id: 'org-a', plan: 'max' };
+    const store = createStore(
+      reduce(canvasState(), {
+        type: 'accounts/loaded',
+        accounts: { current: team, known: [team, personal] },
+      }),
+    );
+    const { renderer, unmount } = mount(store);
+    try {
+      const text = renderer.getAllText();
+      expect(text).toContain('someone@example.com');
+      expect(text).toContain('Team · Example Team');
+      const bar = renderer.findByTestId('top-bar');
+      const chip = renderer.findByTestId('account-chip');
+      const search = renderer.findByTestId('palette-button');
+      const barBox = bar && renderer.getElementBounds(bar.id);
+      const chipBox = chip && renderer.getElementBounds(chip.id);
+      const searchBox = search && renderer.getElementBounds(search.id);
+      if (!barBox || !chipBox || !searchBox) throw new Error('the top bar did not paint');
+      expect(chipBox.y).toBeGreaterThanOrEqual(barBox.y);
+      expect(chipBox.y + chipBox.height).toBeLessThanOrEqual(barBox.y + barBox.height);
+      expect(chipBox.x + chipBox.width).toBeLessThanOrEqual(searchBox.x + 0.5);
+      shot(renderer, 'account-team');
+
+      renderer.simulateKeystrokes('cmd-shift-a');
+      renderer.flush();
+      expect(store.getState().overlay).toEqual({ kind: 'palette', query: 'Claude account' });
+      const listed = renderer.getAllText();
+      expect(listed).toContain('Switch Claude account to someone@example.com');
+      expect(listed).toContain('Sign in to another Claude account');
+      expect(listed).not.toContain('Next pane');
+      shot(renderer, 'account-palette');
+      renderer.simulateKeystrokes('escape');
+      store.dispatch({
+        type: 'accounts/loaded',
+        accounts: { current: personal, known: [personal, team] },
+      });
+      renderer.flush();
+      await Bun.sleep(30);
+      renderer.flush();
+      expect(renderer.getAllText()).toContain('Max · personal');
+      shot(renderer, 'account-personal');
+    } finally {
+      unmount();
+    }
+  });
+
   test('⌘K opens the palette and ⌘N the new-pane form through the window key listener', () => {
     const store = createStore(canvasState());
     const { renderer, unmount } = mount(store);

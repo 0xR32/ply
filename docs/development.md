@@ -232,7 +232,7 @@ runs the formatting, lint, rustdoc, rule and type gates; `just test` runs nextes
   reaches `gpui`), INV-4 (`onKeyDown` only in the keymap dispatcher, the overlay forms and the terminal view), INV-5
   (colour literals only in `app/src/theme/tokens.ts` and fixtures), INV-7 (no `git worktree` call, no worktree column
   but `worktree_seen`), INV-11 (no real home path or committer identity in any file), INV-13 (GPUIX pinned
-  exactly at 0.10.0 from npm, unpatched), INV-17 (`ghostty-sys` reaches only `plyd` through `ply-term`, and
+  exactly at 0.11.0 from npm, unpatched), INV-17 (`ghostty-sys` reaches only `plyd` through `ply-term`, and
   `crates/ghostty-sys/build.rs` pins the ghostty commit, an archive URL naming it and the archive's SHA-256), the
   dependency layers of spec 8.2 for crates and for `app/src` imports, the unsafe and `anyhow` rules of spec 9.1, exact
   version pins, and the freshness of `proto.gen.ts`. A check that needs code a later work package writes prints a

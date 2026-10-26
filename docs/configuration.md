@@ -17,6 +17,7 @@ and `app/src/ipc/log.ts`.
 | data directory | `~/Library/Application Support/ply/` | `<dir>/` |
 | database | `ply.db` in the data directory, with SQLite's `ply.db-wal` and `ply.db-shm` beside it | same |
 | settings | `config.toml` in the data directory | same |
+| Claude accounts | `accounts.json` in the data directory (mode `0600`): the email, organization and plan of each claude.ai account an account switch offers, never a credential (`docs/agents.md`, **Switching the Claude account**) | same |
 | instance lock | `plyd.lock` in the data directory, holding the running plyd's pid | same |
 | run directory | `run/` in the data directory, mode `0700` | same |
 | control socket (C1) | `run/plyd.sock` | same |
@@ -30,7 +31,7 @@ and `app/src/ipc/log.ts`.
 
 plyd creates the directories; it forces the run directory and each pane
 directory to `0700` even when they existed, and writes `config.toml`,
-`plyd.lock` and the pane files as `0600`. A pane's directory is removed when the
+`accounts.json`, `plyd.lock` and the pane files as `0600`. A pane's directory is removed when the
 pane is closed.
 
 **The database only moves forward.** `ply.db` is at schema v2 since the task
@@ -206,8 +207,11 @@ PLY_HOME=/tmp/ply-dev bun run dev
   starts the cargo-built plyd (`$PLY_PLYD`, else `target/release/plyd`, else
   `target/debug/plyd`) as `plyd --foreground`, detached, with its output
   discarded.
-- plyd writes only under `/tmp/ply-dev`: the database, `config.toml`, the lock,
-  `run/` and `logs/`. The app logs to `/tmp/ply-dev/logs/app.*.log` and keeps
+- plyd writes only under `/tmp/ply-dev`: the database, `config.toml`,
+  `accounts.json`, the lock, `run/` and `logs/`. An account switch is the
+  exception by design: the `claude auth login` it runs is Claude Code's own and
+  writes Claude Code's sign-in where Claude Code keeps it (its Keychain entry
+  and `.claude.json`), whatever `PLY_HOME` says. The app logs to `/tmp/ply-dev/logs/app.*.log` and keeps
   dropped ⌘⇧4 thumbnails in `/tmp/ply-dev/ply-drops/`.
 - No LaunchAgent, no power assertion, nothing under `~/Library`.
 - The spawned plyd outlives the app, as it is meant to. Stop it with

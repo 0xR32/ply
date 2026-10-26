@@ -162,11 +162,49 @@ export function startEffects(store: Store, options: EffectsOptions): () => void 
       dispatch({ type: 'session/loaded', workspace, panes, layout, settings });
       dispatch({ type: 'tasks/loaded', list: tasks });
       for (const event of events) dispatch({ type: 'daemon/event', event });
+      refreshAccounts();
     } catch (error) {
       failed('Loading the session', error);
     } finally {
       if (loadEvents === events) loadEvents = null;
     }
+  }
+
+  /** Asks plyd which Claude account is signed in (`account.list`, a `claude auth status` run), after the session so it never holds the load up. */
+  function refreshAccounts(): void {
+    client
+      .request('account.list', {})
+      .then((accounts) => dispatch({ type: 'accounts/loaded', accounts }))
+      .catch((error) => {
+        if (error instanceof RequestError && error.code === 'disconnected') return;
+        if (error instanceof RequestError && error.code === 'unknown_method') {
+          log('info', 'this plyd predates the account switch');
+        } else {
+          log('warn', 'account.list failed', { error: message(error) });
+        }
+        dispatch({ type: 'accounts/loaded', accounts: null });
+      });
+  }
+
+  /** "Switch Claude account to …": a sign-in tab running `claude auth login`, focused; plyd reports how it ended with `account.changed`. */
+  function switchAccount(
+    state: AppState,
+    action: Extract<Action, { type: 'account/switch' }>,
+  ): void {
+    if (!state.workspace) {
+      notice('plyd has not loaded a workspace yet');
+      return;
+    }
+    client
+      .request('account.switch', {
+        workspace_id: state.workspace.id,
+        ...(action.account ? { account: action.account } : {}),
+      })
+      .then((pane) => {
+        dispatch({ type: 'pane/created', pane });
+        dispatch({ type: 'account/opened', paneId: pane.id });
+      })
+      .catch((error) => failed('Switching the Claude account', error));
   }
 
   function saveLayoutSoon(): void {
@@ -445,6 +483,12 @@ export function startEffects(store: Store, options: EffectsOptions): () => void 
         break;
       case 'skills/query':
         askSkills(action);
+        break;
+      case 'account/switch':
+        switchAccount(next, action);
+        break;
+      case 'daemon/event':
+        if (action.event.e === 'account.changed') refreshAccounts();
         break;
       case 'pane/closeConfirmed':
         client

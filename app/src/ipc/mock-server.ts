@@ -5,7 +5,9 @@ import type { Socket, UnixSocketListener } from 'bun';
 import { log } from './log';
 import { controlSocketPath } from './paths';
 import {
+  type AccountChanged,
   type Answer,
+  type ClaudeAccounts,
   type Cli,
   type ClientMsg,
   type ErrorCode,
@@ -87,6 +89,8 @@ export class MockServer {
   usage: Usage = {};
   /** What `skill.list` answers, for any CLI and directory; tests set it. */
   skills: SkillList = { skills: [] };
+  /** What `account.list` answers; tests set it, and `account.switch` records its sign-in pane here until `endSignIn`. */
+  accounts: ClaudeAccounts = { known: [] };
   /** The task queue (Ruling R60) by task id, and the queues that are paused or blocked. */
   readonly tasks = new Map<number, Task>();
   readonly queues = new Map<number, QueueState>();
@@ -205,6 +209,27 @@ export class MockServer {
     const { progress: _old, ...rest } = pane;
     this.panes.set(paneId, progress ? { ...rest, progress } : rest);
     this.emit({ e: 'pane.progress', p: { pane_id: paneId, ...(progress ? { progress } : {}) } });
+  }
+
+  /** Ends the open sign-in as plyd does: the pane closes unless it failed, then `account.changed`; the signed-in account becomes `current`. */
+  endSignIn(change: Omit<AccountChanged, 'pane_id'>): void {
+    const paneId = this.accounts.signing_in;
+    if (paneId === undefined) throw new Error('no sign-in is open');
+    const { signing_in: _done, ...rest } = this.accounts;
+    const account = change.account;
+    this.accounts = account
+      ? {
+          current: account,
+          known: [
+            account,
+            ...rest.known.filter((k) => k.email !== account.email || k.org_id !== account.org_id),
+          ],
+        }
+      : rest;
+    if (change.outcome !== 'failed' && this.panes.delete(paneId)) {
+      this.emit({ e: 'pane.removed', p: { pane_id: paneId } });
+    }
+    this.emit({ e: 'account.changed', p: { ...change, pane_id: paneId } });
   }
 
   /** Writes `event` in the same socket write as the answer to the next `method` request, as plyd's writer can; the mock's state is left as it is. */
@@ -451,6 +476,23 @@ export class MockServer {
         else this.queues.delete(params.pane_id);
         this.later(0, () => this.emit({ e: 'queue.changed', p: queue }));
         return {};
+      }
+      case 'account.list':
+        return this.accounts;
+      case 'account.switch': {
+        if (this.accounts.signing_in !== undefined) {
+          throw new MethodError(
+            'invalid_state',
+            `a Claude sign-in is open in pane ${this.accounts.signing_in}`,
+          );
+        }
+        const pane = this.create({
+          workspace_id: this.workspace.id,
+          cli: 'shell',
+          cwd: this.workspace.path,
+        });
+        this.accounts = { ...this.accounts, signing_in: pane.id };
+        return pane;
       }
       case 'daemon.shutdown':
         this.later(0, () => {

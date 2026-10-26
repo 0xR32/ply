@@ -589,6 +589,51 @@ export type SkillList = {
 };
 
 /**
+ * A claude.ai sign-in as `claude auth status` reports it, personal or a Team or Enterprise organization (`org_id` tells them apart under one email); ply keeps no credential of it.
+ */
+export type ClaudeAccount = {
+  /**
+   * The account's email address.
+   */
+  email: string;
+  /**
+   * The organization the sign-in is for (`orgId`), when reported.
+   */
+  org_id?: string;
+  /**
+   * That organization's name (`orgName`); a personal one is `<email>'s Organization`.
+   */
+  org_name?: string;
+  /**
+   * The plan as Claude Code names it (`subscriptionType`): `free`, `pro` and `max` are personal, `team` and `enterprise` an organization's.
+   */
+  plan?: string;
+};
+
+/**
+ * What `account.list` returns: the account Claude Code uses now and the ones ply saw it signed in to.
+ */
+export type ClaudeAccounts = {
+  /**
+   * Absent while Claude Code is signed out or authenticates another way (an API key, a cloud provider).
+   */
+  current?: ClaudeAccount;
+  /**
+   * Every account seen signed in, the most recently signed in to first; `current` is among them.
+   */
+  known: Array<ClaudeAccount>;
+  /**
+   * The pane running `claude auth login` while an `account.switch` waits for it.
+   */
+  signing_in?: number;
+};
+
+/**
+ * How an `account.switch` ended (`account.changed`).
+ */
+export type SignInOutcome = 'signed_in' | 'other_account' | 'unchanged' | 'failed' | 'cancelled';
+
+/**
  * Messages from the app to plyd, tagged by `"t"`.
  */
 export type ClientMsg = ({ t: 'hello' } & Hello) | ({ t: 'req' } & Request);
@@ -664,6 +709,8 @@ export type Request = {
   | { m: 'task.send'; p: TaskRef }
   | { m: 'queue.pause'; p: QueuePauseParams }
   | { m: 'skill.list'; p: SkillListParams }
+  | { m: 'account.list'; p: Empty }
+  | { m: 'account.switch'; p: AccountSwitchParams }
 );
 
 /**
@@ -691,7 +738,9 @@ export type Call =
   | { m: 'task.move'; p: TaskMoveParams }
   | { m: 'task.send'; p: TaskRef }
   | { m: 'queue.pause'; p: QueuePauseParams }
-  | { m: 'skill.list'; p: SkillListParams };
+  | { m: 'skill.list'; p: SkillListParams }
+  | { m: 'account.list'; p: Empty }
+  | { m: 'account.switch'; p: AccountSwitchParams };
 
 /**
  * The answer to a request: `{"t":"res","id","ok":true,"r":…}` or `{"t":"res","id","ok":false,"err":{…}}`.
@@ -972,6 +1021,20 @@ export type SkillListParams = {
 };
 
 /**
+ * `account.switch` params: the workspace whose new tab runs `claude auth login`, and the account to sign in to.
+ */
+export type AccountSwitchParams = {
+  /**
+   * Workspace to open the sign-in tab in.
+   */
+  workspace_id: number;
+  /**
+   * A known account: its email fills in Claude's sign-in page and its organization is checked after; absent leaves the choice to that page.
+   */
+  account?: ClaudeAccount;
+};
+
+/**
  * Daemon events, tagged `"e"` with the payload in `"p"`; broadcast to every connected client.
  */
 export type Event =
@@ -983,7 +1046,8 @@ export type Event =
   | { e: 'pane.exit'; p: PaneExit }
   | { e: 'daemon.stopping'; p: DaemonStopping }
   | { e: 'task.changed'; p: Task }
-  | { e: 'queue.changed'; p: QueueState };
+  | { e: 'queue.changed'; p: QueueState }
+  | { e: 'account.changed'; p: AccountChanged };
 
 /**
  * `pane.removed` payload.
@@ -1098,6 +1162,28 @@ export type DaemonStopping = {
 };
 
 /**
+ * `account.changed` payload: an `account.switch` ended.
+ */
+export type AccountChanged = {
+  /**
+   * The pane that ran `claude auth login`; closed already unless the sign-in failed.
+   */
+  pane_id: number;
+  /**
+   * How it ended.
+   */
+  outcome: SignInOutcome;
+  /**
+   * The account Claude Code is signed in to now, when known.
+   */
+  account?: ClaudeAccount;
+  /**
+   * Claude panes that restart on the new sign-in, each once it is at rest; 0 when the account did not change.
+   */
+  panes: number;
+};
+
+/**
  * `{"v":1,"pane_id":2,"cli":"claude","event":"Notification","payload":{…}}`; `event` is absent for Codex notify.
  */
 export type HookEnvelope = {
@@ -1147,6 +1233,8 @@ export type Methods = {
   'task.send': { params: TaskRef; result: Empty };
   'queue.pause': { params: QueuePauseParams; result: Empty };
   'skill.list': { params: SkillListParams; result: SkillList };
+  'account.list': { params: Empty; result: ClaudeAccounts };
+  'account.switch': { params: AccountSwitchParams; result: Pane };
 };
 
 /** A C1 method name. */

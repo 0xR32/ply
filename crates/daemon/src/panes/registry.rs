@@ -83,8 +83,10 @@ pub struct PaneEntry {
 pub struct NewPane<'a> {
     /// Workspace of the pane.
     pub workspace_id: u64,
-    /// Existing tab to append to; `None` opens a new tab named after `cwd`.
+    /// Existing tab to append to; `None` opens a new tab named `tab_name`, or after `cwd`.
     pub tab_id: Option<u64>,
+    /// The name of the new tab `tab_id: None` opens, in place of `cwd`'s basename.
+    pub tab_name: Option<&'a str>,
     /// Program the pane runs.
     pub cli: Cli,
     /// Absolute working directory.
@@ -363,6 +365,7 @@ impl Registry {
         let NewPane {
             workspace_id,
             tab_id,
+            tab_name,
             cli,
             cwd,
             title,
@@ -394,7 +397,7 @@ impl Registry {
                 let row = TabRow {
                     id: 0,
                     workspace_id,
-                    name: basename(cwd),
+                    name: tab_name.map_or_else(|| basename(cwd), str::to_owned),
                     position: count(self.tabs_of(workspace_id).len()),
                     focus_pane_id: None,
                     zoomed: false,
@@ -1409,6 +1412,7 @@ mod tests {
         NewPane {
             workspace_id: 1,
             tab_id,
+            tab_name: None,
             cli: Cli::Shell,
             cwd,
             title: "zsh",

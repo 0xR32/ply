@@ -1,7 +1,12 @@
 import { StatusBar } from '../features/statusbar/statusbar';
 import { TabBar } from '../features/tabs/tab-bar';
 import { commandKeyLabel } from '../keymap/keymap';
-import { selectQueueCounts, selectWaitingCount } from '../state/selectors';
+import {
+  accountKind,
+  isOrganization,
+  selectQueueCounts,
+  selectWaitingCount,
+} from '../state/selectors';
 import { shallowEqual, useAppSelector, useDispatch } from '../state/store';
 import { useChrome } from '../theme/chrome';
 import { tokens } from '../theme/tokens';
@@ -118,6 +123,70 @@ function QueuePill() {
   );
 }
 
+/** Claude Code's sign-in: email, plan, and the organization or "personal"; a click (⌘⇧A) offers the other accounts, or goes to an open sign-in. */
+function AccountChip() {
+  const dispatch = useDispatch();
+  const { z, accent } = useChrome();
+  const accounts = useAppSelector((s) => s.accounts);
+  if (!accounts.available) return null;
+  const { current } = accounts;
+  const signingIn = accounts.signingIn !== null;
+  const dot = signingIn
+    ? tokens.amber
+    : !current
+      ? tokens.text3
+      : isOrganization(current)
+        ? accent.base
+        : tokens.mint;
+  return (
+    <div
+      testId="account-chip"
+      role="button"
+      aria-label="Switch the Claude account"
+      onClick={() => dispatch({ type: 'command', id: 'account.switch' })}
+      style={{
+        height: z(26),
+        flexShrink: 1,
+        minWidth: 0,
+        maxWidth: z(380),
+        display: 'flex',
+        alignItems: 'center',
+        gap: z(8),
+        paddingLeft: z(10),
+        paddingRight: z(12),
+        borderRadius: z(13),
+        backgroundColor: signingIn ? tokens.amberA[10] : tokens.white[4],
+        borderWidth: 1,
+        borderColor: signingIn ? tokens.amberA[35] : tokens.white[8],
+        cursor: 'pointer',
+      }}
+    >
+      <Dot color={dot} size={7} />
+      {signingIn ? (
+        <Text color={tokens.amber} weight={500} ellipsis testId="account-signing-in">
+          Signing in to Claude…
+        </Text>
+      ) : current ? (
+        <>
+          <Text color={tokens.text2} weight={500} ellipsis testId="account-email">
+            {current.email}
+          </Text>
+          <Text color={tokens.hint} testId="account-kind">
+            {accountKind(current)}
+          </Text>
+        </>
+      ) : (
+        <Text color={tokens.hint} ellipsis testId="account-signed-out">
+          Claude signed out
+        </Text>
+      )}
+      <Text color={tokens.text3} variant="label" mono>
+        {commandKeyLabel('account.switch')}
+      </Text>
+    </div>
+  );
+}
+
 /** The search field look-alike that opens the command palette (⌘K). */
 function PaletteButton() {
   const dispatch = useDispatch();
@@ -160,7 +229,7 @@ function PaletteButton() {
   );
 }
 
-/** The 40 px title bar beside the traffic lights: wordmark, tabs, the status and pane counts, the needs-you pill, the queue pill and the palette button. */
+/** The 40 px title bar beside the traffic lights: wordmark, tabs, the status and pane counts, the needs-you pill, the queue pill, the Claude account and the palette button. */
 export function TopBar() {
   const { z } = useChrome();
   return (
@@ -182,6 +251,7 @@ export function TopBar() {
       <StatusBar />
       <NeedsYouPill />
       <QueuePill />
+      <AccountChip />
       <PaletteButton />
     </div>
   );

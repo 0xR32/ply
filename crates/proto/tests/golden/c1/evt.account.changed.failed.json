@@ -1,0 +1,9 @@
+{
+  "t": "evt",
+  "e": "account.changed",
+  "p": {
+    "pane_id": 9,
+    "outcome": "failed",
+    "panes": 0
+  }
+}

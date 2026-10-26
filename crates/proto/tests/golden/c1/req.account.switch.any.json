@@ -1,0 +1,8 @@
+{
+  "t": "req",
+  "id": 30,
+  "m": "account.switch",
+  "p": {
+    "workspace_id": 1
+  }
+}

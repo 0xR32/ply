@@ -3,8 +3,8 @@
 //! The app sends [`ClientMsg`] (`hello` first, then `req`); plyd answers with [`ServerMsg`] (`welcome`, `res`,
 //! `evt`). Every struct rejects unknown fields (INV-10). Requests carry a method name in `m` and its params in
 //! `p`; [`Call`] lists every method of the 4.1 table plus ADR-0009's additions, Ruling R59's `usage.get`, Ruling
-//! R60's task queue (`task.*`, `queue.pause`) and Ruling R61's `skill.list`, and [`METHODS`] names the result type
-//! of each. No type here carries pty bytes (INV-2): a task's text is a string the user wrote, typed by plyd.
+//! R60's task queue (`task.*`, `queue.pause`), Ruling R61's `skill.list` and the Claude account switch (`account.*`),
+//! and [`METHODS`] names the result type of each. No type here carries pty bytes (INV-2): a task's text is a string the user wrote, typed by plyd.
 //!
 //! ```
 //! use ply_proto::control::{Call, ClientMsg, PaneCloseParams, Request};
@@ -25,8 +25,8 @@ use ts_rs::TS;
 
 use crate::error::{Error, Result};
 use crate::pane::{
-    AgentCli, Cli, Layout, Pane, PaneId, PaneStatus, Progress, QueueState, Settings, Task, TaskId,
-    TaskTarget, TerminalTheme, UnixSeconds,
+    AgentCli, ClaudeAccount, Cli, Layout, Pane, PaneId, PaneStatus, Progress, QueueState, Settings,
+    SignInOutcome, Task, TaskId, TaskTarget, TerminalTheme, UnixSeconds,
 };
 
 /// Longest accepted C1 line in bytes, newline included; a reader must stop buffering at this size.
@@ -409,6 +409,18 @@ pub struct SkillListParams {
     pub cwd: String,
 }
 
+/// `account.switch` params: the workspace whose new tab runs `claude auth login`, and the account to sign in to.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+#[ts(optional_fields)]
+pub struct AccountSwitchParams {
+    /// Workspace to open the sign-in tab in.
+    pub workspace_id: u64,
+    /// A known account: its email fills in Claude's sign-in page and its organization is checked after; absent leaves the choice to that page.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account: Option<ClaudeAccount>,
+}
+
 /// Every C1 method with its params, tagged `"m"` with params in `"p"`; [`METHODS`] gives each result type.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(tag = "m", content = "p", deny_unknown_fields)]
@@ -479,6 +491,12 @@ pub enum Call {
     /// `skill.list` → [`crate::pane::SkillList`]: the skills installed for a CLI, read-only (R61).
     #[serde(rename = "skill.list")]
     SkillList(SkillListParams),
+    /// `account.list` → [`crate::pane::ClaudeAccounts`]: Claude Code's sign-in now, from `claude auth status`, and the accounts seen before.
+    #[serde(rename = "account.list")]
+    AccountList(Empty),
+    /// `account.switch` → `Pane`: a new tab running `claude auth login`; `account.changed` follows when it ends.
+    #[serde(rename = "account.switch")]
+    AccountSwitch(AccountSwitchParams),
 }
 
 impl Call {
@@ -507,6 +525,8 @@ impl Call {
             Self::TaskSend(_) => "task.send",
             Self::QueuePause(_) => "queue.pause",
             Self::SkillList(_) => "skill.list",
+            Self::AccountList(_) => "account.list",
+            Self::AccountSwitch(_) => "account.switch",
         }
     }
 }
@@ -633,6 +653,16 @@ pub const METHODS: &[MethodInfo] = &[
         name: "skill.list",
         params: "SkillListParams",
         result: "SkillList",
+    },
+    MethodInfo {
+        name: "account.list",
+        params: "Empty",
+        result: "ClaudeAccounts",
+    },
+    MethodInfo {
+        name: "account.switch",
+        params: "AccountSwitchParams",
+        result: "Pane",
     },
 ];
 
@@ -859,6 +889,22 @@ pub struct DaemonStopping {
     pub kill_panes: bool,
 }
 
+/// `account.changed` payload: an `account.switch` ended.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+#[ts(optional_fields)]
+pub struct AccountChanged {
+    /// The pane that ran `claude auth login`; closed already unless the sign-in failed.
+    pub pane_id: PaneId,
+    /// How it ended.
+    pub outcome: SignInOutcome,
+    /// The account Claude Code is signed in to now, when known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account: Option<ClaudeAccount>,
+    /// Claude panes that restart on the new sign-in, each once it is at rest; 0 when the account did not change.
+    pub panes: u32,
+}
+
 /// Daemon events, tagged `"e"` with the payload in `"p"`; broadcast to every connected client.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(tag = "e", content = "p", deny_unknown_fields)]
@@ -890,4 +936,7 @@ pub enum Event {
     /// A pane's queue was paused, resumed, blocked or unblocked (R60).
     #[serde(rename = "queue.changed")]
     QueueChanged(QueueState),
+    /// An `account.switch` ended: signed in, unchanged, failed or cancelled.
+    #[serde(rename = "account.changed")]
+    AccountChanged(AccountChanged),
 }

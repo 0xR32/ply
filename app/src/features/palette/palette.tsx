@@ -32,7 +32,9 @@ export function Palette() {
   const chrome = useChrome();
   const { z, accent, fonts, type } = chrome;
   const state = useAppSelector(selectAll);
-  const [query, setQuery] = useState('');
+  const [query, setQuery] = useState(() =>
+    state.overlay?.kind === 'palette' ? (state.overlay.query ?? '') : '',
+  );
   const [highlight, setHighlight] = useState(0);
   const items = useMemo(() => paletteItems(state, query), [state, query]);
   const hi = items.length === 0 ? -1 : Math.min(highlight, items.length - 1);
@@ -49,8 +51,7 @@ export function Palette() {
     const offset = renderer?.getScrollOffset?.(list);
     if (!r || !view || !offset) return;
     const [x = 0, y = 0] = offset;
-    // A scroll container's own bounds come back moved by its scroll offset (y, negative once scrolled).
-    const top = view.y - y;
+    const top = view.y;
     const margin = z(6);
     const below = r.y + r.height + margin - (top + view.height);
     const above = top + margin - r.y;

@@ -39,6 +39,7 @@ use crate::branch;
 use crate::daemon::{Shared, unix_now};
 use crate::osc::{decode_osc7, is_enter, osc9_bodies};
 use crate::panes::agent::{Agent, Typed};
+use crate::panes::launch;
 use crate::pty::{Geometry, PaneProcess, PtyChannels, PtyWrite};
 use crate::publisher::{AckOutcome, Cadence, ClientWindow, IdleTimer, SyncHold};
 use crate::tail::TailMsg;
@@ -85,6 +86,8 @@ pub enum PaneCmd {
     /// `starting`, and `stopped` is answered once the process exited and the terminal was reset, with no exit reported.
     /// A busy pane drops `stopped` at once; one closed meanwhile drops it at the exit, which it reports as usual.
     Reload(oneshot::Sender<()>),
+    /// Claude Code's sign-in changed (`account.switch`): once the agent is at rest, stop its process and relaunch it on the new sign-in, resuming its session when it has one; queued tasks wait for it.
+    ReloadAtRest,
     /// The process about to be spawned from this spec (`pane.resume`): prepares the agent integration for it.
     Launch(Box<LaunchSpec>),
     /// The spawn prepared by [`PaneCmd::Launch`] failed; the prepared agent integration is dropped.
@@ -572,6 +575,16 @@ impl PaneTask {
             PaneCmd::SetOptionAsMeta(option) => self.engine.set_option_as_meta(option),
             PaneCmd::Kill => self.kill(now),
             PaneCmd::Reload(stopped) => self.reload(stopped, now),
+            PaneCmd::ReloadAtRest => match self.agent.as_mut() {
+                Some(agent) if self.exit_code.is_none() => {
+                    tracing::info!(
+                        pane_id = self.id,
+                        "the pane restarts on the new sign-in once at rest"
+                    );
+                    agent.want_reload();
+                }
+                _ => tracing::debug!(pane_id = self.id, "no agent process to restart"),
+            },
             PaneCmd::Launch(spec) => self.prepare(&spec),
             PaneCmd::LaunchFailed => {
                 self.agent = None;
@@ -608,13 +621,53 @@ impl PaneTask {
             );
             return;
         }
-        if let Some(mut agent) = self.agent.take() {
-            agent.exit(&self.shared, now);
-        }
         tracing::info!(
             pane_id = self.id,
             "stopping the pane's process to resume it on its CLI's update"
         );
+        self.stop_for_reload(stopped, now);
+    }
+
+    /// Starts the reload an account switch asked for ([`PaneCmd::ReloadAtRest`]) once the agent is at rest; [`launch::resume_reloaded`] relaunches the process after it exited.
+    fn reload_if_due(&mut self, now: Instant) {
+        let due = self.process.is_some()
+            && self.exit_code.is_none()
+            && self.reloading.is_none()
+            && self.agent.as_ref().is_some_and(|a| a.reload_due(now));
+        if !due {
+            return;
+        }
+        let resume = self
+            .agent
+            .as_ref()
+            .is_some_and(|a| a.resumable(&self.shared));
+        if let Err(e) = self.shared.registry().begin_reload(self.id) {
+            tracing::warn!(pane_id = self.id, error = %e.msg, "cannot restart the pane on the new sign-in");
+            if let Some(agent) = self.agent.as_mut() {
+                agent.drop_reload(&self.shared, now);
+            }
+            return;
+        }
+        tracing::info!(
+            pane_id = self.id,
+            resume,
+            "stopping the pane's process to restart it on the new sign-in"
+        );
+        let (stopped, exited) = oneshot::channel();
+        self.stop_for_reload(stopped, now);
+        tokio::spawn(launch::resume_reloaded(
+            Arc::clone(&self.shared),
+            self.id,
+            exited,
+            resume,
+        ));
+    }
+
+    /// Ends the agent integration, turns the pane `starting` and stops the process; [`PaneTask::finish_reload`] answers `stopped` after its exit.
+    fn stop_for_reload(&mut self, stopped: oneshot::Sender<()>, now: Instant) {
+        if let Some(mut agent) = self.agent.take() {
+            agent.exit(&self.shared, now);
+        }
         self.shared.set_status(self.id, PaneStatus::Starting, None);
         self.reloading = Some(stopped);
         self.kill(now);
@@ -1111,7 +1164,7 @@ impl PaneTask {
             let closed = self.shared.registry().close_pane(self.id, unix_now());
             match closed {
                 Ok(_) => {
-                    super::launch::remove_pane_dir(self.id, &self.shared.paths.pane_dir(self.id));
+                    launch::remove_pane_dir(self.id, &self.shared.paths.pane_dir(self.id));
                     self.closing = true;
                     self.stop = self.kill_at.is_none();
                 }
@@ -1151,6 +1204,7 @@ impl PaneTask {
         if let Some(agent) = self.agent.as_mut() {
             agent.on_tick(&self.shared, now);
         }
+        self.reload_if_due(now);
         self.type_queued(now);
         if self.kill_at.is_some_and(|t| t <= now) {
             self.kill_at = None;

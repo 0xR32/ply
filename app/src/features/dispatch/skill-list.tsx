@@ -44,7 +44,7 @@ export function SkillList({
     const offset = renderer?.getScrollOffset?.(list);
     if (!r || !view || !offset) return;
     const [x = 0, y = 0] = offset;
-    const top = view.y - y;
+    const top = view.y;
     const below = r.y + r.height + z(4) - (top + view.height);
     const above = top + z(4) - r.y;
     if (below > 0) renderer?.scrollTo?.(list, x, y - below);

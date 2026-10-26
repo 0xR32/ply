@@ -1,5 +1,28 @@
 #!/bin/sh
 # Stand-in for Claude Code in plyd's tests; the protocol is documented in crates/daemon/tests/common/fake.rs.
+if [ "$1" = auth ]; then
+  auth="$HOME/fake-claude-auth.json"
+  case "$2" in
+    status)
+      if [ -f "$auth" ]; then cat "$auth"; else printf '{"loggedIn":false}\n'; fi
+      exit 0 ;;
+    login)
+      shift 2
+      printf 'login %s\n' "$*" >> "$HOME/fake-claude-auth.log"
+      fifo="$HOME/fake-login.cmd"
+      rm -f "$fifo"
+      mkfifo "$fifo" || exit 71
+      printf 'fake claude auth login %s\r\n' "$*"
+      IFS= read -r line < "$fifo"
+      rm -f "$fifo"
+      case "$line" in
+        "ok "*) printf '%s\n' "${line#ok }" > "$auth"; printf 'Login successful.\r\n'; exit 0 ;;
+        "fail "*) printf 'Login failed.\r\n'; exit "${line#fail }" ;;
+      esac
+      exit 1 ;;
+  esac
+  exit 2
+fi
 args="$*"
 settings=
 worktree=

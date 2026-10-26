@@ -1,5 +1,6 @@
 //! Domain records C1 carries: panes, workspaces, tabs, layouts, sessions, the terminal palette, settings, the
-//! CLIs' plan usage, the task queue (Ruling R60) and the skills installed for each CLI (Ruling R61).
+//! CLIs' plan usage, the task queue (Ruling R60), the skills installed for each CLI (Ruling R61) and Claude Code's
+//! sign-ins an account switch moves between.
 
 use std::fmt;
 
@@ -569,4 +570,53 @@ pub struct Skill {
 pub struct SkillList {
     /// The skills, each invocation once.
     pub skills: Vec<Skill>,
+}
+
+/// A claude.ai sign-in as `claude auth status` reports it, personal or a Team or Enterprise organization (`org_id` tells them apart under one email); ply keeps no credential of it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+#[ts(optional_fields)]
+pub struct ClaudeAccount {
+    /// The account's email address.
+    pub email: String,
+    /// The organization the sign-in is for (`orgId`), when reported.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub org_id: Option<String>,
+    /// That organization's name (`orgName`); a personal one is `<email>'s Organization`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub org_name: Option<String>,
+    /// The plan as Claude Code names it (`subscriptionType`): `free`, `pro` and `max` are personal, `team` and `enterprise` an organization's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan: Option<String>,
+}
+
+/// What `account.list` returns: the account Claude Code uses now and the ones ply saw it signed in to.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+#[ts(optional_fields)]
+pub struct ClaudeAccounts {
+    /// Absent while Claude Code is signed out or authenticates another way (an API key, a cloud provider).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current: Option<ClaudeAccount>,
+    /// Every account seen signed in, the most recently signed in to first; `current` is among them.
+    pub known: Vec<ClaudeAccount>,
+    /// The pane running `claude auth login` while an `account.switch` waits for it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signing_in: Option<PaneId>,
+}
+
+/// How an `account.switch` ended (`account.changed`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum SignInOutcome {
+    /// Signed in to the account asked for, or to any when none was named; the Claude panes move to it.
+    SignedIn,
+    /// Signed in, but to another email or organization than the one asked for; the Claude panes move to it all the same.
+    OtherAccount,
+    /// Signed in to the account that was signed in before; nothing moves.
+    Unchanged,
+    /// `claude auth login` failed or left Claude Code signed out; its pane stays open with what it printed.
+    Failed,
+    /// The sign-in pane was closed before `claude auth login` finished.
+    Cancelled,
 }

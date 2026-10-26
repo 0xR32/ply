@@ -42,11 +42,16 @@ export interface KeyDispatcher {
   event: (event: EventPayload) => void;
 }
 
-/** The window-level listeners `render()` and `createTestRoot()` take. */
+/** GPUIX's window key defaults ply turns off: Tab and ⇧Tab reach the terminal (both CLIs use them) and the forms step their own fields, and an unfocused pane is not dimmed. */
+export const WINDOW_KEY_DEFAULTS = { tabNavigation: false, keyboardFocusDim: false } as const;
+
+/** The window-level listeners `render()` and `createTestRoot()` take, with {@link WINDOW_KEY_DEFAULTS}. */
 export interface WindowListeners {
   onKeyDown: (event: EventPayload) => void;
   onKeyUp: (event: EventPayload) => void;
   onEvent: (event: EventPayload) => void;
+  tabNavigation: false;
+  keyboardFocusDim: false;
 }
 
 /** The window's keys: ⌘ chords only (K1), none while an overlay owns the keys (7.4), and the ⌘U hold (R59, docs/keybindings.md). */
@@ -105,5 +110,10 @@ export function createKeyDispatcher(
 /** The `render()` / `createTestRoot()` options that install the dispatcher as the window-level listeners. */
 export function windowKeyListeners(target: KeyTarget): WindowListeners {
   const keys = createKeyDispatcher(target);
-  return { onKeyDown: keys.keyDown, onKeyUp: keys.keyUp, onEvent: keys.event };
+  return {
+    onKeyDown: keys.keyDown,
+    onKeyUp: keys.keyUp,
+    onEvent: keys.event,
+    ...WINDOW_KEY_DEFAULTS,
+  };
 }

@@ -15,10 +15,9 @@ function bounds(renderer: TestRenderer, testId: string) {
   return b;
 }
 
-// Painted bounds are the box inside the border; pane frames draw a 1 px ring.
+// GPUIX reports the border box, so a pane frame's 1 px ring is inside these bounds.
 function frame(renderer: TestRenderer, testId: string) {
-  const b = bounds(renderer, testId);
-  return { x: b.x - 1, y: b.y - 1, width: b.width + 2, height: b.height + 2 };
+  return bounds(renderer, testId);
 }
 
 function textOf(renderer: TestRenderer, testId: string): string | null {

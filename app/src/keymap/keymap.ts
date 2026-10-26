@@ -37,6 +37,7 @@ export const bindings: readonly Binding[] = [
   { keys: 'cmd-u', command: 'usage.show', label: 'Plan usage (hold)' },
   { keys: 'cmd-e', command: 'task.dispatch', label: 'Dispatch a task' },
   { keys: 'cmd-shift-e', command: 'task.queue', label: 'Task queue' },
+  { keys: 'cmd-shift-a', command: 'account.switch', label: 'Switch Claude account' },
 ];
 
 /** What a focused terminal does with the ⌘ chords spec 7.3 gives it; never sent to the pty (K6, K7). */

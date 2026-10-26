@@ -73,16 +73,15 @@ pub async fn create(shared: &Arc<Shared>, p: PaneCreateParams) -> MethodResult<P
     let (program, version) = resolve_program(shared, None, p.cli).await?;
     let settings = shared.registry().settings();
     let title = default_title(p.cli, &shared.login.get().shell);
-    let status = initial_status(p.cli);
     let new = NewPane {
         workspace_id: p.workspace_id,
         tab_id: p.tab_id,
+        tab_name: None,
         cli: p.cli,
         cwd: &p.cwd,
         title: &title,
-        status,
+        status: initial_status(p.cli),
     };
-    let pane = shared.registry().insert_pane(&new, unix_now())?;
     let options = LaunchOptions {
         program: &program,
         cwd,
@@ -91,9 +90,68 @@ pub async fn create(shared: &Arc<Shared>, p: PaneCreateParams) -> MethodResult<P
         resume: None,
         prompt: p.prompt.as_deref(),
     };
+    open(shared, &new, &palette, version, |pane_id| {
+        build_launch(shared, pane_id, p.cli, &options)
+    })
+    .await
+}
+
+/// A pane running `argv` instead of a shell, in a new tab named `tab_name` of `workspace_id` (`account.switch`'s `claude auth login`); it is a shell pane in every other way, so it comes back as one after a plyd restart.
+/// Fails with `bad_request`, `not_found`, `invalid_state`, `spawn_failed`, `shutting_down`.
+pub async fn create_command(
+    shared: &Arc<Shared>,
+    workspace_id: u64,
+    cwd: &Path,
+    tab_name: &str,
+    title: &str,
+    argv: Vec<String>,
+) -> MethodResult<Pane> {
+    if shared.is_stopping() {
+        return Err(refuse(ErrorCode::ShuttingDown, "plyd is shutting down"));
+    }
+    let Some(cwd_text) = cwd.to_str().filter(|_| cwd.is_absolute() && cwd.is_dir()) else {
+        return Err(refuse(
+            ErrorCode::BadRequest,
+            format!("{} is not an absolute directory", cwd.display()),
+        ));
+    };
+    let palette = wait_palette(shared, None).await?;
+    let new = NewPane {
+        workspace_id,
+        tab_id: None,
+        tab_name: Some(tab_name),
+        cli: Cli::Shell,
+        cwd: cwd_text,
+        title,
+        status: initial_status(Cli::Shell),
+    };
+    open(shared, &new, &palette, None, |pane_id| {
+        let spec = LaunchSpec {
+            cli: Cli::Shell,
+            argv,
+            env: terminal_env(),
+            cwd: cwd_text.to_owned(),
+            worktree: None,
+            resume: None,
+        };
+        write_launch(shared, pane_id, spec, &[])
+    })
+    .await
+}
+
+/// Records `new`, builds its launch spec with `launch`, spawns it and announces `pane.added`; a failure leaves no pane behind.
+async fn open(
+    shared: &Arc<Shared>,
+    new: &NewPane<'_>,
+    palette: &Palette,
+    version: Option<CliVersion>,
+    launch: impl FnOnce(PaneId) -> MethodResult<LaunchSpec>,
+) -> MethodResult<Pane> {
+    let settings = shared.registry().settings();
+    let pane = shared.registry().insert_pane(new, unix_now())?;
     let geometry = shared.geometry();
-    let prepared = build_launch(shared, pane.id, p.cli, &options).and_then(|spec| {
-        new_engine(pane.id, geometry, &palette, &settings).map(|engine| (spec, engine))
+    let prepared = launch(pane.id).and_then(|spec| {
+        new_engine(pane.id, geometry, palette, &settings).map(|engine| (spec, engine))
     });
     let (spec, engine) = match prepared {
         Ok(parts) => parts,
@@ -106,8 +164,8 @@ pub async fn create(shared: &Arc<Shared>, p: PaneCreateParams) -> MethodResult<P
         Arc::clone(shared),
         PaneSeed {
             id: pane.id,
-            cli: p.cli,
-            default_title: title,
+            cli: new.cli,
+            default_title: new.title.to_owned(),
             engine,
             geometry,
             launch: Some(spec.clone()),
@@ -199,7 +257,7 @@ pub async fn resume(shared: &Arc<Shared>, pane_id: PaneId) -> MethodResult<Pane>
         .registry()
         .begin_resume(pane_id, PaneStatus::Starting, unix_now())?;
     tracing::info!(pane_id, session = ?pane.session_ref, "resuming the pane");
-    let resumed = relaunch(shared, &pane, &handle).await;
+    let resumed = relaunch(shared, &pane, &handle, false).await;
     end_relaunch(shared, pane_id, &handle, resumed.is_ok()).await;
     resumed?;
     let reg = shared.registry();
@@ -305,21 +363,67 @@ async fn reload(shared: &Arc<Shared>, pane_id: PaneId) -> MethodResult<bool> {
         handle
     };
     let (stopped, exited) = oneshot::channel();
-    let asked = handle.send(PaneCmd::Reload(stopped)).await.is_ok();
-    if !asked || exited.await.is_err() {
+    if handle.send(PaneCmd::Reload(stopped)).await.is_err() {
+        tracing::debug!(pane_id, "the pane task had stopped before the reload");
+    }
+    relaunch_stopped(shared, pane_id, &handle, exited, false).await
+}
+
+/// Relaunches a pane its task stopped for a reload, once `exited` is answered: through the CLI's resume, or with `fresh` as a new session of the CLI; `Ok(false)` when the task gave up the reload or the pane closed.
+async fn relaunch_stopped(
+    shared: &Arc<Shared>,
+    pane_id: PaneId,
+    handle: &mpsc::Sender<PaneCmd>,
+    exited: oneshot::Receiver<()>,
+    fresh: bool,
+) -> MethodResult<bool> {
+    if exited.await.is_err() {
         shared.registry().end_resume(pane_id, true, unix_now());
         return Ok(false);
     }
     let pane = shared.registry().require(pane_id)?.pane.clone();
-    let resumed = relaunch(shared, &pane, &handle).await;
-    end_relaunch(shared, pane_id, &handle, resumed.is_ok()).await;
+    let resumed = relaunch(shared, &pane, handle, fresh).await;
+    end_relaunch(shared, pane_id, handle, resumed.is_ok()).await;
     resumed.map(|()| true)
 }
 
+/// The second half of an account switch's reload ([`PaneCmd::ReloadAtRest`]), which the pane task started at rest: once its process exited, the pane resumes its session (`resume`) or starts its CLI afresh, now on Claude Code's new sign-in.
+pub async fn resume_reloaded(
+    shared: Arc<Shared>,
+    pane_id: PaneId,
+    exited: oneshot::Receiver<()>,
+    resume: bool,
+) {
+    let Some(handle) = shared.registry().handle_of(pane_id) else {
+        tracing::debug!(pane_id, "the pane closed before it could restart");
+        return;
+    };
+    match relaunch_stopped(&shared, pane_id, &handle, exited, !resume).await {
+        Ok(true) => {
+            tracing::info!(
+                pane_id,
+                resume,
+                "the pane restarted on Claude Code's new sign-in"
+            );
+        }
+        Ok(false) => {
+            tracing::info!(
+                pane_id,
+                "the pane closed before it restarted on the new sign-in"
+            );
+        }
+        Err(e) => {
+            tracing::warn!(pane_id, error = %e.msg, "cannot restart the pane on the new sign-in; it stays lost");
+        }
+    }
+}
+
+/// Launches the pane's next process from its `launch.json`: its CLI resuming the stored session, its CLI afresh with `fresh`, or a login shell for a pane without a session.
 async fn relaunch(
     shared: &Arc<Shared>,
     pane: &Pane,
     handle: &tokio::sync::mpsc::Sender<PaneCmd>,
+    fresh: bool,
 ) -> MethodResult<()> {
     let pane_id = pane.id;
     let dir = shared.paths.pane_dir(pane_id);
@@ -342,45 +446,43 @@ async fn relaunch(
         .session_ref
         .as_deref()
         .filter(|_| stored.cli != Cli::Shell);
-    let (spec, version) = match session {
-        Some(session) => {
-            let (program, version) = resolve_program(shared, Some(pane_id), stored.cli).await?;
-            let options = LaunchOptions {
-                program: &program,
-                cwd: Path::new(&stored.cwd),
-                settings: &settings,
-                worktree: stored.worktree.as_deref(),
-                resume: Some(session),
-                prompt: None,
-            };
-            (
-                build_launch(shared, pane_id, stored.cli, &options)?,
-                version,
-            )
-        }
-        None => {
-            let cwd = [pane.cwd.as_str(), stored.cwd.as_str()]
-                .into_iter()
-                .map(Path::new)
-                .find(|dir| dir.is_dir())
-                .ok_or_else(|| {
-                    tracing::warn!(pane_id, cwd = %pane.cwd, "no directory left to reopen the pane in");
-                    refuse(
-                        ErrorCode::SpawnFailed,
-                        format!("{} no longer exists", pane.cwd),
-                    )
-                })?;
-            let login = shared.login.get();
-            let options = LaunchOptions {
-                program: &login.shell,
-                cwd,
-                settings: &settings,
-                worktree: None,
-                resume: None,
-                prompt: None,
-            };
-            (build_launch(shared, pane_id, Cli::Shell, &options)?, None)
-        }
+    let agent = stored.cli != Cli::Shell && (fresh || session.is_some());
+    let (spec, version) = if agent {
+        let (program, version) = resolve_program(shared, Some(pane_id), stored.cli).await?;
+        let options = LaunchOptions {
+            program: &program,
+            cwd: Path::new(&stored.cwd),
+            settings: &settings,
+            worktree: stored.worktree.as_deref(),
+            resume: session.filter(|_| !fresh),
+            prompt: None,
+        };
+        (
+            build_launch(shared, pane_id, stored.cli, &options)?,
+            version,
+        )
+    } else {
+        let cwd = [pane.cwd.as_str(), stored.cwd.as_str()]
+            .into_iter()
+            .map(Path::new)
+            .find(|dir| dir.is_dir())
+            .ok_or_else(|| {
+                tracing::warn!(pane_id, cwd = %pane.cwd, "no directory left to reopen the pane in");
+                refuse(
+                    ErrorCode::SpawnFailed,
+                    format!("{} no longer exists", pane.cwd),
+                )
+            })?;
+        let login = shared.login.get();
+        let options = LaunchOptions {
+            program: &login.shell,
+            cwd,
+            settings: &settings,
+            worktree: None,
+            resume: None,
+            prompt: None,
+        };
+        (build_launch(shared, pane_id, Cli::Shell, &options)?, None)
     };
     if spec.cli != pane.cli {
         tracing::info!(pane_id, from = ?pane.cli, "no session id to resume; reopening the pane as a shell");
@@ -621,17 +723,12 @@ fn build_launch(
     o: &LaunchOptions<'_>,
 ) -> MethodResult<LaunchSpec> {
     let dir = shared.paths.pane_dir(pane_id);
-    create_private_dir(&dir)
-        .map_err(|e| internal_for(pane_id, "cannot create the pane directory", &e))?;
     let (spec, files) = match agent_cli(cli) {
         None => (
             LaunchSpec {
                 cli,
                 argv: vec![o.program.display().to_string(), "-l".to_owned()],
-                env: BTreeMap::from([
-                    ("TERM".to_owned(), ply_agents::TERM.to_owned()),
-                    ("COLORTERM".to_owned(), ply_agents::COLORTERM.to_owned()),
-                ]),
+                env: terminal_env(),
                 cwd: o.cwd.display().to_string(),
                 worktree: None,
                 resume: None,
@@ -670,7 +767,28 @@ fn build_launch(
             (launch.spec, launch.files)
         }
     };
-    for file in &files {
+    write_launch(shared, pane_id, spec, &files)
+}
+
+/// The environment a pane that is not an agent adds to the login one.
+fn terminal_env() -> BTreeMap<String, String> {
+    BTreeMap::from([
+        ("TERM".to_owned(), ply_agents::TERM.to_owned()),
+        ("COLORTERM".to_owned(), ply_agents::COLORTERM.to_owned()),
+    ])
+}
+
+/// Writes `files` and `launch.json` into the pane's run directory (created mode 0700) and returns `spec`.
+fn write_launch(
+    shared: &Shared,
+    pane_id: PaneId,
+    spec: LaunchSpec,
+    files: &[ply_agents::PaneFile],
+) -> MethodResult<LaunchSpec> {
+    let dir = shared.paths.pane_dir(pane_id);
+    create_private_dir(&dir)
+        .map_err(|e| internal_for(pane_id, "cannot create the pane directory", &e))?;
+    for file in files {
         write_private(pane_id, &file.path, file.contents.as_bytes())?;
     }
     let json = spec.to_json().map_err(|e| {

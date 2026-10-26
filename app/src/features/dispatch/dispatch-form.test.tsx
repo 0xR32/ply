@@ -311,6 +311,8 @@ describe.if(hasNativeTestRenderer)('DispatchForm', () => {
       const b = el && renderer.getElementBounds(el.id);
       if (!b) throw new Error('dispatch-prompt did not paint');
       const drop = (path: string) => {
+        // After a key GPUIX hovers nothing until the pointer moves 8 px or more.
+        renderer.nativeSimulateMouseMove(b.x + 2, b.y + 2);
         renderer.nativeSimulateMouseMove(b.x + b.width / 2, b.y + b.height / 2);
         renderer.nativeSimulateFileDrop(b.x + b.width / 2, b.y + b.height / 2, [path]);
         renderer.flush();

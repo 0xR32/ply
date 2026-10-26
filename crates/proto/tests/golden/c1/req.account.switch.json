@@ -1,0 +1,14 @@
+{
+  "t": "req",
+  "id": 29,
+  "m": "account.switch",
+  "p": {
+    "workspace_id": 1,
+    "account": {
+      "email": "someone@example.com",
+      "org_id": "00000000-0000-4000-8000-0000000000a2",
+      "org_name": "Example Team",
+      "plan": "team"
+    }
+  }
+}

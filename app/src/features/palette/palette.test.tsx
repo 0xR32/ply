@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { hasNativeTestRenderer } from '@gpuix/react/testing';
 import type { Action } from '../../state/actions';
 import { type PaneState, reduce } from '../../state/reducer';
+import { ACCOUNT_QUERY } from '../../state/selectors';
 import { makePane, makeState, makeTask, mountWithStore } from '../../state/test-support';
 import { matches, paletteItems } from './commands';
 import { Palette } from './palette';
@@ -74,6 +75,53 @@ describe('palette commands', () => {
     expect(find('queue-pause-3')?.label).toBe('Resume queue of pane 1');
     expect(find('queue-pause-3')?.hint).toContain('held after plyd restarted');
     expect(find('queue-pause-2')).toBeUndefined();
+  });
+
+  test('the Claude accounts seen before are offered by email, personal and Team apart, beside a new sign-in', () => {
+    const personal = { email: 'someone@example.com', org_id: 'org-a', plan: 'max' };
+    const team = {
+      email: 'someone@example.com',
+      org_id: 'org-b',
+      org_name: 'Example Team',
+      plan: 'team',
+    };
+    const work = { email: 'work@example.com', org_id: 'org-c', plan: 'enterprise' };
+    expect(paletteItems(state(), '').some((i) => i.id.startsWith('account-'))).toBe(false);
+    const loaded = reduce(state(), {
+      type: 'accounts/loaded',
+      accounts: { current: personal, known: [personal, team, work] },
+    });
+    const rows = paletteItems(loaded, '').filter((i) => i.id.startsWith('account-'));
+    expect(rows.map((i) => [i.label, i.hint])).toEqual([
+      [
+        'Switch Claude account to someone@example.com',
+        'Team · Example Team · signs in, then Claude panes restart on it',
+      ],
+      [
+        'Switch Claude account to work@example.com',
+        'Enterprise · signs in, then Claude panes restart on it',
+      ],
+      [
+        'Sign in to another Claude account',
+        'now someone@example.com · Max · personal · claude auth login in a new tab',
+      ],
+    ]);
+    expect(paletteItems(loaded, ACCOUNT_QUERY).map((i) => i.id)).toEqual(rows.map((i) => i.id));
+    expect(rows[0]?.actions).toEqual([
+      { type: 'overlay/close' },
+      { type: 'account/switch', account: team },
+    ]);
+    expect(rows[2]?.actions).toEqual([{ type: 'overlay/close' }, { type: 'account/switch' }]);
+
+    const open = reduce(loaded, { type: 'account/opened', paneId: 3 });
+    const going = paletteItems(open, '').filter((i) => i.id.startsWith('account-'));
+    expect(going.map((i) => [i.label, i.hint, i.keys])).toEqual([
+      ['Go to the Claude sign-in', 'tab 2 · the account switch waits for the browser', '⌘⇧A'],
+    ]);
+    expect(going[0]?.actions).toEqual([
+      { type: 'overlay/close' },
+      { type: 'pane/focus', paneId: 3 },
+    ]);
   });
 
   test('every lost pane gets a resume command saying how it resumes', () => {

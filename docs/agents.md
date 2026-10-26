@@ -772,8 +772,9 @@ cache above, and the user's `settings.json` files only for their `statusLine`
 and their `enabledPlugins` (**Skills**). Everything it configures is per invocation:
 Claude Code's `--settings` file lives in ply's own `run/panes/<id>/`, and
 Codex's options are `-c` arguments. ply never passes a permission-skipping flag,
-never installs, updates or signs in either CLI, and adds no hook to the user's
-settings.
+never installs or updates either CLI, never signs one in itself (an account
+switch runs Claude Code's own `claude auth login`, which the user completes;
+**Switching the Claude account**), and adds no hook to the user's settings.
 
 The CLIs keep writing their own state as they do in any terminal: Claude Code
 its transcripts under `~/.claude/`, Codex its rollouts under
@@ -849,6 +850,61 @@ fails leaves the pane `lost` for `pane.resume`, and a `pane.close {kill:true}`
 during the reload closes it. Other clients' connections (`ply-cli`, the tests)
 move nothing.
 
+## Switching the Claude account
+
+The top bar names the account Claude Code is signed in to: its email, its plan
+and its organization, or `personal` for a personal plan (`someone@example.com ·
+Team · Example Team`, `someone@example.com · Max · personal`). Clicking it, or
+⌘⇧A, opens the palette on the account rows: "Switch Claude account to …" and
+"Sign in to another Claude account" move Claude Code to another claude.ai
+account and every Claude pane with it (`account.switch`,
+`crates/daemon/src/accounts.rs`). An account is what
+`claude auth status --json` reports: an email, an organization and a plan. A
+personal plan (`free`, `pro`, `max`) and a Team or Enterprise organization
+under the same email are two accounts, told apart by the organization's id, so
+the palette offers each by its email with `Max · personal` or `Team · <name>`
+beside it. plyd remembers each account it saw signed in (when `account.list`
+finds it current, or after a switch) in `accounts.json`, at most 16, the most
+recently signed in to first, and never a credential.
+
+1. **Sign in.** plyd opens a new tab, `Claude sign-in`, running
+   `claude auth login --claudeai --email <email>` (no `--email` for "another
+   account") in the workspace's directory, and the app focuses it. This is
+   Claude Code's own sign-in: it opens the browser (or prints the address and
+   asks for the code), and on success Claude Code stores the new sign-in in its
+   own Keychain entry and `.claude.json`. The browser's sign-in picks the
+   organization when the email belongs to more than one. ply reads, types and
+   stores none of it.
+2. **Check.** When `claude auth login` exits, plyd runs `claude auth status`
+   again. A failure (a non-zero exit, or still signed out) leaves the tab open
+   with what it printed, and nothing else changes. Closing the tab while it
+   runs cancels the switch. The account that was signed in before closes the
+   tab and changes nothing more. Another account closes the tab, and it is
+   reported as `other_account` when it is not the email or organization asked
+   for.
+3. **Restart.** On another account plyd forgets the plan usage Claude Code
+   reported for the old one (the status line numbers and the cached file
+   reading) and tells every live Claude pane to restart on the new sign-in,
+   since a running Claude Code process keeps the credentials it started with.
+   Each pane restarts once it is at rest, as for **A CLI updated under its
+   panes**: `idle` for the settle time, none of the user's typing in its input,
+   no task in flight. One that is running or waiting for the user restarts when
+   its turn ends. Its process stops (SIGHUP, SIGKILL after 2 s), the terminal
+   resets, and it comes back as `claude --resume <session_ref>` when its
+   session can be resumed, or as a new session of Claude Code in the same
+   directory and worktree when it cannot (a pane that never took a prompt).
+   While a restart waits, the pane's queue holds its next task, so a queued
+   task goes to the restarted process on the new account. Codex and shell panes
+   are untouched.
+
+`account.changed` reports the outcome and the number of panes that restart;
+the app shows it in the status bar and the top bar shows the new account. One
+switch runs at a time: while one is open the top bar says "Signing in to
+Claude…" and it, ⌘⇧A and the palette's "Go to the Claude sign-in" go to the
+sign-in tab. The switch is held
+in memory, so after a plyd restart the sign-in tab comes back as a fresh shell
+and its switch is forgotten.
+
 ## Tests
 
 - `crates/agents/tests/launch.rs`: the exact argv, environment and settings file
@@ -913,6 +969,14 @@ move nothing.
   seeing the reset terminal and no exit, unsent typing keeping a pane on its
   old version until Ctrl+U clears it, and a session without a prompt (a new
   pane, one after `/clear`) staying.
+- `crates/daemon/tests/account.rs`: `account.list` over fake-claude's
+  `claude auth status`, `account.switch` running `claude auth login --email` in
+  its own tab and refusing a second switch, a new sign-in restarting a resumable
+  pane with `--resume`, a pane without a prompt afresh and a running one only
+  after its turn (with its queued task typed into the restarted process), the
+  personal and Team accounts of one email kept apart; and a failed, cancelled
+  or unchanged sign-in restarting nothing. `crates/agents/src/claude/account.rs`
+  tests the status parser and the sign-in argv.
 - `crates/daemon/tests/lifecycle.rs`:
   `an_agent_pane_runs_the_cli_from_the_login_path_with_its_launch_spec` (a fake
   `claude` on the login `PATH` gets the adapter's argv, environment and files)

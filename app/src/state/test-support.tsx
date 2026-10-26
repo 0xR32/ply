@@ -1,6 +1,6 @@
 import { createTestRoot, type TestRenderer } from '@gpuix/react/testing';
 import type { ReactNode } from 'react';
-import { windowKeyListeners } from '../keymap/dispatcher';
+import { WINDOW_KEY_DEFAULTS, windowKeyListeners } from '../keymap/dispatcher';
 import { ChromeThemeContext, chromeFonts, createChromeTheme } from '../theme/chrome';
 import type { Skill, Tab, Task, Workspace } from './actions';
 import { type AppState, initialState, type PaneState } from './reducer';
@@ -115,7 +115,7 @@ export function mountWithStore(
 ): Mounted {
   const store = 'dispatch' in state ? state : createStore(state);
   const { render, renderer, unmount } = createTestRoot(
-    withKeymap ? { ...size, ...windowKeyListeners(store) } : size,
+    withKeymap ? { ...size, ...windowKeyListeners(store) } : { ...size, ...WINDOW_KEY_DEFAULTS },
   );
   const wrap = (child: ReactNode) => {
     const s = store.getState();

@@ -109,7 +109,7 @@ last_commit = "2026-09-23"
 contributors_5plus = 3
 checked = "2026-09-25"
 exception = "D4"
-note = "GPUIX is ply's UI framework by the owner's decision (ADR-0007, ADR-0011); pinned exactly at 0.10.0 (INV-13)"
+note = "GPUIX is ply's UI framework by the owner's decision (ADR-0007, ADR-0011); pinned exactly at 0.11.0 (INV-13)"
 
 [npm."@gpuix/react"]
 repo = "remorses/gpuix"
@@ -118,7 +118,7 @@ last_commit = "2026-09-23"
 contributors_5plus = 3
 checked = "2026-09-25"
 exception = "D4"
-note = "GPUIX is ply's UI framework by the owner's decision (ADR-0007, ADR-0011); pinned exactly at 0.10.0 (INV-13)"
+note = "GPUIX is ply's UI framework by the owner's decision (ADR-0007, ADR-0011); pinned exactly at 0.11.0 (INV-13)"
 
 [npm."@types/bun"]
 repo = "DefinitelyTyped/DefinitelyTyped"

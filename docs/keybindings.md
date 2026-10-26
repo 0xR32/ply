@@ -34,6 +34,7 @@ unless an overlay is open.
 | ⌘U, held | `usage.show` | Shows Claude Code's and Codex's plan usage for as long as it is held, and hides it on release (see **Holding ⌘U**). |
 | ⌘E | `task.dispatch` | Opens the task form (Ruling R60) on the focused agent pane: a skill or a prompt for this pane, the next free pane of a CLI in a folder, or a new pane. |
 | ⌘⇧E | `task.queue` | Opens the task queue: every pane's queued and running tasks, the pool and the finished ones. The top bar's queue pill and a pane's queue badge open it too. |
+| ⌘⇧A | `account.switch` | Opens the palette on the Claude account rows (the query `Claude account`): the accounts signed in to before, the most recent first, so ⌘⇧A ⏎ goes back to the previous one, and "Sign in to another Claude account". While a sign-in is open it goes to its tab instead. The top bar's account chip does the same; without `account.list` (an older plyd, no `claude`) it only says so. |
 
 The commands are implemented in `app/src/state/reducer.ts` (`runCommand`) and,
 for the ones that talk to plyd (`pane.terminalHere`, `pane.close`, and
@@ -120,8 +121,9 @@ them.
 ## What goes to the pty
 
 Everything that is not a ⌘ chord: Esc, Tab, ⇧Tab, Enter, every Ctrl chord,
-every ⌥ chord, bare letters and digits, function keys, arrows. GPUIX binds
-neither Tab nor ⇧Tab, so both reach the terminal. Presses, repeats and releases
+every ⌥ chord, bare letters and digits, function keys, arrows. ply turns
+GPUIX's Tab focus navigation off (`tabNavigation: false`), so Tab and ⇧Tab reach
+the terminal. Presses, repeats and releases
 are sent as KEY frames and plyd encodes them against the pane's modes
 (`docs/terminal.md`). Two rules on the way:
 
@@ -157,6 +159,12 @@ are sent as KEY frames and plyd encodes them against the pane's modes
   sessions" asks first, then stops every pane's process and quits
   (`docs/control-channel.md`, `daemon.shutdown`). Neither binds a key: ⌘Q
   belongs to GPUIX and quits only the window's app, leaving plyd running.
+- **The Claude account switches from the palette.** "Switch Claude account to
+  <email>" (one per account seen before, a personal and a Team account of one
+  email apart) and "Sign in to another Claude account" open a `Claude sign-in`
+  tab running `claude auth login`; while it is open the palette offers "Go to
+  the Claude sign-in" instead. ⌘⇧A opens the palette on just these rows
+  (`docs/agents.md`, **Switching the Claude account**).
 
 **⌥ is not Meta by default.** `option_as_meta` (Settings, "⌥ as Meta") is
 `off`, `left`, `right` or `both`. With `off`, ⌥ types the layout's character,

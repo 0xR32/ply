@@ -1,8 +1,11 @@
 import type {
   AccentName,
+  AccountChanged,
   AgentCli,
   Answer,
   BlockReason,
+  ClaudeAccount,
+  ClaudeAccounts,
   Cli,
   CliUsage,
   Event,
@@ -14,6 +17,7 @@ import type {
   Progress,
   QueueState,
   Settings,
+  SignInOutcome,
   Skill,
   SkillList,
   SkillSource,
@@ -30,9 +34,12 @@ import type {
 /** ply-proto wire types, re-exported so features reach them through state (they never import ipc, spec 8.2). */
 export type {
   AccentName,
+  AccountChanged,
   AgentCli,
   Answer,
   BlockReason,
+  ClaudeAccount,
+  ClaudeAccounts,
   Cli,
   CliUsage,
   Event,
@@ -44,6 +51,7 @@ export type {
   Progress,
   QueueState,
   Settings,
+  SignInOutcome,
   Skill,
   SkillList,
   SkillSource,
@@ -91,11 +99,13 @@ export type CommandId =
   | 'settings.open'
   | 'usage.show'
   | 'task.dispatch'
-  | 'task.queue';
+  | 'task.queue'
+  | 'account.switch';
 
 /** The one overlay that may be open; while any is open, global key bindings do nothing (spec 7.4). */
 export type Overlay =
-  | { kind: 'palette' }
+  /** The ⌘K palette; `query` fills its field on opening (the account switch opens it on the account rows). */
+  | { kind: 'palette'; query?: string }
   | { kind: 'new-pane'; target: 'pane' | 'tab' }
   | { kind: 'settings' }
   | { kind: 'close-confirm'; paneId: number }
@@ -214,4 +224,10 @@ export type Action =
   | { type: 'skills/query'; cli: AgentCli; cwd: string }
   /** `skill.list` answered for `key`, the `cli cwd` it was asked for. */
   | { type: 'skills/loaded'; key: string; list: SkillList }
-  | { type: 'skills/failed'; key: string; message: string };
+  | { type: 'skills/failed'; key: string; message: string }
+  /** plyd's `account.list` answer (on load and after each `account.changed`); `null` when plyd predates it or cannot run `claude`. */
+  | { type: 'accounts/loaded'; accounts: ClaudeAccounts | null }
+  /** Switch Claude Code to `account`, or to whichever account the sign-in page is given without one: effects send `account.switch`. */
+  | { type: 'account/switch'; account?: ClaudeAccount }
+  /** `account.switch` opened the sign-in pane `paneId`, which `claude auth login` runs in until `account.changed`. */
+  | { type: 'account/opened'; paneId: number };

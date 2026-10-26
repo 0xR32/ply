@@ -23,6 +23,11 @@
 //! | `submit <seconds>` | turns on bracketed paste and, in the background, reads each prompt submitted into the pane (a paste's lines joined with `\n`, the markers removed), appends it to `$HOME/fake-claude-typed.log`, fires UserPromptSubmit and, `<seconds>` later, Stop; `submit none` only logs | the same into `$HOME/fake-codex-typed.log`, recording `task_started`, then after `<seconds>` `task_complete` and a notify; needs `session` first |
 //! | `exit <code>` | exits | exits |
 //!
+//! `claude auth status` prints `$HOME/fake-claude-auth.json`, or a signed-out status without it. `claude auth login`
+//! appends `login <args>` to `$HOME/fake-claude-auth.log`, prints one line and waits for one line on the FIFO
+//! `$HOME/fake-login.cmd` ([`sign_in_done`]): `ok <status json>` writes that status file and exits 0, `fail <code>`
+//! exits with the code.
+//!
 //! fake-claude enters `<cwd>/.claude/worktrees/<name>` for `--worktree <name>`, then fires SessionStart (session id
 //! [`claude_session`] of the pane, or the one given to `--resume`, model `claude-example-model`) and, with a prompt,
 //! UserPromptSubmit; the prompt [`WAIT_FOR_START`] holds both back until the `start` command. fake-codex's thread is [`codex_thread`] of the pane, or the one given to `resume`; a resumed one
@@ -184,6 +189,17 @@ pub fn typed(sb: &Sandbox, cli: &str) -> Vec<String> {
         .lines()
         .map(str::to_owned)
         .collect()
+}
+
+/// Ends fake-claude's `claude auth login` once it waits: `ok <status json>` or `fail <code>`.
+pub fn sign_in_done(sb: &Sandbox, line: &str) {
+    let fifo = sb.home.join("fake-login.cmd");
+    assert!(
+        eventually(Duration::from_secs(10), || fifo.exists()),
+        "claude auth login did not start"
+    );
+    let mut f = std::fs::OpenOptions::new().write(true).open(&fifo).unwrap();
+    f.write_all(format!("{line}\n").as_bytes()).unwrap();
 }
 
 /// The lines of a fake's launch log (`fake-claude.log` or `fake-codex.log`).

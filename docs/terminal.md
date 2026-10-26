@@ -415,12 +415,12 @@ the temporary directory's own cleanup removes.
 
 [anthropics/claude-code#80980]: https://github.com/anthropics/claude-code/issues/80980
 
-Three GPUIX 0.10.0 limits shape this. It reports the drop alone, so nothing
+Three GPUIX limits shape this (found on 0.10.0). It reports the drop alone, so nothing
 marks a pane while a file is dragged over it. GPUI counts no element hovered
 while the last input was a key, and a file drop does not end that
 (`Window::dispatch_event`), while a drag from another app brings the window
 drag events, not mouse moves: a file dropped right after typing, before the
-pointer has moved over the window, reaches nothing and is lost; move the pointer over ply once and drop again
+pointer has moved over the window (8 px or more since GPUIX 0.11), reaches nothing and is lost; move the pointer over ply once and drop again
 (`terminal-view.test.tsx` pins this). And GPUIX fires `onClick` on the drop's
 release, so a drop clicks what it lands on unless that element takes the drop
 itself: every clickable on the ⌘E form takes it, and the needs-you strip's Yes
