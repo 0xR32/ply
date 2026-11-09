@@ -1,4 +1,4 @@
-//! Raw bindings to libghostty-vt, Ghostty's terminal engine as a C library (ghostty 44f2a44, spec 2).
+//! Raw bindings to libghostty-vt, Ghostty's terminal engine as a C library (libghostty-vt 1.0.0, spec 2).
 //!
 //! This is the only crate in ply with FFI to libghostty-vt (spec 3.2, INV-17). `build.rs` downloads the pinned ghostty
 //! source once, checks its SHA-256 and caches it (or takes `PLY_GHOSTTY_SRC`), runs `zig build -Demit-lib-vt` on it
@@ -13,10 +13,9 @@
 //! It holds no logic and depends on no ply crate (spec 3.2, 8.2). Only `ply-term` uses it, and only through its
 //! `engine` feature, which only `ply-daemon` enables; everything else in ply sees the safe `ply_term::Engine`.
 //!
-//! Every enum is a C `int` (`types.h`) and the Zig side trusts it: in the ReleaseFast build an enum argument outside
-//! the declared constants (a `GhosttyKey` above 175, say) is undefined behaviour, not an error, so callers validate
-//! enum values before passing them. Every sized struct starts with `size: usize`, which the caller sets to the
-//! struct's size and a callee checks before reading further. The layouts and constants here are checked against the
+//! Every enum is a C `int` (`types.h`); a call that returns a [`GhosttyResult`] answers an undefined enum value with
+//! [`GHOSTTY_INVALID_VALUE`], and callers still validate values before passing them. Every sized struct starts with
+//! `size: usize`, which the caller sets to the struct's size and a callee checks before reading further. The layouts and constants here are checked against the
 //! library's own ABI manifest ([`ghostty_type_json`]) by `tests/layout.rs`; an upgrade of the pin reruns that test
 //! (ADR-0008 Decision 5). No function is thread-safe for one handle: the caller serializes every call on a terminal
 //! and on the objects created from it, and a handle is freed exactly once. Every out pointer must be valid for
@@ -44,6 +43,8 @@ pub const GHOSTTY_IO_ERROR: GhosttyResult = -5;
 pub const GHOSTTY_LIMIT_EXCEEDED: GhosttyResult = -6;
 /// The request was refused as unsafe (paste text that could inject commands); nothing was written.
 pub const GHOSTTY_REJECTED: GhosttyResult = -7;
+/// This build or version of the library does not know the option or feature; nothing changed.
+pub const GHOSTTY_UNSUPPORTED: GhosttyResult = -8;
 
 /// Opaque allocator (`allocator.h`); ply always passes a null pointer, which selects libghostty-vt's default.
 #[repr(C)]
@@ -80,7 +81,7 @@ opaque_handle! {
     GhosttyKeyEncoder, GhosttyKeyEncoderImpl;
     /// One reusable key event for a key encoder (`key/event.h`).
     GhosttyKeyEvent, GhosttyKeyEventImpl;
-    /// Turns mouse events into pty bytes against copied terminal modes; tracks the last reported cell.
+    /// Turns mouse events into pty bytes against copied terminal modes.
     GhosttyMouseEncoder, GhosttyMouseEncoderImpl;
     /// One reusable mouse event for a mouse encoder (`mouse/event.h`).
     GhosttyMouseEvent, GhosttyMouseEventImpl;
@@ -121,8 +122,8 @@ pub struct GhosttyColorRgb {
     pub b: u8,
 }
 
-/// Tag of [`GhosttyStyleColor`] (`style.h`), selecting the valid union member.
-pub type GhosttyStyleColorTag = c_int;
+/// Tag of [`GhosttyStyleColor`] (`style.h`), selecting the valid union member; a C `int` enum stored in one byte.
+pub type GhosttyStyleColorTag = u8;
 /// No colour set: the renderer uses the default for the slot.
 pub const GHOSTTY_STYLE_COLOR_NONE: GhosttyStyleColorTag = 0;
 /// A 256-colour palette index in `value.palette`, unresolved.
@@ -138,8 +139,6 @@ pub union GhosttyStyleColorValue {
     pub palette: u8,
     /// RGB value (tag RGB).
     pub rgb: GhosttyColorRgb,
-    /// Keeps the union 8 bytes wide as in C; never read.
-    pub _padding: u64,
 }
 
 /// A colour in a style: none, a palette index or RGB, never resolved against the palette.
@@ -155,88 +154,95 @@ pub struct GhosttyStyleColor {
 /// SGR underline kind (`sgr.h` `GhosttySgrUnderline`): 0 none, 1 single, 2 double, 3 curly, 4 dotted, 5 dashed.
 pub type GhosttySgrUnderline = c_int;
 
-/// A cell's style (`style.h`), a sized struct filled by the library.
+/// Bit set of a [`GhosttyStyle`] (`style.h`): one bit per SGR attribute, the underline kind in bits 8–10.
+pub type GhosttyStyleFlags = u16;
+/// SGR 1 is in effect.
+pub const GHOSTTY_STYLE_FLAG_BOLD: GhosttyStyleFlags = 1 << 0;
+/// SGR 3 is in effect.
+pub const GHOSTTY_STYLE_FLAG_ITALIC: GhosttyStyleFlags = 1 << 1;
+/// SGR 2 is in effect.
+pub const GHOSTTY_STYLE_FLAG_FAINT: GhosttyStyleFlags = 1 << 2;
+/// SGR 5 is in effect.
+pub const GHOSTTY_STYLE_FLAG_BLINK: GhosttyStyleFlags = 1 << 3;
+/// SGR 7 is in effect (swap fg and bg when drawing).
+pub const GHOSTTY_STYLE_FLAG_INVERSE: GhosttyStyleFlags = 1 << 4;
+/// SGR 8 is in effect (draw no glyph).
+pub const GHOSTTY_STYLE_FLAG_INVISIBLE: GhosttyStyleFlags = 1 << 5;
+/// SGR 9 is in effect.
+pub const GHOSTTY_STYLE_FLAG_STRIKETHROUGH: GhosttyStyleFlags = 1 << 6;
+/// SGR 53 is in effect.
+pub const GHOSTTY_STYLE_FLAG_OVERLINE: GhosttyStyleFlags = 1 << 7;
+/// Lowest bit of the underline kind ([`GhosttySgrUnderline`], 0–5) in [`GhosttyStyleFlags`].
+pub const GHOSTTY_STYLE_UNDERLINE_SHIFT: u32 = 8;
+/// The bits of [`GhosttyStyleFlags`] that hold the underline kind.
+pub const GHOSTTY_STYLE_UNDERLINE_MASK: GhosttyStyleFlags = 0x7 << GHOSTTY_STYLE_UNDERLINE_SHIFT;
+
+/// A cell's style (`style.h`), filled by the library.
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct GhosttyStyle {
-    /// Must equal `size_of::<GhosttyStyle>()` before a call fills it.
-    pub size: usize,
     /// Text colour (SGR 30–38, 90–97).
     pub fg_color: GhosttyStyleColor,
     /// Cell background (SGR 40–48, 100–107).
     pub bg_color: GhosttyStyleColor,
     /// Underline colour (SGR 58); NONE follows the text colour.
     pub underline_color: GhosttyStyleColor,
-    /// SGR 1 is in effect.
-    pub bold: bool,
-    /// SGR 3 is in effect.
-    pub italic: bool,
-    /// SGR 2 is in effect.
-    pub faint: bool,
-    /// SGR 5 is in effect.
-    pub blink: bool,
-    /// SGR 7 is in effect (swap fg and bg when drawing).
-    pub inverse: bool,
-    /// SGR 8 is in effect (draw no glyph).
-    pub invisible: bool,
-    /// SGR 9 is in effect.
-    pub strikethrough: bool,
-    /// SGR 53 is in effect.
-    pub overline: bool,
-    /// Underline kind, 0–5 ([`GhosttySgrUnderline`]).
-    pub underline: GhosttySgrUnderline,
+    /// Attributes and underline kind.
+    pub flags: GhosttyStyleFlags,
+    /// Zero; never read.
+    pub reserved: u16,
 }
 
 /// `GhosttyTerminalOption` (`terminal.h`): what [`ghostty_terminal_set`] configures; the comment names the value's type.
 pub type GhosttyTerminalOption = c_int;
 /// `void*` passed back to every callback; must outlive the terminal.
-pub const GHOSTTY_TERMINAL_OPT_USERDATA: GhosttyTerminalOption = 0;
+pub const GHOSTTY_TERMINAL_OPT_USERDATA: GhosttyTerminalOption = 1;
 /// [`GhosttyTerminalWritePtyFn`]: query answers and reports for the pty.
-pub const GHOSTTY_TERMINAL_OPT_WRITE_PTY: GhosttyTerminalOption = 1;
+pub const GHOSTTY_TERMINAL_OPT_WRITE_PTY: GhosttyTerminalOption = 2;
 /// [`GhosttyTerminalBellFn`]: BEL received.
-pub const GHOSTTY_TERMINAL_OPT_BELL: GhosttyTerminalOption = 2;
+pub const GHOSTTY_TERMINAL_OPT_BELL: GhosttyTerminalOption = 3;
 /// [`GhosttyTerminalXtversionFn`]: the XTVERSION (`CSI > q`) answer; unset answers "libghostty".
-pub const GHOSTTY_TERMINAL_OPT_XTVERSION: GhosttyTerminalOption = 4;
+pub const GHOSTTY_TERMINAL_OPT_XTVERSION: GhosttyTerminalOption = 5;
 /// [`GhosttyTerminalTitleChangedFn`]: OSC 0/2.
-pub const GHOSTTY_TERMINAL_OPT_TITLE_CHANGED: GhosttyTerminalOption = 5;
+pub const GHOSTTY_TERMINAL_OPT_TITLE_CHANGED: GhosttyTerminalOption = 6;
 /// [`GhosttyTerminalSizeFn`]: CSI 14/16/18 t and mode 2048 reports.
-pub const GHOSTTY_TERMINAL_OPT_SIZE: GhosttyTerminalOption = 6;
+pub const GHOSTTY_TERMINAL_OPT_SIZE: GhosttyTerminalOption = 7;
 /// [`GhosttyTerminalColorSchemeFn`]: `CSI ? 996 n`; unset leaves it unanswered.
-pub const GHOSTTY_TERMINAL_OPT_COLOR_SCHEME: GhosttyTerminalOption = 7;
+pub const GHOSTTY_TERMINAL_OPT_COLOR_SCHEME: GhosttyTerminalOption = 8;
 /// `GhosttyColorRgb*`: default foreground, answering OSC 10; null unsets (then OSC 10 goes unanswered).
-pub const GHOSTTY_TERMINAL_OPT_COLOR_FOREGROUND: GhosttyTerminalOption = 11;
+pub const GHOSTTY_TERMINAL_OPT_COLOR_FOREGROUND: GhosttyTerminalOption = 12;
 /// `GhosttyColorRgb*`: default background, answering OSC 11; null unsets.
-pub const GHOSTTY_TERMINAL_OPT_COLOR_BACKGROUND: GhosttyTerminalOption = 12;
+pub const GHOSTTY_TERMINAL_OPT_COLOR_BACKGROUND: GhosttyTerminalOption = 13;
 /// `GhosttyColorRgb*`: default cursor colour, answering OSC 12; null unsets.
-pub const GHOSTTY_TERMINAL_OPT_COLOR_CURSOR: GhosttyTerminalOption = 13;
+pub const GHOSTTY_TERMINAL_OPT_COLOR_CURSOR: GhosttyTerminalOption = 14;
 /// `GhosttyColorRgb[256]*`: default palette, answering OSC 4 and restored by OSC 104.
-pub const GHOSTTY_TERMINAL_OPT_COLOR_PALETTE: GhosttyTerminalOption = 14;
+pub const GHOSTTY_TERMINAL_OPT_COLOR_PALETTE: GhosttyTerminalOption = 15;
 /// `uint64_t*`: bytes of Kitty images kept; 0 disables the Kitty graphics protocol.
-pub const GHOSTTY_TERMINAL_OPT_KITTY_IMAGE_STORAGE_LIMIT: GhosttyTerminalOption = 15;
+pub const GHOSTTY_TERMINAL_OPT_KITTY_IMAGE_STORAGE_LIMIT: GhosttyTerminalOption = 16;
 /// `bool*`: Glyph Protocol APC handling; false ignores its sequences and clears registered glyphs.
-pub const GHOSTTY_TERMINAL_OPT_GLYPH_PROTOCOL: GhosttyTerminalOption = 24;
+pub const GHOSTTY_TERMINAL_OPT_GLYPH_PROTOCOL: GhosttyTerminalOption = 25;
 /// [`GhosttyTerminalPwdChangedFn`]: OSC 7, OSC 9;9, OSC 1337 CurrentDir.
-pub const GHOSTTY_TERMINAL_OPT_PWD_CHANGED: GhosttyTerminalOption = 25;
+pub const GHOSTTY_TERMINAL_OPT_PWD_CHANGED: GhosttyTerminalOption = 26;
 /// [`GhosttyTerminalClipboardWriteFn`]: OSC 52 (and OSC 5522) writes.
-pub const GHOSTTY_TERMINAL_OPT_CLIPBOARD_WRITE: GhosttyTerminalOption = 26;
-/// `size_t*`: scrollback byte cap, page-granular; null removes it (the built-in default is 10 000 bytes).
-pub const GHOSTTY_TERMINAL_OPT_SCROLLBACK_MAX_BYTES: GhosttyTerminalOption = 27;
-/// `size_t*`: scrollback line cap, pruned page by page (keeps somewhat fewer rows); null removes it.
-pub const GHOSTTY_TERMINAL_OPT_SCROLLBACK_MAX_LINES: GhosttyTerminalOption = 28;
+pub const GHOSTTY_TERMINAL_OPT_CLIPBOARD_WRITE: GhosttyTerminalOption = 27;
+/// `size_t*`: scrollback byte cap, page-granular; `SIZE_MAX` removes it, null restores the 10 000-byte default.
+pub const GHOSTTY_TERMINAL_OPT_SCROLLBACK_MAX_BYTES: GhosttyTerminalOption = 28;
+/// `size_t*`: scrollback line cap, pruned page by page (keeps somewhat more rows); null or `SIZE_MAX` removes it.
+pub const GHOSTTY_TERMINAL_OPT_SCROLLBACK_MAX_LINES: GhosttyTerminalOption = 29;
 /// [`GhosttyTerminalDesktopNotificationFn`]: OSC 9 bodies that are not ConEmu commands, and OSC 777.
-pub const GHOSTTY_TERMINAL_OPT_DESKTOP_NOTIFICATION: GhosttyTerminalOption = 29;
+pub const GHOSTTY_TERMINAL_OPT_DESKTOP_NOTIFICATION: GhosttyTerminalOption = 30;
 /// [`GhosttyTerminalProgressReportFn`]: OSC 9;4.
-pub const GHOSTTY_TERMINAL_OPT_PROGRESS_REPORT: GhosttyTerminalOption = 30;
+pub const GHOSTTY_TERMINAL_OPT_PROGRESS_REPORT: GhosttyTerminalOption = 31;
 /// `size_t*`: bytes of an unfinished sequence kept for snapshots; 0 or null disables tracking.
-pub const GHOSTTY_TERMINAL_OPT_CONTINUATION_MAX_BYTES: GhosttyTerminalOption = 31;
+pub const GHOSTTY_TERMINAL_OPT_CONTINUATION_MAX_BYTES: GhosttyTerminalOption = 32;
 /// [`GhosttyTerminalModeConfig`]`*`: sets a mode's current value and its reset (RIS) default.
-pub const GHOSTTY_TERMINAL_OPT_MODE_DEFAULT: GhosttyTerminalOption = 33;
+pub const GHOSTTY_TERMINAL_OPT_MODE_DEFAULT: GhosttyTerminalOption = 34;
 /// [`GhosttyTerminalModeConfig`]`*`: sets a mode's current value only.
-pub const GHOSTTY_TERMINAL_OPT_MODE: GhosttyTerminalOption = 34;
+pub const GHOSTTY_TERMINAL_OPT_MODE: GhosttyTerminalOption = 35;
 /// [`GhosttyString`]`*`: the name XTGETTCAP `TN` reports, copied, at most 128 bytes.
-pub const GHOSTTY_TERMINAL_OPT_TERMINFO_NAME: GhosttyTerminalOption = 37;
+pub const GHOSTTY_TERMINAL_OPT_TERMINFO_NAME: GhosttyTerminalOption = 38;
 /// `size_t*`: most decoded bytes one OSC 5522 clipboard write may buffer; null restores the 64 MiB default.
-pub const GHOSTTY_TERMINAL_OPT_CLIPBOARD_WRITE_MAX_BYTES: GhosttyTerminalOption = 39;
+pub const GHOSTTY_TERMINAL_OPT_CLIPBOARD_WRITE_MAX_BYTES: GhosttyTerminalOption = 40;
 
 /// `GhosttyTerminalData` (`terminal.h`): what [`ghostty_terminal_get`] reads; the comment names the out type.
 pub type GhosttyTerminalData = c_int;
@@ -312,9 +318,9 @@ pub struct GhosttySizeReportSize {
 /// `GhosttySnapshotDecoderOption` (`snapshot.h`); set before decoding starts or the call returns INVALID_VALUE.
 pub type GhosttySnapshotDecoderOption = c_int;
 /// `size_t*`: largest continuation accepted; with RETAIN also the returned terminal's tracking limit.
-pub const GHOSTTY_SNAPSHOT_DECODER_OPT_MAX_CONTINUATION_BYTES: GhosttySnapshotDecoderOption = 0;
+pub const GHOSTTY_SNAPSHOT_DECODER_OPT_MAX_CONTINUATION_BYTES: GhosttySnapshotDecoderOption = 1;
 /// `bool*`: keep continuation tracking on the returned terminal.
-pub const GHOSTTY_SNAPSHOT_DECODER_OPT_RETAIN_CONTINUATION: GhosttySnapshotDecoderOption = 1;
+pub const GHOSTTY_SNAPSHOT_DECODER_OPT_RETAIN_CONTINUATION: GhosttySnapshotDecoderOption = 2;
 
 /// `GhosttyColorScheme` (`device.h`), the `CSI ? 996 n` answer.
 pub type GhosttyColorScheme = c_int;
@@ -323,11 +329,9 @@ pub const GHOSTTY_COLOR_SCHEME_LIGHT: GhosttyColorScheme = 0;
 /// Report a dark scheme (`CSI ? 997 ; 1 n`).
 pub const GHOSTTY_COLOR_SCHEME_DARK: GhosttyColorScheme = 1;
 
-/// An OSC 9 / OSC 777 request, borrowed for the callback only; a sized struct.
+/// An OSC 9 / OSC 777 request, borrowed for the callback only.
 #[repr(C)]
 pub struct GhosttyTerminalDesktopNotification {
-    /// Size the library filled; read only fields that lie within it.
-    pub size: usize,
     /// Notification title; empty for OSC 9.
     pub title: GhosttyString,
     /// Notification text, as the program sent it.
@@ -337,11 +341,9 @@ pub struct GhosttyTerminalDesktopNotification {
 /// `GhosttyTerminalProgressState` (`terminal.h`): 0 remove, 1 set, 2 error, 3 indeterminate, 4 pause.
 pub type GhosttyTerminalProgressState = c_int;
 
-/// An OSC 9;4 progress report, borrowed for the callback only; a sized struct.
+/// An OSC 9;4 progress report, borrowed for the callback only.
 #[repr(C)]
 pub struct GhosttyTerminalProgressReport {
-    /// Size the library filled; read only fields that lie within it.
-    pub size: usize,
     /// The reported state.
     pub state: GhosttyTerminalProgressState,
     /// Percent 0–100, or -1 when the program omitted it.
@@ -385,11 +387,9 @@ pub type GhosttyClipboardWriteReplyFn = Option<
     ),
 >;
 
-/// A synchronous clipboard write request, borrowed for the callback only; a sized struct.
+/// A synchronous clipboard write request, borrowed for the callback only.
 #[repr(C)]
 pub struct GhosttyClipboardWrite {
-    /// Size the library filled; read only fields that lie within it.
-    pub size: usize,
     /// Destination clipboard.
     pub location: GhosttyClipboardLocation,
     /// `contents_len` representations of one value, to be committed together.
@@ -495,8 +495,20 @@ pub type GhosttyRenderStateRowCellsData = c_int;
 pub const GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_STYLE: GhosttyRenderStateRowCellsData = 2;
 /// `uint32_t*`: codepoints of the cluster including the base; 0 without text.
 pub const GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_GRAPHEMES_LEN: GhosttyRenderStateRowCellsData = 3;
-/// `uint32_t*` buffer of at least `GRAPHEMES_LEN` entries: base codepoint first.
+/// [`GhosttyCodepointBuffer`]`*`: the cluster's codepoints, base first; OUT_OF_SPACE when `cap` is below `len`.
 pub const GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_GRAPHEMES_BUF: GhosttyRenderStateRowCellsData = 4;
+
+/// A caller-owned codepoint buffer (`render.h`).
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct GhosttyCodepointBuffer {
+    /// Destination for `cap` codepoints; null with `cap` 0 queries the count.
+    pub ptr: *mut u32,
+    /// Capacity in codepoints.
+    pub cap: usize,
+    /// Codepoints in the cluster; at most `cap` of them were written.
+    pub len: usize,
+}
 
 /// The cursor as a renderer sees it (`render.h`); a sized struct.
 #[repr(C)]
@@ -518,7 +530,7 @@ pub struct GhosttyRenderStateCursor {
     pub blinking: bool,
     /// The terminal believes a password is being typed (echo off).
     pub password_input: bool,
-    /// `GhosttyRenderStateCursorVisualStyle`: 0 bar, 1 block, 2 underline, 3 hollow block.
+    /// `GhosttyCursorStyle`: 0 bar, 1 block, 2 underline, 3 hollow block.
     pub visual_style: c_int,
 }
 
@@ -613,12 +625,10 @@ pub struct GhosttyPoint {
     pub value: GhosttyPointValue,
 }
 
-/// An untracked reference to one cell (`grid_ref.h`), valid until the next mutating terminal call; a sized struct.
+/// An untracked reference to one cell (`grid_ref.h`), valid until the next mutating terminal call.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct GhosttyGridRef {
-    /// Must equal `size_of::<GhosttyGridRef>()` before a call fills it.
-    pub size: usize,
     /// Page node; opaque to the embedder.
     pub node: *mut c_void,
     /// Column within the page.
@@ -627,12 +637,10 @@ pub struct GhosttyGridRef {
     pub y: u16,
 }
 
-/// A selection between two grid references (`selection.h`), used for search matches; a sized struct.
+/// A selection between two grid references (`selection.h`), used for search matches.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct GhosttySelection {
-    /// Must equal `size_of::<GhosttySelection>()`.
-    pub size: usize,
     /// First cell (inclusive); may come after `end` in terminal order.
     pub start: GhosttyGridRef,
     /// Last cell (inclusive).
@@ -656,21 +664,21 @@ pub struct GhosttySelectionBuffer {
 /// `GhosttySearchOption` (`search.h`).
 pub type GhosttySearchOption = c_int;
 /// [`GhosttyString`]`*`: the needle, copied; ASCII letters match case-insensitively, other bytes exactly.
-pub const GHOSTTY_SEARCH_OPT_NEEDLE: GhosttySearchOption = 0;
+pub const GHOSTTY_SEARCH_OPT_NEEDLE: GhosttySearchOption = 1;
 /// `GhosttySearchScroll*`: scroll policy of the select options.
-pub const GHOSTTY_SEARCH_OPT_SELECT_SCROLL: GhosttySearchOption = 3;
+pub const GHOSTTY_SEARCH_OPT_SELECT_SCROLL: GhosttySearchOption = 4;
 /// `GhosttySearchData` (`search.h`).
 pub type GhosttySearchData = c_int;
 /// `size_t*`: matches found on the active screen.
-pub const GHOSTTY_SEARCH_DATA_TOTAL_MATCHES: GhosttySearchData = 2;
+pub const GHOSTTY_SEARCH_DATA_TOTAL_MATCHES: GhosttySearchData = 3;
 /// [`GhosttySelectionBuffer`]`*`: every match, newest to oldest, valid until the terminal next changes.
-pub const GHOSTTY_SEARCH_DATA_MATCHES: GhosttySearchData = 5;
+pub const GHOSTTY_SEARCH_DATA_MATCHES: GhosttySearchData = 6;
 /// `GhosttySearchScroll` value: select options never scroll the viewport.
 pub const GHOSTTY_SEARCH_SCROLL_NONE: c_int = 1;
 
-/// `GhosttyKeyAction` (`key/event.h`) 0 release, 1 press, 2 repeat, numbered as `ply_proto::data::KeyAction`; other values are UB.
+/// `GhosttyKeyAction` (`key/event.h`) 0 release, 1 press, 2 repeat, numbered as `ply_proto::data::KeyAction`.
 pub type GhosttyKeyAction = c_int;
-/// `GhosttyKey` (`key/event.h`): a physical key; only 0..=175 are defined at this pin and any other value is UB.
+/// `GhosttyKey` (`key/event.h`): a physical key; only 0..=175 are defined at this pin.
 pub type GhosttyKey = c_int;
 /// The key has no identity; the event's text is sent as is.
 pub const GHOSTTY_KEY_UNIDENTIFIED: GhosttyKey = 0;
@@ -680,8 +688,8 @@ pub const GHOSTTY_KEY_ENTER: GhosttyKey = 58;
 pub const GHOSTTY_KEY_MAX: GhosttyKey = 175;
 /// `GhosttyKeyEncoderOption` (`key/encoder.h`).
 pub type GhosttyKeyEncoderOption = c_int;
-/// `GhosttyOptionAsAlt*`: which ⌥ acts as Alt; reset by every `setopt_from_terminal`.
-pub const GHOSTTY_KEY_ENCODER_OPT_MACOS_OPTION_AS_ALT: GhosttyKeyEncoderOption = 6;
+/// `GhosttyOptionAsAlt*`: which ⌥ acts as Alt; reset by every `set_from_terminal`.
+pub const GHOSTTY_KEY_ENCODER_OPT_MACOS_OPTION_AS_ALT: GhosttyKeyEncoderOption = 7;
 /// `GhosttyOptionAsAlt` (`key/encoder.h`).
 pub type GhosttyOptionAsAlt = c_int;
 /// ⌥ types layout characters.
@@ -693,9 +701,9 @@ pub const GHOSTTY_OPTION_AS_ALT_LEFT: GhosttyOptionAsAlt = 2;
 /// Only the right ⌥ acts as Alt.
 pub const GHOSTTY_OPTION_AS_ALT_RIGHT: GhosttyOptionAsAlt = 3;
 
-/// `GhosttyMouseAction` (`mouse/event.h`) 0 press, 1 release, 2 motion, numbered as `ply_proto::data::MouseAction`; other values are UB.
+/// `GhosttyMouseAction` (`mouse/event.h`) 0 press, 1 release, 2 motion, numbered as `ply_proto::data::MouseAction`.
 pub type GhosttyMouseAction = c_int;
-/// `GhosttyMouseButton` (`mouse/event.h`) 1–11, numbered as `ply_proto::data::MouseButton`; other values are UB.
+/// `GhosttyMouseButton` (`mouse/event.h`) 1–11, numbered as `ply_proto::data::MouseButton`.
 pub type GhosttyMouseButton = c_int;
 /// A pointer position in surface pixels (`mouse/event.h`); must be finite and within `i32` range after scaling.
 #[repr(C)]
@@ -709,11 +717,9 @@ pub struct GhosttyMousePosition {
 /// `GhosttyMouseEncoderOption` (`mouse/encoder.h`).
 pub type GhosttyMouseEncoderOption = c_int;
 /// [`GhosttyMouseEncoderSize`]`*`: surface and cell geometry; cell sizes must be non-zero.
-pub const GHOSTTY_MOUSE_ENCODER_OPT_SIZE: GhosttyMouseEncoderOption = 2;
+pub const GHOSTTY_MOUSE_ENCODER_OPT_SIZE: GhosttyMouseEncoderOption = 3;
 /// `bool*`: some button is held (drag reporting under mode 1002).
-pub const GHOSTTY_MOUSE_ENCODER_OPT_ANY_BUTTON_PRESSED: GhosttyMouseEncoderOption = 3;
-/// `bool*`: drop motion events that stay in the last reported cell.
-pub const GHOSTTY_MOUSE_ENCODER_OPT_TRACK_LAST_CELL: GhosttyMouseEncoderOption = 4;
+pub const GHOSTTY_MOUSE_ENCODER_OPT_ANY_BUTTON_PRESSED: GhosttyMouseEncoderOption = 4;
 
 /// Surface geometry for the mouse encoder (`mouse/encoder.h`); a sized struct.
 #[repr(C)]
@@ -796,75 +802,10 @@ pub struct GhosttyPaste {
     pub allow_unsafe: bool,
 }
 
-/// `GhosttyFormatterFormat` (`formatter.h`).
-pub type GhosttyFormatterFormat = c_int;
-/// Plain text, no escape sequences.
-pub const GHOSTTY_FORMATTER_FORMAT_PLAIN: GhosttyFormatterFormat = 0;
-
-/// Screen state a VT-format output restores (`formatter.h`); all false for plain text; a sized struct.
-#[repr(C)]
-#[derive(Debug, Clone, Copy, Default)]
-pub struct GhosttyFormatterScreenExtra {
-    /// Must equal `size_of::<GhosttyFormatterScreenExtra>()`.
-    pub size: usize,
-    /// Emit the cursor position.
-    pub cursor: bool,
-    /// Emit SGR styles.
-    pub style: bool,
-    /// Emit OSC 8 hyperlinks.
-    pub hyperlink: bool,
-    /// Emit character protection.
-    pub protection: bool,
-    /// Emit the Kitty keyboard flags.
-    pub kitty_keyboard: bool,
-    /// Emit character sets.
-    pub charsets: bool,
-}
-
-/// Terminal state a VT-format output restores (`formatter.h`); all false for plain text; a sized struct.
-#[repr(C)]
-#[derive(Debug, Clone, Copy, Default)]
-pub struct GhosttyFormatterTerminalExtra {
-    /// Must equal `size_of::<GhosttyFormatterTerminalExtra>()`.
-    pub size: usize,
-    /// Emit palette changes.
-    pub palette: bool,
-    /// Emit mode changes.
-    pub modes: bool,
-    /// Emit the scrolling region.
-    pub scrolling_region: bool,
-    /// Emit tab stops.
-    pub tabstops: bool,
-    /// Emit the pwd.
-    pub pwd: bool,
-    /// Emit keyboard modes.
-    pub keyboard: bool,
-    /// Screen-level extras.
-    pub screen: GhosttyFormatterScreenExtra,
-}
-
-/// Options of a terminal formatter (`formatter.h`), passed by value; a sized struct.
-#[repr(C)]
-#[derive(Debug, Clone, Copy)]
-pub struct GhosttyFormatterTerminalOptions {
-    /// Must equal `size_of::<GhosttyFormatterTerminalOptions>()`.
-    pub size: usize,
-    /// Output format.
-    pub emit: GhosttyFormatterFormat,
-    /// Join soft-wrapped rows into one line.
-    pub unwrap: bool,
-    /// Drop trailing whitespace on non-blank lines.
-    pub trim: bool,
-    /// State to restore in VT output.
-    pub extra: GhosttyFormatterTerminalExtra,
-    /// Restricts output to a range; null formats the whole active screen with its scrollback.
-    pub selection: *const GhosttySelection,
-}
-
 /// `GhosttySysOption` (`sys.h`): process-wide settings.
 pub type GhosttySysOption = c_int;
 /// [`GhosttySysLogFn`]: receives the library's log lines; set before any other call.
-pub const GHOSTTY_SYS_OPT_LOG: GhosttySysOption = 2;
+pub const GHOSTTY_SYS_OPT_LOG: GhosttySysOption = 3;
 /// `GhosttySysLogLevel` (`sys.h`): 0 error, 1 warning, 2 info, 3 debug.
 pub type GhosttySysLogLevel = c_int;
 /// Receives one log line (`scope` and `message` valid for their lengths during the call); may run on any calling thread.
@@ -942,7 +883,7 @@ unsafe extern "C" {
         mode: GhosttyTerminalCompressionMode,
         out_result: *mut GhosttyTerminalCompressionResult,
     ) -> GhosttyResult;
-    /// Resolves `point` to an untracked grid reference in `*out_ref` (its `size` set by the caller); fails outside the grid.
+    /// Resolves `point` to an untracked grid reference in `*out_ref`; fails outside the grid.
     pub fn ghostty_terminal_grid_ref(
         terminal: GhosttyTerminal,
         point: GhosttyPoint,
@@ -975,11 +916,11 @@ unsafe extern "C" {
         terminal: GhosttyTerminal,
         point: GhosttyPoint,
     ) -> GhosttyResult;
-    /// Pastes per the live modes through the write-pty callback (required); REJECTED for unsafe text; `*out_written` may be null.
+    /// Pastes per the live modes through the write-pty callback (required); REJECTED for unsafe text; `*out_pasted` may be null.
     pub fn ghostty_terminal_paste(
         terminal: GhosttyTerminal,
         paste: *const GhosttyPaste,
-        out_written: *mut bool,
+        out_pasted: *mut bool,
     ) -> GhosttyResult;
 
     /// Creates an empty render state into `*state`; free with [`ghostty_render_state_free`].
@@ -1064,14 +1005,14 @@ unsafe extern "C" {
         grid_ref: *const GhosttyGridRef,
         out_row: *mut GhosttyRow,
     ) -> GhosttyResult;
-    /// Writes the cluster's codepoints (base first) into `buf` (`buf_len` slots); OUT_OF_SPACE stores the count needed in `*out_len`.
+    /// Writes the cluster's codepoints (base first) into `buf` (`buf_len` slots); OUT_OF_SPACE stores the count needed in `*out_written`.
     pub fn ghostty_grid_ref_graphemes(
         grid_ref: *const GhosttyGridRef,
         buf: *mut u32,
         buf_len: usize,
-        out_len: *mut usize,
+        out_written: *mut usize,
     ) -> GhosttyResult;
-    /// Writes the style of the cell at a still-valid grid reference into `*out_style` (its `size` set by the caller).
+    /// Writes the style of the cell at a still-valid grid reference into `*out_style`.
     pub fn ghostty_grid_ref_style(
         grid_ref: *const GhosttyGridRef,
         out_style: *mut GhosttyStyle,
@@ -1135,24 +1076,24 @@ unsafe extern "C" {
     ) -> GhosttyResult;
     /// Frees a key encoder; null is ignored.
     pub fn ghostty_key_encoder_free(encoder: GhosttyKeyEncoder);
-    /// Sets one encoder option; `value` points to the option's documented type.
-    pub fn ghostty_key_encoder_setopt(
+    /// Sets one encoder option; `value` points to the option's documented type; INVALID_VALUE for a value out of range.
+    pub fn ghostty_key_encoder_set(
         encoder: GhosttyKeyEncoder,
         option: GhosttyKeyEncoderOption,
         value: *const c_void,
-    );
+    ) -> GhosttyResult;
     /// Copies a live terminal's key-related modes (DECCKM, keypad, kitty flags) into the encoder and resets option-as-alt.
-    pub fn ghostty_key_encoder_setopt_from_terminal(
+    pub fn ghostty_key_encoder_set_from_terminal(
         encoder: GhosttyKeyEncoder,
         terminal: GhosttyTerminal,
-    );
-    /// Encodes `event` into `out_buf` (`out_buf_size` bytes); OUT_OF_SPACE stores the size needed in `*out_len`.
+    ) -> GhosttyResult;
+    /// Encodes `event` into `buf` (`buf_len` bytes); OUT_OF_SPACE stores the size needed in `*out_written`.
     pub fn ghostty_key_encoder_encode(
         encoder: GhosttyKeyEncoder,
         event: GhosttyKeyEvent,
-        out_buf: *mut c_char,
-        out_buf_size: usize,
-        out_len: *mut usize,
+        buf: *mut u8,
+        buf_len: usize,
+        out_written: *mut usize,
     ) -> GhosttyResult;
     /// Creates a key event into `*event` (`key/event.h`); free with [`ghostty_key_event_free`].
     pub fn ghostty_key_event_new(
@@ -1161,20 +1102,33 @@ unsafe extern "C" {
     ) -> GhosttyResult;
     /// Frees a key event; null is ignored.
     pub fn ghostty_key_event_free(event: GhosttyKeyEvent);
-    /// Sets press, repeat or release; `action` must be 0..=2.
-    pub fn ghostty_key_event_set_action(event: GhosttyKeyEvent, action: GhosttyKeyAction);
-    /// Sets the physical key; `key` must be 0..=[`GHOSTTY_KEY_MAX`], any other value is undefined behaviour.
-    pub fn ghostty_key_event_set_key(event: GhosttyKeyEvent, key: GhosttyKey);
+    /// Sets press, repeat or release; INVALID_VALUE unless `action` is 0..=2.
+    pub fn ghostty_key_event_set_action(
+        event: GhosttyKeyEvent,
+        action: GhosttyKeyAction,
+    ) -> GhosttyResult;
+    /// Sets the physical key; INVALID_VALUE unless `key` is 0..=[`GHOSTTY_KEY_MAX`].
+    pub fn ghostty_key_event_set_key(event: GhosttyKeyEvent, key: GhosttyKey) -> GhosttyResult;
     /// Sets the modifiers held; bits 10–15 must be zero.
-    pub fn ghostty_key_event_set_mods(event: GhosttyKeyEvent, mods: GhosttyMods);
+    pub fn ghostty_key_event_set_mods(event: GhosttyKeyEvent, mods: GhosttyMods) -> GhosttyResult;
     /// Sets the modifiers the layout consumed to produce the text; bits 10–15 must be zero.
-    pub fn ghostty_key_event_set_consumed_mods(event: GhosttyKeyEvent, consumed_mods: GhosttyMods);
+    pub fn ghostty_key_event_set_consumed_mods(
+        event: GhosttyKeyEvent,
+        consumed_mods: GhosttyMods,
+    ) -> GhosttyResult;
     /// Marks an IME composition in progress (such events encode nothing).
-    pub fn ghostty_key_event_set_composing(event: GhosttyKeyEvent, composing: bool);
-    /// Sets the text (`len` UTF-8 bytes at `utf8`), borrowed and read at the next encode.
-    pub fn ghostty_key_event_set_utf8(event: GhosttyKeyEvent, utf8: *const c_char, len: usize);
+    pub fn ghostty_key_event_set_composing(
+        event: GhosttyKeyEvent,
+        composing: bool,
+    ) -> GhosttyResult;
+    /// Sets the text (UTF-8, not NUL-terminated), borrowed and read at the next encode.
+    pub fn ghostty_key_event_set_utf8(event: GhosttyKeyEvent, utf8: GhosttyString)
+    -> GhosttyResult;
     /// Sets the key's codepoint without Shift, truncated to 21 bits; 0 when unknown.
-    pub fn ghostty_key_event_set_unshifted_codepoint(event: GhosttyKeyEvent, codepoint: u32);
+    pub fn ghostty_key_event_set_unshifted_codepoint(
+        event: GhosttyKeyEvent,
+        codepoint: u32,
+    ) -> GhosttyResult;
 
     /// Creates a mouse encoder into `*encoder` (`mouse/encoder.h`); free with [`ghostty_mouse_encoder_free`].
     pub fn ghostty_mouse_encoder_new(
@@ -1183,26 +1137,24 @@ unsafe extern "C" {
     ) -> GhosttyResult;
     /// Frees a mouse encoder; null is ignored.
     pub fn ghostty_mouse_encoder_free(encoder: GhosttyMouseEncoder);
-    /// Sets one encoder option; `value` points to the option's documented type.
-    pub fn ghostty_mouse_encoder_setopt(
+    /// Sets one encoder option; `value` points to the option's documented type; INVALID_VALUE for a value out of range.
+    pub fn ghostty_mouse_encoder_set(
         encoder: GhosttyMouseEncoder,
         option: GhosttyMouseEncoderOption,
         value: *const c_void,
-    );
-    /// Copies a live terminal's mouse tracking mode and format into the encoder.
-    pub fn ghostty_mouse_encoder_setopt_from_terminal(
+    ) -> GhosttyResult;
+    /// Copies a live terminal's mouse tracking mode and format into the encoder and forgets the last reported cell.
+    pub fn ghostty_mouse_encoder_set_from_terminal(
         encoder: GhosttyMouseEncoder,
         terminal: GhosttyTerminal,
-    );
-    /// Forgets the last reported cell, so the next motion is reported even in the same cell.
-    pub fn ghostty_mouse_encoder_reset(encoder: GhosttyMouseEncoder);
-    /// Encodes `event` into `out_buf` (`out_buf_size` bytes); SUCCESS with length 0 when the mode reports nothing.
+    ) -> GhosttyResult;
+    /// Encodes `event` into `buf` (`buf_len` bytes); SUCCESS with length 0 when the mode reports nothing.
     pub fn ghostty_mouse_encoder_encode(
         encoder: GhosttyMouseEncoder,
         event: GhosttyMouseEvent,
-        out_buf: *mut c_char,
-        out_buf_size: usize,
-        out_len: *mut usize,
+        buf: *mut u8,
+        buf_len: usize,
+        out_written: *mut usize,
     ) -> GhosttyResult;
     /// Creates a mouse event into `*event` (`mouse/event.h`); free with [`ghostty_mouse_event_free`].
     pub fn ghostty_mouse_event_new(
@@ -1211,34 +1163,42 @@ unsafe extern "C" {
     ) -> GhosttyResult;
     /// Frees a mouse event; null is ignored.
     pub fn ghostty_mouse_event_free(event: GhosttyMouseEvent);
-    /// Sets press, release or motion; `action` must be 0..=2.
-    pub fn ghostty_mouse_event_set_action(event: GhosttyMouseEvent, action: GhosttyMouseAction);
-    /// Sets the button involved; `button` must be 1..=11 (use [`ghostty_mouse_event_clear_button`] for none).
-    pub fn ghostty_mouse_event_set_button(event: GhosttyMouseEvent, button: GhosttyMouseButton);
+    /// Sets press, release or motion; INVALID_VALUE unless `action` is 0..=2.
+    pub fn ghostty_mouse_event_set_action(
+        event: GhosttyMouseEvent,
+        action: GhosttyMouseAction,
+    ) -> GhosttyResult;
+    /// Sets the button involved, 1..=11 (use [`ghostty_mouse_event_clear_button`] for none); INVALID_VALUE otherwise.
+    pub fn ghostty_mouse_event_set_button(
+        event: GhosttyMouseEvent,
+        button: GhosttyMouseButton,
+    ) -> GhosttyResult;
     /// Marks the event as having no button (plain motion).
-    pub fn ghostty_mouse_event_clear_button(event: GhosttyMouseEvent);
+    pub fn ghostty_mouse_event_clear_button(event: GhosttyMouseEvent) -> GhosttyResult;
     /// Sets the modifiers held; bits 10–15 must be zero.
-    pub fn ghostty_mouse_event_set_mods(event: GhosttyMouseEvent, mods: GhosttyMods);
+    pub fn ghostty_mouse_event_set_mods(
+        event: GhosttyMouseEvent,
+        mods: GhosttyMods,
+    ) -> GhosttyResult;
     /// Sets the pointer position; both coordinates finite and small enough that pixel and cell math fits `i32`.
     pub fn ghostty_mouse_event_set_position(
         event: GhosttyMouseEvent,
         position: GhosttyMousePosition,
-    );
+    ) -> GhosttyResult;
 
     /// Encodes a focus report into `buf` (`buf_len` bytes, `focus.h`); OUT_OF_SPACE stores the size needed in `*out_written`.
     pub fn ghostty_focus_encode(
         event: GhosttyFocusEvent,
-        buf: *mut c_char,
+        buf: *mut u8,
         buf_len: usize,
         out_written: *mut usize,
     ) -> GhosttyResult;
 
-    /// Creates a formatter over a live terminal into `*formatter` (`formatter.h`); free it before the terminal.
+    /// Creates a plain-text formatter over a live terminal into `*formatter` (`formatter.h`); free it before the terminal.
     pub fn ghostty_formatter_terminal_new(
         allocator: *const GhosttyAllocator,
         formatter: *mut GhosttyFormatter,
         terminal: GhosttyTerminal,
-        options: GhosttyFormatterTerminalOptions,
     ) -> GhosttyResult;
     /// Formats into library memory at `*out_ptr`/`*out_len`, freed with [`ghostty_free`]; reads the terminal, which must not change meanwhile.
     pub fn ghostty_formatter_format_alloc(

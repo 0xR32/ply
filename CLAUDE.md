@@ -24,7 +24,7 @@ map. `docs/` has one document per subject (see the doc map below).
 | the app | `app/` — Bun + React on GPUIX (`@gpuix/react` and `@gpuix/native` 0.11.0 from npm, used as released). `app/src/main.tsx` is the entry, `app/src/theme/tokens.ts` the only palette |
 | the terminal view | `app/src/terminal/` (C2 codec, replica, runs, input, selection) and `app/src/features/panes/terminal-view.tsx` |
 | the daemon | `crates/daemon` (`plyd`): ptys, one libghostty-vt terminal per pane, the C1 and C2 servers, SQLite, the LaunchAgent, the task queue and its dispatch (`panes/queue.rs`, `panes/dispatch.rs`), `skill.list`, `usage.get` (Claude panes' status line reports and the CLIs' own usage records, read-only), the Claude account switch (`accounts.rs`) |
-| the terminal engine | `crates/term` (`ply-term`) over `crates/ghostty-sys`, whose `build.rs` downloads pristine ghostty 44f2a44 (SHA-256-verified) and builds libghostty-vt from it with Zig |
+| the terminal engine | `crates/term` (`ply-term`) over `crates/ghostty-sys`, whose `build.rs` downloads pristine ghostty 0fa3d57 (libghostty-vt 1.0.0, SHA-256-verified) and builds libghostty-vt from it with Zig |
 | the agent adapters | `crates/agents` (`ply-agents`): launch specs, the Claude hooks file, hook/notify/OSC 9/rollout parsing, progress, the version check, the plan-usage parsers, skill discovery (`skills.rs`, read-only) |
 | the hook helper | `crates/hook` (`ply-hook`): one hook or notify payload → one C3 line to plyd; as `ply-hook statusline`, Claude Code's status line in a pane |
 | the wire types | `crates/proto` (`ply-proto`): C1, C2, C3; `app/src/ipc/proto.gen.ts` is generated from it |
@@ -110,12 +110,12 @@ starts plyd through `plyd install-agent`, which writes a real
 the real `~/Library/Application Support/ply/`. With `PLY_HOME=<dir>` everything
 lives under that directory and plyd runs in the foreground.
 
-**libghostty-vt needs Zig 0.16.0 and, once, the network.** Set `ZIG` or put
+**libghostty-vt needs Zig 0.17.0 and, once, the network.** Set `ZIG` or put
 `zig` on `PATH`. The first build of `ghostty-sys` downloads the ghostty source
-(about 40 MB) into `~/Library/Caches/ply/ghostty/<commit>/`, plus any Zig
-package Zig's cache lacks, and takes about a minute; later builds reuse the
-caches and `zig build` itself runs offline under `OUT_DIR`. To build offline
-set `PLY_GHOSTTY_SRC` to an extracted ghostty 44f2a44 tree (and
+(about 40 MB) into `~/Library/Caches/ply/ghostty/<commit>/` and the release's
+Zig packages (about 6 MB) beside it, and takes about a minute; later builds
+reuse the cache and `zig build` itself runs offline under `OUT_DIR`. To build
+offline set `PLY_GHOSTTY_SRC` to an extracted ghostty 0fa3d57 tree (and
 `PLY_ZIG_PKG_DIR` to the packages). Never build inside the cached source by
 hand: `zig build` there writes `zig-out/`, `.zig-cache/` and `zig-pkg/` into
 the tree every later build uses.
@@ -189,7 +189,7 @@ just fonts      # copy the Geist TTFs into ~/Library/Fonts (writes outside the c
 just dmg        # dist/ply.app and dist/ply-<version>.dmg: profile dist, Bun bytecode, ad-hoc signed
 ```
 
-Toolchain: Rust 1.97.1 (`rust-toolchain.toml`), Zig 0.16.0, Bun 1.3.10, just.
+Toolchain: Rust 1.97.1 (`rust-toolchain.toml`), Zig 0.17.0, Bun 1.3.10, just.
 The GitHub repository is public; push only when asked. `docs/development.md` walks through setup, the
 run directory and the logs.
 
@@ -272,7 +272,7 @@ GPUIX's test renderer (`@gpuix/react/testing`) and the mock daemon
 ## What lives elsewhere
 
 - GPUIX (React on Zed's GPUI) — npm `@gpuix/react` / `@gpuix/native`, source at remorses/gpuix.
-- libghostty-vt — ghostty-org/ghostty at 44f2a44, downloaded pristine by `crates/ghostty-sys/build.rs` into
+- libghostty-vt — 1.0.0, ghostty-org/ghostty at 0fa3d57 (`vt-1.0.0`), downloaded pristine by `crates/ghostty-sys/build.rs` into
   `~/Library/Caches/ply/ghostty/`.
 - `claude` and `codex` — the user's own installs, found on the login-shell `PATH`; ply never installs or
   updates them, and never signs them in itself: an account switch runs Claude Code's own `claude auth login`

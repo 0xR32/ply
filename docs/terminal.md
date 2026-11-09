@@ -17,9 +17,9 @@ keys, mouse, paste, focus ──C2──► encode_input (against the live modes
 
 ## libghostty-vt
 
-The terminal engine is libghostty-vt, Ghostty's terminal library, built from
-ghostty commit 44f2a44 (`44f2a44df7e8c4a0c6df3f7d872ef3d7ead88e51`) with no
-local patches. It is not vendored: `crates/ghostty-sys/build.rs` downloads that
+The terminal engine is libghostty-vt, Ghostty's terminal library, release
+1.0.0, built from its tagged ghostty commit 0fa3d57
+(`0fa3d577a5614150ff8e2c152de5fb9d5c6d2dec`, `vt-1.0.0`) with no local patches. It is not vendored: `crates/ghostty-sys/build.rs` downloads that
 commit's source, verifies it and builds it (Ruling R45). Only plyd links it:
 `ghostty-sys` is reached only through ply-term's `engine` feature, and only
 ply-daemon enables that (INV-17, `checkInv17Ghostty`).
@@ -31,24 +31,24 @@ ply-daemon enables that (INV-17, `checkInv17Ghostty`).
 - **The source.** The build fetches
   `https://codeload.github.com/ghostty-org/ghostty/tar.gz/<commit>` for the
   pinned commit, checks the archive's SHA-256 against the value pinned in
-  `build.rs` (`7bd1a8b6…a779`) and refuses a mismatch, and keeps the extracted
+  `build.rs` (`2f38f10e…95ea`) and refuses a mismatch, and keeps the extracted
   tree in `~/Library/Caches/ply/ghostty/<commit>/`, so the download happens once
   per machine. `PLY_GHOSTTY_SRC=<dir>` builds from an existing ghostty checkout
   at that commit instead, which is how a build runs offline. The download is
   extracted beside the cache entry and renamed into place whole, so a concurrent
   or interrupted build never sees half a tree.
-- **Zig** is `$ZIG`, else `zig` on `PATH`, and must be 0.16.0, the
+- **Zig** is `$ZIG`, else `zig` on `PATH`, and must be 0.17.0, the
   `minimum_zig_version` of the pin; anything else fails with the version found.
-  The Zig packages the library needs are fetched by the build (`zig fetch`,
-  whose package hash must match the one pinned in `build.rs`) when Zig's cache
-  lacks them; `PLY_ZIG_PKG_DIR=<dir>` supplies them extracted by hash instead.
-- **Options.** `zig build -Demit-lib-vt`, with `-Doptimize=` from
+  The Zig packages the library needs come from the release's dependency
+  tarball (`libghostty-vt-1.0.0-deps.tar.gz` from `release.files.ghostty.org`),
+  downloaded, checked against the SHA-256 pinned in `build.rs` and cached the
+  same way; `PLY_ZIG_PKG_DIR=<dir>` supplies them extracted by hash instead.
+- **Options.** `zig build -Demit-lib-vt -Dlib-version-string=1.0.0`, with `-Doptimize=` from
   `LIBGHOSTTY_VT_OPTIMIZE` (`Debug`, `ReleaseSafe`, `ReleaseFast` or
   `ReleaseSmall`; default `ReleaseFast`) and `-Dtarget=` mapped from the Rust
   target (`aarch64-apple-darwin` → `aarch64-macos`, `x86_64-apple-darwin` →
-  `x86_64-macos`). The build writes only under cargo's `OUT_DIR`, the cache
-  directory above and, for a missing package, Zig's global cache; never into the
-  source tree.
+  `x86_64-macos`). The build writes only under cargo's `OUT_DIR` and the cache
+  directory above; never into the source tree.
 - **Linking.** Zig installs a static archive and a dylib side by side; the
   build links `libghostty-vt.a` statically (`links = "ghostty-vt"`), so plyd
   carries the engine inside its own binary.

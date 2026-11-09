@@ -13,7 +13,7 @@ export const HEADER_LEN = 5;
 /** Most rows one FETCH_HISTORY may ask for; plyd may answer with fewer when 1 000 rows exceed one frame. */
 export const MAX_HISTORY_ROWS = 1000;
 
-/** Highest libghostty-vt `GhosttyKey` value (176 keys at ghostty 44f2a44). */
+/** Highest libghostty-vt `GhosttyKey` value (176 keys in libghostty-vt 1.0.0). */
 export const MAX_KEY_CODE = 175;
 
 /** Highest Unicode scalar value; a larger codepoint is refused. */

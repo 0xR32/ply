@@ -36,7 +36,7 @@ pub const HEADER_LEN: usize = 5;
 /// Most rows one FETCH_HISTORY may request.
 pub const MAX_HISTORY_ROWS: u16 = 1000;
 
-/// Highest libghostty-vt `GhosttyKey` value (`key/event.h`, 176 keys at ghostty 44f2a44).
+/// Highest libghostty-vt `GhosttyKey` value (`key/event.h`, 176 keys in libghostty-vt 1.0.0).
 pub const MAX_KEY_CODE: u16 = 175;
 
 /// Highest Unicode scalar value; codepoints above it are rejected.

@@ -2,7 +2,7 @@ name: Zig
 description: Installs the pinned Zig for Apple silicon from ziglang.org, checked against its SHA-256, and caches it with Zig's package cache.
 inputs:
   version:
-    description: Zig version, e.g. 0.16.0.
+    description: Zig version, e.g. 0.17.0.
     required: true
   sha256:
     description: SHA-256 of that version's zig-aarch64-macos tarball, from ziglang.org/download/index.json.

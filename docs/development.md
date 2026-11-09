@@ -5,7 +5,7 @@
 | Tool | Version | Install |
 |---|---|---|
 | Rust | 1.97.1 | `rustup toolchain install 1.97.1 --profile minimal --component rustfmt,clippy` (`rust-toolchain.toml` selects it inside the repository) |
-| Zig | 0.16.0 | from ziglang.org; put `zig` on `PATH` or point `$ZIG` at it. `crates/ghostty-sys/build.rs` runs it to build libghostty-vt |
+| Zig | 0.17.0 | from ziglang.org; put `zig` on `PATH` or point `$ZIG` at it. `crates/ghostty-sys/build.rs` runs it to build libghostty-vt |
 | Bun | 1.3.10 | `curl -fsSL https://bun.sh/install \| bash -s bun-v1.3.10` (`package.json` records it as `packageManager`) |
 | just | any recent | `brew install just` |
 | cargo-nextest, cargo-deny | any recent | `brew install cargo-nextest cargo-deny` or `cargo install --locked cargo-nextest cargo-deny` |
@@ -14,10 +14,10 @@ After cloning, run `bun install` once. `bunfig.toml` selects Bun's hoisted linke
 resolve from the root) and makes `bun add` write exact versions.
 
 The first build of `ghostty-sys` needs the network once: it downloads the ghostty source (about 40 MB) into
-`~/Library/Caches/ply/ghostty/<commit>/`, checks its SHA-256, and runs `zig fetch` for any package Zig's global cache
-lacks; later builds use those caches. To build offline, set `PLY_GHOSTTY_SRC` to an extracted ghostty tree at the
-pinned commit and, when Zig's cache lacks the packages, `PLY_ZIG_PKG_DIR` to a directory holding them extracted by
-hash. Never run `zig build` by hand inside the cached source: without the flags `ghostty-sys` passes it writes
+`~/Library/Caches/ply/ghostty/<commit>/` and libghostty-vt's Zig packages (about 6 MB) into
+`~/Library/Caches/ply/ghostty/libghostty-vt-<version>-deps/`, checking each SHA-256; later builds use those caches. To
+build offline, set `PLY_GHOSTTY_SRC` to an extracted ghostty tree at the pinned commit and `PLY_ZIG_PKG_DIR` to a
+directory holding the packages extracted by hash. Never run `zig build` by hand inside the cached source: without the flags `ghostty-sys` passes it writes
 `zig-out/`, `.zig-cache/` and `zig-pkg/` into the tree every later build reads.
 
 ## just recipes

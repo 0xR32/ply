@@ -262,7 +262,7 @@ impl RenderState {
             }
             if cell.styled {
                 let mut raw_style = cells::empty_style();
-                // SAFETY: the selected cell's style is written into a sized GhosttyStyle.
+                // SAFETY: the selected cell's style is written into a writable GhosttyStyle.
                 check("ghostty_render_state_row_cells_get(STYLE)", unsafe {
                     sys::ghostty_render_state_row_cells_get(
                         self.cells,
@@ -310,14 +310,19 @@ impl RenderState {
         self.graphemes.clear();
         self.graphemes.resize(len as usize, 0);
         if len > 1 {
-            // SAFETY: the buffer holds `len` u32 slots, as GRAPHEMES_BUF requires.
+            let mut buffer = sys::GhosttyCodepointBuffer {
+                ptr: self.graphemes.as_mut_ptr(),
+                cap: self.graphemes.len(),
+                len: 0,
+            };
+            // SAFETY: `buffer.ptr` holds `cap` writable u32 slots.
             check(
                 "ghostty_render_state_row_cells_get(GRAPHEMES_BUF)",
                 unsafe {
                     sys::ghostty_render_state_row_cells_get(
                         self.cells,
                         sys::GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_GRAPHEMES_BUF,
-                        self.graphemes.as_mut_ptr().cast(),
+                        (&raw mut buffer).cast(),
                     )
                 },
             )?;

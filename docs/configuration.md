@@ -27,7 +27,7 @@ and `app/src/ipc/log.ts`.
 | logs | `~/Library/Logs/ply/plyd.YYYY-MM-DD.log` and `app.YYYY-MM-DD.log`, 14 days each | `<dir>/logs/` |
 | kept drops | `ply-drops/pane-*/` and `ply-drops/task-*/` in the temporary directory (`$TMPDIR`), written by the app: a hard link to, or copy of, each dropped file macOS staged in `TemporaryItems` (the ⌘⇧4 thumbnail), deleted one turn after the turn that sent it, when its task finishes, or when its pane closes (`docs/terminal.md`) | `<dir>/ply-drops/` |
 | LaunchAgent | `~/Library/LaunchAgents/dev.ply.app.plyd.plist` | never installed |
-| ghostty source (builds only) | `~/Library/Caches/ply/ghostty/<commit>/` | same |
+| ghostty source and Zig packages (builds only) | `~/Library/Caches/ply/ghostty/<commit>/` and `libghostty-vt-<version>-deps/` beside it | same |
 
 plyd creates the directories; it forces the run directory and each pane
 directory to `0700` even when they existed, and writes `config.toml`,
@@ -140,10 +140,10 @@ set them in the file with plyd stopped, or with `settings.set`.
 
 | Variable | Read by | Effect |
 |---|---|---|
-| `ZIG` | `crates/ghostty-sys/build.rs` | The Zig binary (else `zig` on `PATH`); it must be 0.16.0. |
+| `ZIG` | `crates/ghostty-sys/build.rs` | The Zig binary (else `zig` on `PATH`); it must be 0.17.0. |
 | `LIBGHOSTTY_VT_OPTIMIZE` | `build.rs` | Zig's optimize mode for libghostty-vt: `Debug`, `ReleaseSafe`, `ReleaseFast` (default) or `ReleaseSmall`. |
-| `PLY_GHOSTTY_SRC` | `build.rs` | An existing ghostty checkout at commit 44f2a44 to build from, instead of the downloaded and verified archive; the way to build offline. |
-| `PLY_ZIG_PKG_DIR` | `build.rs` | A directory holding libghostty-vt's Zig packages extracted by hash, used instead of Zig's global cache; with `PLY_GHOSTTY_SRC`, a build needs no network. |
+| `PLY_GHOSTTY_SRC` | `build.rs` | An existing ghostty checkout at commit 0fa3d57 (`vt-1.0.0`) to build from, instead of the downloaded and verified archive; the way to build offline. |
+| `PLY_ZIG_PKG_DIR` | `build.rs` | A directory holding libghostty-vt's Zig packages extracted by hash, used instead of the release's downloaded dependency tarball; with `PLY_GHOSTTY_SRC`, a build needs no network. |
 | `PLY_BLESS` | `crates/proto/tests/golden_c2.rs`, `crates/term/tests/replay.rs` | Rewrites the golden C2 frames, or the stored replay screens, instead of comparing. |
 | `PLY_GEN_OUT` | `crates/proto/tests/export_bindings.rs` | Set by `scripts/gen.ts`: where the generated TypeScript goes. |
 | `PLY_AGENT_CORPUS_DIR` | `crates/term/benches/throughput.rs` | The recorded agent captures the bench replays. |
@@ -303,10 +303,10 @@ process, not installed.
 
 ### Building
 
-The first build of `ghostty-sys` downloads the ghostty source for commit 44f2a44
-from `codeload.github.com`, checks its SHA-256, and keeps it in
-`~/Library/Caches/ply/ghostty/<commit>/`; Zig fetches the library's packages
-into its own cache when they are missing. Everything else a build writes stays
+The first build of `ghostty-sys` downloads the ghostty source for commit 0fa3d57
+from `codeload.github.com` and libghostty-vt 1.0.0's Zig packages from
+`release.files.ghostty.org`, checks each SHA-256, and keeps them in
+`~/Library/Caches/ply/ghostty/`. Everything else a build writes stays
 under `target/`. With `PLY_GHOSTTY_SRC` set nothing is downloaded for the
 source (`docs/terminal.md`). `crates/daemon/build.rs` runs `git rev-parse` in
 the checkout for plyd's build id (read-only, offline) and runs again when

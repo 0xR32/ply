@@ -155,4 +155,4 @@ last_commit = "2026-09-25"
 contributors_5plus = 138
 checked = "2026-09-25"
 exception = "D5"
-note = "terminal engine by the owner's decision (ADR-0008); maintainers declare the C API work in progress; downloaded at 44f2a44 by ghostty-sys/build.rs (INV-17)"
+note = "terminal engine by the owner's decision (ADR-0008); 1.0.0, the first release with a stable C API; downloaded at 0fa3d57 by ghostty-sys/build.rs (INV-17)"

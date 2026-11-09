@@ -386,7 +386,11 @@ impl Engine {
             ptr: TERMINFO_NAME.as_ptr(),
             len: TERMINFO_NAME.len(),
         };
-        engine.set(sys::GHOSTTY_TERMINAL_OPT_SCROLLBACK_MAX_BYTES, ptr::null())?;
+        let unlimited = usize::MAX;
+        engine.set(
+            sys::GHOSTTY_TERMINAL_OPT_SCROLLBACK_MAX_BYTES,
+            (&raw const unlimited).cast(),
+        )?;
         engine.set(
             sys::GHOSTTY_TERMINAL_OPT_SCROLLBACK_MAX_LINES,
             (&raw const lines).cast(),
@@ -770,14 +774,12 @@ impl Engine {
             return Ok(Vec::new());
         }
         let empty_ref = sys::GhosttyGridRef {
-            size: size_of::<sys::GhosttyGridRef>(),
             node: ptr::null_mut(),
             x: 0,
             y: 0,
         };
         let mut selections = vec![
             sys::GhosttySelection {
-                size: size_of::<sys::GhosttySelection>(),
                 start: empty_ref,
                 end: empty_ref,
                 rectangle: false,
@@ -786,7 +788,7 @@ impl Engine {
         ];
         buffer.ptr = selections.as_mut_ptr();
         buffer.cap = selections.len();
-        // SAFETY: the buffer now has `cap` sized selection slots.
+        // SAFETY: the buffer now has `cap` selection slots.
         check("ghostty_search_get(MATCHES)", unsafe {
             sys::ghostty_search_get(
                 search,
@@ -984,7 +986,7 @@ impl Engine {
                 let mut style = Style::default();
                 if cell.styled {
                     let mut raw_style = cells::empty_style();
-                    // SAFETY: the reference is fresh; `raw_style` is a sized GhosttyStyle.
+                    // SAFETY: the reference is fresh; `raw_style` is a writable GhosttyStyle.
                     check("ghostty_grid_ref_style", unsafe {
                         sys::ghostty_grid_ref_style(&cell_ref, &raw mut raw_style)
                     })?;
@@ -1037,7 +1039,6 @@ impl Engine {
 
     fn history_ref(&self, x: u16, y: u32) -> Option<sys::GhosttyGridRef> {
         let mut out = sys::GhosttyGridRef {
-            size: size_of::<sys::GhosttyGridRef>(),
             node: ptr::null_mut(),
             x: 0,
             y: 0,
@@ -1095,38 +1096,17 @@ impl Engine {
         &mut self.buttons
     }
 
-    /// Forgets every held mouse button and the last reported cell; plyd calls it when a client detaches or the view loses focus, so a release seen elsewhere does not leave a drag stuck.
+    /// Forgets every held mouse button; plyd calls it when a client detaches or the view loses focus, so a release seen elsewhere does not leave a drag stuck.
     pub fn reset_mouse_buttons(&mut self) {
         self.buttons = 0;
-        self.mouse.reset();
     }
 
     /// The active screen and its scrollback as plain text from libghostty-vt's own formatter (trailing whitespace trimmed, soft wraps kept as line breaks), an oracle independent of the C2 path; errors: [`Error::Ghostty`] when the formatter fails.
     pub fn plain_text(&mut self) -> Result<String> {
-        let options = sys::GhosttyFormatterTerminalOptions {
-            size: size_of::<sys::GhosttyFormatterTerminalOptions>(),
-            emit: sys::GHOSTTY_FORMATTER_FORMAT_PLAIN,
-            unwrap: false,
-            trim: true,
-            extra: sys::GhosttyFormatterTerminalExtra {
-                size: size_of::<sys::GhosttyFormatterTerminalExtra>(),
-                screen: sys::GhosttyFormatterScreenExtra {
-                    size: size_of::<sys::GhosttyFormatterScreenExtra>(),
-                    ..Default::default()
-                },
-                ..Default::default()
-            },
-            selection: ptr::null(),
-        };
         let mut formatter = ptr::null_mut();
-        // SAFETY: the terminal is live; the formatter is freed below, before the terminal can be.
+        // SAFETY: the terminal is live; the formatter (plain, trimmed, wraps kept by default) is freed below, before the terminal can be.
         check("ghostty_formatter_terminal_new", unsafe {
-            sys::ghostty_formatter_terminal_new(
-                ptr::null(),
-                &raw mut formatter,
-                self.term.raw,
-                options,
-            )
+            sys::ghostty_formatter_terminal_new(ptr::null(), &raw mut formatter, self.term.raw)
         })?;
         let (mut data, mut len) = (ptr::null_mut(), 0usize);
         // SAFETY: the formatter is live and the terminal does not change during the call.

@@ -5,8 +5,7 @@
 //! [`super::Engine`] owns that allocation for the terminal's whole life and never holds a Rust reference to it while
 //! a libghostty-vt call runs, so a callback's `&mut Effects` is the only live reference. Callbacks never block and
 //! never call terminal functions (title and pwd are only flagged here and read after the write returns); the
-//! clipboard-write callback calls the reply function its request carries, as the protocol requires. A callback that
-//! receives a sized struct reads its `size` first and skips a struct smaller than ply's declaration.
+//! clipboard-write callback calls the reply function its request carries, as the protocol requires.
 
 use std::ffi::c_void;
 use std::ptr;
@@ -146,17 +145,11 @@ unsafe extern "C" fn on_notification(
 ) {
     // SAFETY: libghostty-vt passes our userdata.
     let fx = unsafe { effects(userdata) };
-    // SAFETY: a non-null request is readable at least up to its leading `size` field.
-    if notification.is_null()
-        || unsafe { (*notification).size } < size_of::<sys::GhosttyTerminalDesktopNotification>()
-    {
-        tracing::debug!(
-            pane_id = fx.pane_id,
-            "desktop notification smaller than expected; ignored"
-        );
+    if notification.is_null() {
+        tracing::debug!(pane_id = fx.pane_id, "null desktop notification; ignored");
         return;
     }
-    // SAFETY: the notification is borrowed for this call and at least as large as ply's declaration.
+    // SAFETY: the notification is borrowed for this call.
     let n = unsafe { &*notification };
     // SAFETY: the strings are borrowed for this call.
     let (title, body) = unsafe { (bytes(&n.title), bytes(&n.body)) };
@@ -173,17 +166,11 @@ unsafe extern "C" fn on_progress(
 ) {
     // SAFETY: libghostty-vt passes our userdata.
     let fx = unsafe { effects(userdata) };
-    // SAFETY: a non-null report is readable at least up to its leading `size` field.
-    if report.is_null()
-        || unsafe { (*report).size } < size_of::<sys::GhosttyTerminalProgressReport>()
-    {
-        tracing::debug!(
-            pane_id = fx.pane_id,
-            "progress report smaller than expected; ignored"
-        );
+    if report.is_null() {
+        tracing::debug!(pane_id = fx.pane_id, "null progress report; ignored");
         return;
     }
-    // SAFETY: the report is borrowed for this call and at least as large as ply's declaration.
+    // SAFETY: the report is borrowed for this call.
     let r = unsafe { &*report };
     let state = match r.state {
         0 => ProgressState::Remove,
@@ -213,15 +200,11 @@ unsafe extern "C" fn on_clipboard_write(
 ) {
     // SAFETY: libghostty-vt passes our userdata.
     let fx = unsafe { effects(userdata) };
-    // SAFETY: a non-null request is readable at least up to its leading `size` field.
-    if write.is_null() || unsafe { (*write).size } < size_of::<sys::GhosttyClipboardWrite>() {
-        tracing::debug!(
-            pane_id = fx.pane_id,
-            "clipboard write smaller than expected; denied"
-        );
+    if write.is_null() {
+        tracing::debug!(pane_id = fx.pane_id, "null clipboard write; denied");
         return;
     }
-    // SAFETY: the request is borrowed for this call and at least as large as ply's declaration.
+    // SAFETY: the request is borrowed for this call.
     let w = unsafe { &*write };
     if w.contents.is_null() && w.contents_len > 0 {
         tracing::debug!(

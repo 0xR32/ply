@@ -72,20 +72,42 @@ fn struct_layouts_match_the_manifest() {
         "GhosttyStyle",
         size_of::<GhosttyStyle>(),
         &[
-            ("size", offset_of!(GhosttyStyle, size)),
             ("fg_color", offset_of!(GhosttyStyle, fg_color)),
             ("bg_color", offset_of!(GhosttyStyle, bg_color)),
             ("underline_color", offset_of!(GhosttyStyle, underline_color)),
-            ("bold", offset_of!(GhosttyStyle, bold)),
-            ("italic", offset_of!(GhosttyStyle, italic)),
-            ("faint", offset_of!(GhosttyStyle, faint)),
-            ("blink", offset_of!(GhosttyStyle, blink)),
-            ("inverse", offset_of!(GhosttyStyle, inverse)),
-            ("invisible", offset_of!(GhosttyStyle, invisible)),
-            ("strikethrough", offset_of!(GhosttyStyle, strikethrough)),
-            ("overline", offset_of!(GhosttyStyle, overline)),
-            ("underline", offset_of!(GhosttyStyle, underline)),
+            ("flags", offset_of!(GhosttyStyle, flags)),
+            ("reserved", offset_of!(GhosttyStyle, reserved)),
         ],
+    );
+    let bits = &m["types"]["GhosttyStyleFlags"]["bits"];
+    for (name, flag) in [
+        ("bold", GHOSTTY_STYLE_FLAG_BOLD),
+        ("italic", GHOSTTY_STYLE_FLAG_ITALIC),
+        ("faint", GHOSTTY_STYLE_FLAG_FAINT),
+        ("blink", GHOSTTY_STYLE_FLAG_BLINK),
+        ("inverse", GHOSTTY_STYLE_FLAG_INVERSE),
+        ("invisible", GHOSTTY_STYLE_FLAG_INVISIBLE),
+        ("strikethrough", GHOSTTY_STYLE_FLAG_STRIKETHROUGH),
+        ("overline", GHOSTTY_STYLE_FLAG_OVERLINE),
+    ] {
+        assert_eq!(bits[name]["width"].as_u64(), Some(1), "{name} width");
+        assert_eq!(
+            bits[name]["lsb"].as_u64(),
+            Some(u64::from(flag.trailing_zeros())),
+            "{name} bit"
+        );
+    }
+    assert_eq!(
+        bits["underline"]["lsb"].as_u64(),
+        Some(u64::from(GHOSTTY_STYLE_UNDERLINE_SHIFT)),
+        "underline shift"
+    );
+    assert_eq!(
+        bits["underline"]["width"].as_u64(),
+        Some(u64::from(
+            (GHOSTTY_STYLE_UNDERLINE_MASK >> GHOSTTY_STYLE_UNDERLINE_SHIFT).count_ones()
+        )),
+        "underline width"
     );
     layout(
         &m,
@@ -250,6 +272,12 @@ fn struct_layouts_match_the_manifest() {
     );
     layout(
         &m,
+        "GhosttyCodepointBuffer",
+        size_of::<GhosttyCodepointBuffer>(),
+        &[("ptr", 0), ("cap", 8), ("len", 16)],
+    );
+    layout(
+        &m,
         "GhosttyMousePosition",
         size_of::<GhosttyMousePosition>(),
         &[("x", 0), ("y", 4)],
@@ -298,52 +326,6 @@ fn struct_layouts_match_the_manifest() {
             ("allow_unsafe", offset_of!(GhosttyPaste, allow_unsafe)),
         ],
     );
-    layout(
-        &m,
-        "GhosttyFormatterScreenExtra",
-        size_of::<GhosttyFormatterScreenExtra>(),
-        &[
-            ("cursor", offset_of!(GhosttyFormatterScreenExtra, cursor)),
-            (
-                "charsets",
-                offset_of!(GhosttyFormatterScreenExtra, charsets),
-            ),
-        ],
-    );
-    layout(
-        &m,
-        "GhosttyFormatterTerminalExtra",
-        size_of::<GhosttyFormatterTerminalExtra>(),
-        &[
-            (
-                "palette",
-                offset_of!(GhosttyFormatterTerminalExtra, palette),
-            ),
-            (
-                "keyboard",
-                offset_of!(GhosttyFormatterTerminalExtra, keyboard),
-            ),
-            ("screen", offset_of!(GhosttyFormatterTerminalExtra, screen)),
-        ],
-    );
-    layout(
-        &m,
-        "GhosttyFormatterTerminalOptions",
-        size_of::<GhosttyFormatterTerminalOptions>(),
-        &[
-            ("emit", offset_of!(GhosttyFormatterTerminalOptions, emit)),
-            (
-                "unwrap",
-                offset_of!(GhosttyFormatterTerminalOptions, unwrap),
-            ),
-            ("trim", offset_of!(GhosttyFormatterTerminalOptions, trim)),
-            ("extra", offset_of!(GhosttyFormatterTerminalOptions, extra)),
-            (
-                "selection",
-                offset_of!(GhosttyFormatterTerminalOptions, selection),
-            ),
-        ],
-    );
     for (ty, size) in [
         ("GhosttyCell", size_of::<GhosttyCell>()),
         ("GhosttyRow", size_of::<GhosttyRow>()),
@@ -370,13 +352,14 @@ fn enum_constants_match_the_manifest() {
     v("GhosttyResult", "IO_ERROR", GHOSTTY_IO_ERROR);
     v("GhosttyResult", "LIMIT_EXCEEDED", GHOSTTY_LIMIT_EXCEEDED);
     v("GhosttyResult", "REJECTED", GHOSTTY_REJECTED);
-    v("GhosttyStyleColorTag", "NONE", GHOSTTY_STYLE_COLOR_NONE);
-    v(
-        "GhosttyStyleColorTag",
-        "PALETTE",
-        GHOSTTY_STYLE_COLOR_PALETTE,
-    );
-    v("GhosttyStyleColorTag", "RGB", GHOSTTY_STYLE_COLOR_RGB);
+    v("GhosttyResult", "UNSUPPORTED", GHOSTTY_UNSUPPORTED);
+    for (name, got) in [
+        ("NONE", GHOSTTY_STYLE_COLOR_NONE),
+        ("PALETTE", GHOSTTY_STYLE_COLOR_PALETTE),
+        ("RGB", GHOSTTY_STYLE_COLOR_RGB),
+    ] {
+        v("GhosttyStyleColorTag", name, i32::from(got));
+    }
     for (name, got) in [
         ("USERDATA", GHOSTTY_TERMINAL_OPT_USERDATA),
         ("WRITE_PTY", GHOSTTY_TERMINAL_OPT_WRITE_PTY),
@@ -637,11 +620,6 @@ fn enum_constants_match_the_manifest() {
     v("GhosttyKey", "UNIDENTIFIED", GHOSTTY_KEY_UNIDENTIFIED);
     v("GhosttyKey", "ENTER", GHOSTTY_KEY_ENTER);
     v(
-        "GhosttyFormatterFormat",
-        "PLAIN",
-        GHOSTTY_FORMATTER_FORMAT_PLAIN,
-    );
-    v(
         "GhosttyKeyEncoderOption",
         "MACOS_OPTION_AS_ALT",
         GHOSTTY_KEY_ENCODER_OPT_MACOS_OPTION_AS_ALT,
@@ -659,11 +637,6 @@ fn enum_constants_match_the_manifest() {
         "GhosttyMouseEncoderOption",
         "ANY_BUTTON_PRESSED",
         GHOSTTY_MOUSE_ENCODER_OPT_ANY_BUTTON_PRESSED,
-    );
-    v(
-        "GhosttyMouseEncoderOption",
-        "TRACK_LAST_CELL",
-        GHOSTTY_MOUSE_ENCODER_OPT_TRACK_LAST_CELL,
     );
     v("GhosttyFocusEvent", "GAINED", GHOSTTY_FOCUS_GAINED);
     v("GhosttyFocusEvent", "LOST", GHOSTTY_FOCUS_LOST);
@@ -702,7 +675,7 @@ fn ply_proto_numbering_matches_the_library() {
         ("UNDERLINE", 2),
         ("BLOCK_HOLLOW", 3),
     ] {
-        v("GhosttyRenderStateCursorVisualStyle", name, got);
+        v("GhosttyCursorStyle", name, got);
     }
     for (name, got) in [
         ("NONE", 0),

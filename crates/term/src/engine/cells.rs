@@ -131,57 +131,52 @@ impl RawCell {
     }
 }
 
-/// A zeroed `GhosttyStyle` with its `size` set, ready to be filled by the library.
+/// A zeroed `GhosttyStyle`, ready to be filled by the library.
 pub(super) fn empty_style() -> sys::GhosttyStyle {
     sys::GhosttyStyle {
-        size: size_of::<sys::GhosttyStyle>(),
         fg_color: none_color(),
         bg_color: none_color(),
         underline_color: none_color(),
-        bold: false,
-        italic: false,
-        faint: false,
-        blink: false,
-        inverse: false,
-        invisible: false,
-        strikethrough: false,
-        overline: false,
-        underline: 0,
+        flags: 0,
+        reserved: 0,
     }
 }
 
 fn none_color() -> sys::GhosttyStyleColor {
     sys::GhosttyStyleColor {
         tag: sys::GHOSTTY_STYLE_COLOR_NONE,
-        value: sys::GhosttyStyleColorValue { _padding: 0 },
+        value: sys::GhosttyStyleColorValue {
+            rgb: sys::GhosttyColorRgb::default(),
+        },
     }
 }
 
 /// The C2 style of a libghostty-vt style.
 pub(super) fn style(s: &sys::GhosttyStyle) -> Style {
     let mut attrs = Attrs::empty();
-    for (on, flag) in [
-        (s.bold, Attrs::BOLD),
-        (s.faint, Attrs::FAINT),
-        (s.italic, Attrs::ITALIC),
-        (s.blink, Attrs::BLINK),
-        (s.inverse, Attrs::INVERSE),
-        (s.invisible, Attrs::INVISIBLE),
-        (s.strikethrough, Attrs::STRIKETHROUGH),
-        (s.overline, Attrs::OVERLINE),
+    for (bit, flag) in [
+        (sys::GHOSTTY_STYLE_FLAG_BOLD, Attrs::BOLD),
+        (sys::GHOSTTY_STYLE_FLAG_FAINT, Attrs::FAINT),
+        (sys::GHOSTTY_STYLE_FLAG_ITALIC, Attrs::ITALIC),
+        (sys::GHOSTTY_STYLE_FLAG_BLINK, Attrs::BLINK),
+        (sys::GHOSTTY_STYLE_FLAG_INVERSE, Attrs::INVERSE),
+        (sys::GHOSTTY_STYLE_FLAG_INVISIBLE, Attrs::INVISIBLE),
+        (sys::GHOSTTY_STYLE_FLAG_STRIKETHROUGH, Attrs::STRIKETHROUGH),
+        (sys::GHOSTTY_STYLE_FLAG_OVERLINE, Attrs::OVERLINE),
     ] {
-        if on {
+        if s.flags & bit != 0 {
             attrs = attrs | flag;
         }
     }
-    let underline = match s.underline {
-        1 => Underline::Single,
-        2 => Underline::Double,
-        3 => Underline::Curly,
-        4 => Underline::Dotted,
-        5 => Underline::Dashed,
-        _ => Underline::None,
-    };
+    let underline =
+        match (s.flags & sys::GHOSTTY_STYLE_UNDERLINE_MASK) >> sys::GHOSTTY_STYLE_UNDERLINE_SHIFT {
+            1 => Underline::Single,
+            2 => Underline::Double,
+            3 => Underline::Curly,
+            4 => Underline::Dotted,
+            5 => Underline::Dashed,
+            _ => Underline::None,
+        };
     Style {
         fg: color(&s.fg_color),
         bg: color(&s.bg_color),

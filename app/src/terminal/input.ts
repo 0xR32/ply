@@ -3,7 +3,7 @@ import type { OptionAsMeta } from '../ipc/proto.gen';
 import type { KeyAction, KeyFrame, MouseAction, MouseFrame } from './frames';
 import { Mods } from './frames';
 
-/** libghostty-vt's `GhosttyKey` names in enum order (`key/event.h` at ghostty 44f2a44); the index is the wire value. */
+/** libghostty-vt's `GhosttyKey` names in enum order (`key/event.h` in libghostty-vt 1.0.0); the index is the wire value. */
 export const GHOSTTY_KEYS: readonly string[] = [
   'UNIDENTIFIED',
   'BACKQUOTE',

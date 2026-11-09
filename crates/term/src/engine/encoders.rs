@@ -1,15 +1,15 @@
 //! libghostty-vt's key and mouse encoders, focus encoding and terminal paste, behind safe calls.
 //!
-//! Each encode first copies the pane's live modes from the terminal (`setopt_from_terminal`), so the bytes always
+//! Each encode first copies the pane's live modes from the terminal (`set_from_terminal`), so the bytes always
 //! match what the program asked for (spec R-R5, R-R9). Key encoding re-applies option-as-alt after that copy,
 //! because the copy resets it (`key/encoder.h`, ADR-0005).
 //!
-//! libghostty-vt's ReleaseFast build does not range-check enum arguments or float-to-int conversions, so an
-//! undefined key, action or button, a non-finite or huge pointer position, or a zero cell size would be undefined
-//! behaviour inside the library. Every encode here refuses such values (encoding nothing) before the unsafe call;
-//! `crate::input` rejects them earlier with a log line, so these checks are the last line of defence.
+//! libghostty-vt's ReleaseFast build does not range-check float-to-int conversions, so a non-finite or huge pointer
+//! position or a zero cell size would be undefined behaviour inside the library. Every encode here refuses such
+//! values, and undefined keys, actions and buttons, encoding nothing, before the unsafe call; `crate::input` rejects
+//! them earlier with a log line, so these checks are the last line of defence.
 
-use std::ffi::{c_char, c_void};
+use std::ffi::c_void;
 use std::ptr;
 
 use ghostty_sys as sys;
@@ -70,28 +70,63 @@ impl KeyEncoder {
         if !(0..=sys::GHOSTTY_KEY_MAX).contains(&input.key) || !(0..=2).contains(&input.action) {
             return Ok(Vec::new());
         }
+        let text = sys::GhosttyString {
+            ptr: input.text.as_ptr(),
+            len: input.text.len(),
+        };
         // SAFETY: live handles, serialized `term`; key and action range-checked above, mods masked, so every enum argument is defined; `input.text` outlives the call.
-        unsafe {
-            sys::ghostty_key_encoder_setopt_from_terminal(self.encoder, term);
-            sys::ghostty_key_encoder_setopt(
-                self.encoder,
-                sys::GHOSTTY_KEY_ENCODER_OPT_MACOS_OPTION_AS_ALT,
-                (&raw const option_as_alt).cast::<c_void>(),
-            );
-            sys::ghostty_key_event_set_key(self.event, input.key);
-            sys::ghostty_key_event_set_mods(self.event, input.mods & MODS_DEFINED);
-            sys::ghostty_key_event_set_consumed_mods(
-                self.event,
-                input.consumed_mods & MODS_DEFINED,
-            );
-            sys::ghostty_key_event_set_action(self.event, input.action);
-            sys::ghostty_key_event_set_composing(self.event, input.composing);
-            sys::ghostty_key_event_set_unshifted_codepoint(self.event, input.unshifted_codepoint);
-            sys::ghostty_key_event_set_utf8(
-                self.event,
-                input.text.as_ptr().cast::<c_char>(),
-                input.text.len(),
-            );
+        let calls = unsafe {
+            [
+                (
+                    "ghostty_key_encoder_set_from_terminal",
+                    sys::ghostty_key_encoder_set_from_terminal(self.encoder, term),
+                ),
+                (
+                    "ghostty_key_encoder_set",
+                    sys::ghostty_key_encoder_set(
+                        self.encoder,
+                        sys::GHOSTTY_KEY_ENCODER_OPT_MACOS_OPTION_AS_ALT,
+                        (&raw const option_as_alt).cast::<c_void>(),
+                    ),
+                ),
+                (
+                    "ghostty_key_event_set_key",
+                    sys::ghostty_key_event_set_key(self.event, input.key),
+                ),
+                (
+                    "ghostty_key_event_set_mods",
+                    sys::ghostty_key_event_set_mods(self.event, input.mods & MODS_DEFINED),
+                ),
+                (
+                    "ghostty_key_event_set_consumed_mods",
+                    sys::ghostty_key_event_set_consumed_mods(
+                        self.event,
+                        input.consumed_mods & MODS_DEFINED,
+                    ),
+                ),
+                (
+                    "ghostty_key_event_set_action",
+                    sys::ghostty_key_event_set_action(self.event, input.action),
+                ),
+                (
+                    "ghostty_key_event_set_composing",
+                    sys::ghostty_key_event_set_composing(self.event, input.composing),
+                ),
+                (
+                    "ghostty_key_event_set_unshifted_codepoint",
+                    sys::ghostty_key_event_set_unshifted_codepoint(
+                        self.event,
+                        input.unshifted_codepoint,
+                    ),
+                ),
+                (
+                    "ghostty_key_event_set_utf8",
+                    sys::ghostty_key_event_set_utf8(self.event, text),
+                ),
+            ]
+        };
+        for (call, code) in calls {
+            check(call, code)?;
         }
         encode_with("ghostty_key_encoder_encode", |buf, cap, len| {
             // SAFETY: `buf` has `cap` writable bytes (or is null with `cap` 0 for a size query).
@@ -190,45 +225,60 @@ impl MouseEncoder {
             cell_height: u32::from(surface.cell_height),
             ..Default::default()
         };
-        let track_last_cell = true;
         // SAFETY: live handles, serialized `term`, documented option types; action/button defined, cells non-zero, position finite and clamped above, so no Zig conversion overflows.
-        unsafe {
-            sys::ghostty_mouse_encoder_setopt_from_terminal(self.encoder, term);
-            sys::ghostty_mouse_encoder_setopt(
-                self.encoder,
-                sys::GHOSTTY_MOUSE_ENCODER_OPT_SIZE,
-                (&raw const size).cast(),
-            );
-            sys::ghostty_mouse_encoder_setopt(
-                self.encoder,
-                sys::GHOSTTY_MOUSE_ENCODER_OPT_ANY_BUTTON_PRESSED,
-                (&raw const input.any_pressed).cast(),
-            );
-            sys::ghostty_mouse_encoder_setopt(
-                self.encoder,
-                sys::GHOSTTY_MOUSE_ENCODER_OPT_TRACK_LAST_CELL,
-                (&raw const track_last_cell).cast(),
-            );
-            sys::ghostty_mouse_event_set_action(self.event, input.action);
-            match input.button {
-                Some(button) => sys::ghostty_mouse_event_set_button(self.event, button),
-                None => sys::ghostty_mouse_event_clear_button(self.event),
-            }
-            sys::ghostty_mouse_event_set_mods(self.event, input.mods & MODS_DEFINED);
-            sys::ghostty_mouse_event_set_position(self.event, position);
+        let calls = unsafe {
+            [
+                (
+                    "ghostty_mouse_encoder_set_from_terminal",
+                    sys::ghostty_mouse_encoder_set_from_terminal(self.encoder, term),
+                ),
+                (
+                    "ghostty_mouse_encoder_set",
+                    sys::ghostty_mouse_encoder_set(
+                        self.encoder,
+                        sys::GHOSTTY_MOUSE_ENCODER_OPT_SIZE,
+                        (&raw const size).cast(),
+                    ),
+                ),
+                (
+                    "ghostty_mouse_encoder_set",
+                    sys::ghostty_mouse_encoder_set(
+                        self.encoder,
+                        sys::GHOSTTY_MOUSE_ENCODER_OPT_ANY_BUTTON_PRESSED,
+                        (&raw const input.any_pressed).cast(),
+                    ),
+                ),
+                (
+                    "ghostty_mouse_event_set_action",
+                    sys::ghostty_mouse_event_set_action(self.event, input.action),
+                ),
+                match input.button {
+                    Some(button) => (
+                        "ghostty_mouse_event_set_button",
+                        sys::ghostty_mouse_event_set_button(self.event, button),
+                    ),
+                    None => (
+                        "ghostty_mouse_event_clear_button",
+                        sys::ghostty_mouse_event_clear_button(self.event),
+                    ),
+                },
+                (
+                    "ghostty_mouse_event_set_mods",
+                    sys::ghostty_mouse_event_set_mods(self.event, input.mods & MODS_DEFINED),
+                ),
+                (
+                    "ghostty_mouse_event_set_position",
+                    sys::ghostty_mouse_event_set_position(self.event, position),
+                ),
+            ]
+        };
+        for (call, code) in calls {
+            check(call, code)?;
         }
         encode_with("ghostty_mouse_encoder_encode", |buf, cap, len| {
             // SAFETY: `buf` has `cap` writable bytes (or is null with `cap` 0 for a size query).
             unsafe { sys::ghostty_mouse_encoder_encode(self.encoder, self.event, buf, cap, len) }
         })
-    }
-}
-
-impl MouseEncoder {
-    /// Forgets the last reported cell, so the next motion is reported even inside it.
-    pub(super) fn reset(&mut self) {
-        // SAFETY: the encoder handle is live and owned by this value.
-        unsafe { sys::ghostty_mouse_encoder_reset(self.encoder) };
     }
 }
 
@@ -314,14 +364,14 @@ unsafe extern "C" fn read_text(
 /// Runs an encoder that reports OUT_OF_SPACE with the size it needs, retrying once with a buffer that large.
 fn encode_with(
     call: &'static str,
-    mut encode: impl FnMut(*mut c_char, usize, *mut usize) -> sys::GhosttyResult,
+    mut encode: impl FnMut(*mut u8, usize, *mut usize) -> sys::GhosttyResult,
 ) -> Result<Vec<u8>> {
     let mut buf = vec![0u8; 64];
     let mut len = 0usize;
-    let mut code = encode(buf.as_mut_ptr().cast(), buf.len(), &raw mut len);
+    let mut code = encode(buf.as_mut_ptr(), buf.len(), &raw mut len);
     if code == sys::GHOSTTY_OUT_OF_SPACE {
         buf.resize(len, 0);
-        code = encode(buf.as_mut_ptr().cast(), buf.len(), &raw mut len);
+        code = encode(buf.as_mut_ptr(), buf.len(), &raw mut len);
     }
     check(call, code)?;
     buf.truncate(len);

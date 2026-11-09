@@ -78,7 +78,7 @@ crates/proto/src
 ├── hook.rs          C3: HookEnvelope
 └── version.rs       PROTOCOL_VERSION, C2_VERSION, HOOK_VERSION and the one comparison
 
-crates/ghostty-sys   build.rs + fetch.rs (verified ghostty 44f2a44 download, zig build into OUT_DIR) · lib.rs (the only FFI)
+crates/ghostty-sys   build.rs + fetch.rs (verified ghostty 0fa3d57 and package downloads, zig build into OUT_DIR) · lib.rs (the only FFI)
 
 crates/term/src      (feature `engine` = plyd only)
 ├── engine.rs        Engine: one pane's libghostty-vt terminal behind a safe API; palette replies, idle compression
