@@ -6,9 +6,7 @@
 (Codex CLI) TUIs in terminal panes — tabs across the top, up to four panes per tab —
 and adds what a terminal multiplexer lacks: status per pane ("needs you", "your
 turn", running, exited), progress from the agent's own plan, the model the
-session reports, stored session history and the CLIs' own worktrees. plyd also
-keeps a queue of tasks the user writes for a pane, typed when that pane is idle
-(`task.*`); no app offers it today.
+session reports, stored session history and the CLIs' own worktrees.
 
 It is **not** an LLM wrapper. It never calls a model API, holds a key, rewrites a
 prompt, hands a transcript between CLIs or picks a model or effort level; the
@@ -23,9 +21,9 @@ map. `docs/` has one document per subject (see the doc map below).
 | | |
 |---|---|
 | the app | `crates/app` (`ply-app`, binary `ply`) — Rust on GPUI 0.2.2; what `just dmg` bundles. `main.rs` (the window, tabs, grid and ⌘ chords), `conn.rs` (C2 per pane, decoded off the UI thread), `paint.rs` (the terminal element), `select.rs` (selection, copy, find, links), `keys.rs` (keystrokes → KEY frames), `chrome.rs` (palette, type scale and chrome), `forms.rs` (⌘N/⌘T, accounts), `drop.rs` (dropped files, pasted images), `control.rs` (the C1 client), `launcher.rs` (starting plyd); Geist, Geist Mono and the icon in `assets/` |
-| the daemon | `crates/daemon` (`plyd`): ptys, one libghostty-vt terminal per pane, the C1 and C2 servers, SQLite, the LaunchAgent, the task queue and its dispatch (`panes/queue.rs`, `panes/dispatch.rs`), `skill.list`, `usage.get` (Claude panes' status line reports and the CLIs' own usage records, read-only), the Claude account switch (`accounts.rs`) and Codex's sign-in (`accounts/codex.rs`) |
+| the daemon | `crates/daemon` (`plyd`): ptys, one libghostty-vt terminal per pane, the C1 and C2 servers, SQLite, the LaunchAgent, `usage.get` (Claude panes' status line reports and the CLIs' own usage records, read-only), the Claude account switch (`accounts.rs`) and Codex's sign-in (`accounts/codex.rs`) |
 | the terminal engine | `crates/term` (`ply-term`) over `crates/ghostty-sys`, whose `build.rs` downloads pristine ghostty 0fa3d57 (libghostty-vt 1.0.0, SHA-256-verified) and builds libghostty-vt from it with Zig; its `Replica` is the C2 decoder the app draws from |
-| the agent adapters | `crates/agents` (`ply-agents`): launch specs, the Claude hooks file, hook/notify/OSC 9/rollout parsing, progress, the version check, the plan-usage parsers, skill discovery (`skills.rs`, read-only) |
+| the agent adapters | `crates/agents` (`ply-agents`): launch specs, the Claude hooks file, hook/notify/OSC 9/rollout parsing, progress, the version check, the plan-usage parsers |
 | the hook helper | `crates/hook` (`ply-hook`): one hook or notify payload → one C3 line to plyd; as `ply-hook statusline`, Claude Code's status line in a pane |
 | the wire types | `crates/proto` (`ply-proto`): C1, C2, C3 |
 | the bundle | `scripts/dmg.ts` (`just dmg`) → `dist/ply.app` and `dist/ply-<version>.dmg` with the GPUI app as `MacOS/ply` |
@@ -61,14 +59,6 @@ user's own) and the optional theme, never WorktreeCreate or WorktreeRemove; Code
 `tools.update_plan.enabled` (`crates/agents/tests/launch.rs`). The user's
 `~/.claude/settings.json`, `~/.claude.json` and `~/.codex/config.toml` are never
 written (INV-8).
-
-**ply types only a task the user wrote, and never answers for the CLI.** A queued
-task is pasted, text unchanged, into an idle Claude or Codex pane whose running
-process has shown its prompt (`Adapter::shows_prompt`; a stored session id does not
-count), never into a shell, a pane whose input holds the user's unsent text (their
-Enter does not clear it) or one showing a dialog; failure pauses the pane's queue
-(`crates/daemon/src/panes/dispatch.rs`, `crates/daemon/tests/dispatch.rs`).
-`skill.list` only reads the CLIs' skill folders.
 
 **ply never manages worktrees.** The CLI creates and removes them; ply passes
 `claude --worktree <name>` and shows what the CLI reports. The only worktree

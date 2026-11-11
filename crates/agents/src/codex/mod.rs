@@ -130,18 +130,6 @@ impl Adapter for CodexAdapter {
     fn acknowledges_prompt(&self, signal: &StatusSignal) -> bool {
         matches!(signal, StatusSignal::TurnStarted)
     }
-
-    fn shows_prompt(&self, signal: &StatusSignal) -> bool {
-        matches!(
-            signal,
-            StatusSignal::TurnStarted | StatusSignal::TurnComplete
-        )
-    }
-
-    /// Never: Codex takes a paste, a pasted image path included, in the same event loop as its keys, so the Enter waits its turn.
-    fn paste_reads_images(&self, _text: &str) -> bool {
-        false
-    }
 }
 
 const NPM_PACKAGE: &str = "@openai/codex";

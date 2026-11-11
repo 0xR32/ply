@@ -4,11 +4,10 @@
 
 use ply_proto::control::{
     AccountSwitchParams, Answer, Call, DaemonShutdownParams, Empty, ErrorCode, LayoutSaveParams,
-    METHODS, PaneAnswerParams, PaneCloseParams, PaneCreateParams, PaneRef, QueuePauseParams,
-    Request, Response, SessionListParams, SettingsSetParams, SkillListParams, TaskAddParams,
-    TaskMoveParams, TaskRef, ThemeSetParams, WorkspaceOpenParams, WorkspaceRef,
+    METHODS, PaneAnswerParams, PaneCloseParams, PaneCreateParams, PaneRef, Request, Response,
+    SessionListParams, SettingsSetParams, ThemeSetParams, WorkspaceOpenParams, WorkspaceRef,
 };
-use ply_proto::pane::{AgentCli, Cli, Layout, Rgb, Settings, TaskPool, TaskTarget, TerminalTheme};
+use ply_proto::pane::{Cli, Layout, Rgb, Settings, TerminalTheme};
 
 fn black_theme() -> TerminalTheme {
     let c = Rgb { r: 0, g: 0, b: 0 };
@@ -70,30 +69,6 @@ fn method_table_matches_call() {
         }),
         Call::DaemonShutdown(DaemonShutdownParams { kill_panes: false }),
         Call::UsageGet(Empty {}),
-        Call::TaskList(WorkspaceRef { workspace_id: 1 }),
-        Call::TaskAdd(TaskAddParams {
-            workspace_id: 1,
-            target: TaskTarget::Pool(TaskPool {
-                cli: AgentCli::Codex,
-                cwd: String::new(),
-            }),
-            text: String::new(),
-            skill: None,
-        }),
-        Call::TaskCancel(TaskRef { task_id: 1 }),
-        Call::TaskMove(TaskMoveParams {
-            task_id: 1,
-            position: 0,
-        }),
-        Call::TaskSend(TaskRef { task_id: 1 }),
-        Call::QueuePause(QueuePauseParams {
-            pane_id: 1,
-            paused: true,
-        }),
-        Call::SkillList(SkillListParams {
-            cli: AgentCli::Claude,
-            cwd: String::new(),
-        }),
         Call::AccountList(Empty {}),
         Call::AccountSwitch(AccountSwitchParams {
             workspace_id: 1,

@@ -85,11 +85,9 @@ Times are Unix seconds, UTC.
    ```
 
 The rule is equality, not "at least". Version 1 is frozen; a change to any
-message bumps it, with three exceptions whose mismatch is already loud:
+message bumps it, with exceptions whose mismatch is already loud:
 `pane.answer`'s R55 field, which `deny_unknown_fields` turns into `bad_request`
-(see there); the `usage.get` method (Ruling R59); the task queue and skill
-list (Rulings R60 and R61: the `task.*`, `queue.pause` and `skill.list` methods
-and the `task.changed` and `queue.changed` events); the Claude account
+(see there); the `usage.get` method (Ruling R59); the Claude account
 switch (the `account.list` and `account.switch` methods and the
 `account.changed` event); and Codex's sign-in (the `codex.account` and
 `codex.sign_in` methods and the `codex.changed` event). A plyd from before answers
@@ -157,13 +155,6 @@ the results are made of are under **Records**.
 | `settings.set` | `{settings}` | `{}` |
 | `daemon.shutdown` | `{kill_panes}` | `{}` |
 | `usage.get` | `{}` | `Usage` |
-| `task.list` | `{workspace_id}` | `TaskList` |
-| `task.add` | `{workspace_id, target, text, skill?}` | `Task` |
-| `task.cancel` | `{task_id}` | `{}` |
-| `task.move` | `{task_id, position}` | `{}` |
-| `task.send` | `{task_id}` | `{}` |
-| `queue.pause` | `{pane_id, paused}` | `{}` |
-| `skill.list` | `{cli, cwd}` | `SkillList` |
 | `account.list` | `{}` | `ClaudeAccounts` |
 | `account.switch` | `{workspace_id, account?}` | `Pane` |
 | `codex.account` | `{}` | `CodexAccounts` |
@@ -171,8 +162,7 @@ the results are made of are under **Records**.
 
 The implementations are `crates/daemon/src/server/control.rs` (`dispatch`),
 `crates/daemon/src/panes/launch.rs`, `crates/daemon/src/panes/registry.rs`,
-`crates/daemon/src/usage.rs`, `crates/daemon/src/skills.rs`,
-`crates/daemon/src/accounts.rs` and `crates/daemon/src/accounts/codex.rs`.
+`crates/daemon/src/usage.rs`, `crates/daemon/src/accounts.rs` and `crates/daemon/src/accounts/codex.rs`.
 
 ### `workspace.list`
 
@@ -361,88 +351,6 @@ report and `as_of` says how old. A CLI with nothing readable is absent, so
 is reused for 5 s. `docs/agents.md` (**Plan usage**) has what is read from
 each file.
 
-### The task queue (Ruling R60)
-
-No app offers the task queue today; plyd serves it to any C1 client. A task is
-text the user wrote or picked from `skill.list`. plyd keeps it in a queue and types it into its pane, verbatim, when it is the user's turn there;
-`docs/agents.md` (**Dispatching tasks**) has when plyd types and how it follows
-the task through the CLI's own signals. plyd never answers a dialog for a task
-and never changes its text.
-
-Every pane has a queue; tasks leave it in `position` order. A workspace also has
-pools, one per CLI and directory: a pool task waits until an idle pane of that
-CLI, in that directory or below it, with an empty and running queue of its own,
-a process at its prompt and no unsent typing, takes it (the oldest pool task
-first). The pane takes it
-onto its own queue (`task.changed` with its `pane_id`) at the moment it would
-type it, so two free panes never take the same task. plyd resolves a pool's
-directory through symlinks when the task is added, as the CLIs report their
-own (`/var` is `/private/var` on macOS). A pool cannot be paused; its tasks are
-cancelled one by one. Tasks, not queues, are stored:
-`ply.db` keeps every task (the 200 most recent finished ones per workspace), and
-a queue's pause lives in memory.
-
-**`task.list`** returns the workspace's `TaskList`: queued, sent and running
-tasks first (queued ones by queue and position), then the finished ones newest
-first, as many as keep the tasks within 960 KiB of JSON (`LIST_BYTES`, so the
-answer fits one line; older ones stay in `ply.db` until pruned), and every
-queue that is paused or blocked. `not_found` for an unknown workspace.
-
-**`task.add`** queues a task and returns it, announced with `task.changed`.
-
-| Param | Type | Meaning |
-|---|---|---|
-| `workspace_id` | u64 | Workspace of the target. |
-| `target` | `{"pane": id}` \| `{"pool": {cli, cwd}}` | One agent pane's queue, or the pool for a CLI (`claude`, `codex`) and an absolute directory. |
-| `text` | string | What to type: not empty, at most 16 KiB (`MAX_TASK_TEXT_BYTES`), no control characters but newline and tab. |
-| `skill` | string, optional | The invocation of the skill it was picked from; display only. |
-
-In order, plyd refuses with `shutting_down` once a shutdown was requested;
-`bad_request` for text that is empty, too long or holds a control character, a
-pool directory that is not absolute, and a pane that runs a shell; `not_found`
-for an unknown workspace or a pane outside it; `invalid_state` for a pane that
-has exited, for a queue or pool that already holds 32 queued tasks
-(`MAX_QUEUED_TASKS`), and for text that would take the workspace's queued, sent
-and running tasks past 256 KiB of text together (`MAX_OPEN_TASK_TEXT_BYTES`). A pane that is `lost` takes the task; it waits until the
-pane is resumed and its turn comes. A lost pane that reopens as a shell (Ruling
-R50) cancels its queued tasks ("the pane reopened as a shell"), and closing a
-pane cancels its queued tasks and fails the one it was running ("the pane was
-closed"). After a restart of plyd, a task that was typed fails ("plyd restarted
-while it ran"), queued tasks wait with their queue paused (`restored`), and a
-pool task no pane had taken is cancelled.
-
-**`task.cancel`** cancels a `queued` task (`task.changed`, `cancelled`); any
-other state is `invalid_state`: a task that was typed cannot be taken back, and
-the user interrupts it in the pane. `not_found` for an unknown task.
-
-**`task.move`** gives a `queued` task a new place among its queue's queued
-tasks; a position past the end puts it last. Every task whose place changed is
-announced with `task.changed`. `invalid_state` for a task that is not queued.
-
-**`task.send`** types a queued task of a pane now, ahead of its queue: the one
-way past the typing block (see **Records**, `QueueState`). The pane must be
-`idle` with nothing else sent or running and its CLI must have reported a
-session, and the task must be on a pane's queue, else `invalid_state`. A pause
-does not stop it either: `task.send` is the user's own instruction for that one
-task. The startup block does: a process that has not shown its prompt yet gets
-the task once it has.
-
-**`queue.pause`** pauses (`paused: true`, reason `user`) or resumes
-(`paused: false`, whatever the reason) a pane's queue and announces it with
-`queue.changed`; a queue that is already so changes nothing. `not_found` for an
-unknown pane.
-
-### `skill.list` (Ruling R61)
-
-The skills and commands a CLI offers on this machine, read from their files and
-never written (INV-8): for Claude Code the project's `.claude/`, the user's
-`~/.claude` (or `CLAUDE_CONFIG_DIR`) and its enabled plugins; for Codex the
-project's `.agents/skills` and `.codex/skills`, `$CODEX_HOME/skills` with its
-preinstalled `.system` skills, `~/.agents/skills` and `$CODEX_HOME/prompts`.
-`cwd` must be absolute (`bad_request`). A file that cannot be read is skipped
-and logged, never an error; an answer is reused for 10 s. `docs/agents.md`
-(**Skills**) has the layouts and the limits.
-
 ### The Claude account switch: `account.list` and `account.switch`
 
 **`account.list`** runs `claude auth status --json` (the login `PATH`'s
@@ -516,8 +424,6 @@ is connected is dropped; a client learns the current state from `pane.list`,
 | `pane.meta` | `{pane_id, model?, worktree?, cwd, branch?, project?, git_worktree?}` | What the session reports about itself changed. Absent fields are unknown. Claude Code's hooks, Codex's rollout and OSC 7 drive it; `branch`, `project` and `git_worktree` come from git and follow each directory change and each change of the repository's `HEAD` (`docs/agents.md`). |
 | `pane.exit` | `{pane_id, code, at}` | The pane's process ended, after its last output was published. `code` is 128 + signal for a signal death, -1 when plyd could not wait for it. Always preceded by `pane.status` `exited`. |
 | `daemon.stopping` | `{kill_panes}` | plyd is about to exit; `kill_panes` says whether the processes are being stopped too. |
-| `task.changed` | a `Task` | A task was added, changed state, moved or was taken by a pane from its pool: the whole record. |
-| `queue.changed` | a `QueueState` | A pane's queue was paused, resumed, blocked or unblocked. |
 | `account.changed` | `{pane_id, outcome, account?, panes}` | An `account.switch` ended. `outcome` is `signed_in` (to the account asked for, or any when none was), `other_account` (signed in, but to another email or organization than asked), `unchanged` (the account signed in before), `failed` or `cancelled`; `account` is the sign-in now, when known; `panes` counts the Claude panes that restart on it, 0 unless the account changed. After `signed_in`, `other_account` and `unchanged` the sign-in pane's `pane.removed` comes first. |
 | `codex.changed` | `{pane_id, outcome, account?, panes}` | A `codex.sign_in` ended. `outcome` is `signed_in` (another account than before, or the first), `unchanged`, `failed` or `cancelled`, never `other_account`; `account` is Codex's sign-in now, when known; `panes` counts the Codex panes that restart on it, 0 unless the account changed. After `signed_in` and `unchanged` the sign-in pane's `pane.removed` comes first. |
 
@@ -597,43 +503,6 @@ records none), and the windows, never empty, shortest first.
 | `resets_at` | u64, optional | When the window starts over; already past when the record is older than the window. |
 | `models` | string[] | The models the Codex turns behind the record ran on, sorted; empty for Claude Code. |
 
-**`Task`** — one task of the queue (Ruling R60):
-
-| Field | Type | Meaning |
-|---|---|---|
-| `id` | u64 | The task id (its `tasks` row id); never reused. |
-| `workspace_id` | u64 | |
-| `pane_id` | u64, optional | The pane it is queued on or ran in; absent while a pool task waits. |
-| `pool` | `{cli, cwd}`, optional | The pool it was added to, kept after a pane took it. |
-| `text` | string | Exactly what is typed. |
-| `skill` | string, optional | The invocation of the skill it was picked from. |
-| `state` | string | `queued`, `sent` (typed, not acknowledged yet), `running` (acknowledged; the pane may be waiting for the user meanwhile), `ended` (the turn it started ended, which ply cannot tell from an interrupt), `failed` or `cancelled`. |
-| `position` | u32 | 0-based place among its queue's queued tasks; kept as it was once the task leaves `queued`. |
-| `detail` | string, optional | Why it failed or was cancelled. |
-| `created_at`, `sent_at?`, `started_at?`, `ended_at?` | u64 | When it was added, typed, acknowledged, and ended, failed or was cancelled. |
-
-**`QueueState`** — `{pane_id, paused?, blocked?}`. `paused` is `user`
-(`queue.pause`), `restored` (plyd restarted with the task queued) or `failed`
-(the queue's last task failed); nothing is typed from a paused queue.
-`blocked` is `typing`: the user typed into the pane since its last prompt, so
-its input may hold text the task would be appended to; the task waits until the
-CLI takes a prompt or the input is cleared (Ctrl+C, Ctrl+U), or `task.send`.
-Or it is `startup`: the pane's process has not shown its prompt yet (Codex
-until its first turn, Claude Code until SessionStart), so a startup screen may
-be up; the task waits for it and nothing overrides it. A queue with neither
-field runs.
-
-**`TaskList`** — `{tasks, queues}`: see `task.list`.
-
-**`Skill`** — `{name, invocation, description?, argument_hint?, source,
-plugin?}`: `invocation` is what the user types to run it (`/name`,
-`/<plugin>:<name>`, `$name`, `/prompts:<name>`); `description` and
-`argument_hint` come from its front matter; `source` is `project`, `user`,
-`plugin`, `system` or `prompt`; `plugin` names the plugin of a `plugin` skill.
-
-**`SkillList`** — `{skills}`, project first, then user, plugin, system and
-prompt, each invocation once.
-
 **`ClaudeAccount`** — `{email, org_id?, org_name?, plan?}`, as `claude auth
 status` reports a claude.ai sign-in (`email`, `orgId`, `orgName`,
 `subscriptionType`). `plan` is `free`, `pro` or `max` for a personal account,
@@ -677,9 +546,9 @@ protocol change.
 | `version_mismatch` | `hello.v` differs from plyd's; sent on id 0, then the connection closes. | the handshake |
 | `not_found` | No such workspace, tab or pane. | methods naming one |
 | `pane_alive` | `pane.close {kill:false}` on a live pane. | `pane.close` |
-| `invalid_state` | The pane's or task's state does not allow the request: `pane.answer` without a dialog, `pane.resume` on a pane that is not `lost`, a spawn with no palette after 5 s, a task for an exited pane or a full queue, `task.cancel`, `task.move` or `task.send` of a task that is not queued, `task.send` to a pane that is not idle. | `pane.answer`, `pane.resume`, `pane.create`, `task.*` |
+| `invalid_state` | The pane's state does not allow the request: `pane.answer` without a dialog, `pane.resume` on a pane that is not `lost`, a spawn with no palette after 5 s. | `pane.answer`, `pane.resume`, `pane.create` |
 | `spawn_failed` | The process could not start: pty, exec, the pane files or a missing launch spec. | `pane.create`, `pane.resume` |
-| `shutting_down` | plyd is stopping and takes no new work. | `pane.create`, `pane.resume`, `task.add` |
+| `shutting_down` | plyd is stopping and takes no new work. | `pane.create`, `pane.resume` |
 | `tab_full` | The tab named by `tab_id` already holds 4 panes (`MAX_PANES_PER_TAB`, Ruling R56); open a new tab instead. `pane.resume` and R50's shell reopen reuse their pane, so they never meet it. | `pane.create` |
 | `internal` | Anything else, such as a failed SQLite or `config.toml` write (`theme.set` and `settings.set` have applied their values by then); the details are in plyd's log. | any method |
 

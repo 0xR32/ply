@@ -20,7 +20,6 @@
 //! | `out <text>` | prints a line | prints a line |
 //! | `spin <n>` | prints a dot every 100 ms, n times, then a line end, and creates `$HOME/fake-spin.done` after it | — |
 //! | `keys <n>` | reads n bytes the pane typed in raw mode (after creating `$HOME/fake-keys.ready`) and appends them as hex to `$HOME/fake-keys.log` | — |
-//! | `submit <seconds>` | turns on bracketed paste and, in the background, reads each prompt submitted into the pane (a paste's lines joined with `\n`, the markers removed), appends it to `$HOME/fake-claude-typed.log`, fires UserPromptSubmit and, `<seconds>` later, Stop; `submit none` only logs | the same into `$HOME/fake-codex-typed.log`, recording `task_started`, then after `<seconds>` `task_complete` and a notify; needs `session` first |
 //! | `exit <code>` | exits | exits |
 //!
 //! `claude auth status` prints `$HOME/fake-claude-auth.json`, or a signed-out status without it. `claude auth login`
@@ -181,15 +180,6 @@ pub fn no_status(c: &mut Control, pane: u64, quiet: Duration) {
         |e| matches!(e, Event::PaneStatus(s) if s.pane_id == pane),
     );
     assert!(got.is_none(), "unexpected status change: {got:?}");
-}
-
-/// The prompts a fake's `submit` reader logged (`fake-claude-typed.log` or `fake-codex-typed.log`), in order.
-pub fn typed(sb: &Sandbox, cli: &str) -> Vec<String> {
-    std::fs::read_to_string(sb.home.join(format!("fake-{cli}-typed.log")))
-        .unwrap_or_default()
-        .lines()
-        .map(str::to_owned)
-        .collect()
 }
 
 /// Ends fake-claude's `claude auth login` or fake-codex's `codex login` once it waits: `ok <json>` or `fail <code>`.

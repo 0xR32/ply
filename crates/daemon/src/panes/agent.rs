@@ -7,13 +7,10 @@
 //! `pane.meta` and the stored session record, and asks the tailer for a notify's thread. An Enter that makes a Codex
 //! pane `running` is only a guess until the rollout's `task_started` confirms it: without one within
 //! [`TURN_START_WAIT`] the pane is `idle` again, and meanwhile the tailer looks for a thread `/new` may have started
-//! (R49). It also owns the pane's [`Dispatch`] (Ruling R60): every signal and status goes through it, it asks the
-//! registry for the queue's head and records a typed task's progress there, and it leaves the paste and the Enter it
-//! decides on in [`Agent::take_writes`] for the pane task, which owns the terminal. A reload asked for by an account
-//! switch ([`Agent::want_reload`]) holds the queue back until the pane task carries it out at rest. It runs entirely on
-//! the pane task, one event at a time.
+//! (R49). It also tracks the pane's [`Rest`] from every signal and the user's own input, so a reload asked for by an
+//! account switch ([`Agent::want_reload`]) or a CLI update waits until the process can stop without losing anything. It
+//! runs entirely on the pane task, one event at a time.
 
-use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
@@ -22,35 +19,24 @@ use ply_agents::{
     Adapter, AdapterSignal, AgentEvent, AgentSession, LaunchSpec, StatusSignal, adapter,
 };
 use ply_proto::hook::HookEnvelope;
-use ply_proto::pane::{AgentCli, PaneId, PaneStatus, TaskId};
+use ply_proto::pane::{AgentCli, PaneId, PaneStatus};
 use tokio::sync::mpsc;
 
 use crate::branch;
-use crate::daemon::{Shared, unix_now};
-use crate::panes::dispatch::{Action, Dispatch, Sense};
+use crate::daemon::Shared;
+use crate::panes::rest::Rest;
 use crate::panes::state::{ProgressGate, StatusMachine, Step};
 use crate::tail::{TailMsg, TailOptions, Tailer};
 
 /// How long a Codex pane an Enter made `running` waits for its rollout's `task_started` before it is `idle` again (R48).
 pub const TURN_START_WAIT: Duration = Duration::from_secs(3);
 
-/// What the pane task writes into the pty for a queued task.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Typed {
-    /// The task's text, as a paste encoded against the pane's modes.
-    Paste(String),
-    /// One Enter key press and release.
-    Enter,
-}
-
 /// The integration of one agent process; see the module docs.
 pub struct Agent {
     pane_id: PaneId,
     cli: AgentCli,
     adapter: &'static dyn Adapter,
-    dispatch: Dispatch,
-    forced: Option<TaskId>,
-    writes: Vec<Typed>,
+    rest: Rest,
     session: Box<dyn AgentSession>,
     machine: StatusMachine,
     quiet: Option<Duration>,
@@ -88,9 +74,7 @@ impl Agent {
             pane_id,
             cli,
             adapter,
-            dispatch: Dispatch::new(machine.status(), Instant::now()),
-            forced: None,
-            writes: Vec::new(),
+            rest: Rest::new(machine.status(), Instant::now()),
             session: adapter.new_session(spec),
             machine,
             quiet: adapter.quiet_timeout(),
@@ -147,12 +131,12 @@ impl Agent {
         )
     }
 
-    /// Whether the process can be stopped and its session resumed without losing a turn, a dialog, a queued task or the
-    /// user's unsent typing ([`Dispatch::at_rest`]), and the pane's session is one the CLI can resume: this process took
-    /// a prompt in it or was launched to resume it (a session without a prompt has nothing saved to resume).
+    /// Whether the process can be stopped and its session resumed without losing a turn, a dialog or the user's unsent
+    /// typing ([`Rest::at_rest`]), and the pane's session is one the CLI can resume: this process took a prompt in it or
+    /// was launched to resume it (a session without a prompt has nothing saved to resume).
     pub fn may_reload(&self, shared: &Shared, now: Instant) -> bool {
         self.machine.status() == PaneStatus::Idle
-            && self.dispatch.at_rest(now)
+            && self.rest.at_rest(now)
             && self.resumable(shared)
     }
 
@@ -165,22 +149,19 @@ impl Agent {
         session.is_some() && session == self.conversation
     }
 
-    /// Asks for the process to be stopped and relaunched once at rest, whatever its session; queued tasks wait for the relaunched one.
+    /// Asks for the process to be stopped and relaunched once at rest, whatever its session.
     pub fn want_reload(&mut self) {
         self.reload_wanted = true;
     }
 
-    /// Whether the reload [`Agent::want_reload`] asked for may run now: `idle`, settled, nothing typed or in flight.
+    /// Whether the reload [`Agent::want_reload`] asked for may run now: `idle`, settled, nothing typed.
     pub fn reload_due(&self, now: Instant) -> bool {
-        self.reload_wanted
-            && self.machine.status() == PaneStatus::Idle
-            && self.dispatch.at_rest(now)
+        self.reload_wanted && self.machine.status() == PaneStatus::Idle && self.rest.at_rest(now)
     }
 
-    /// Gives up the wanted reload (it could not start), letting the queue's next task through again.
-    pub fn drop_reload(&mut self, shared: &Arc<Shared>, now: Instant) {
+    /// Gives up the wanted reload (it could not start).
+    pub fn drop_reload(&mut self) {
         self.reload_wanted = false;
-        self.nudge(shared, now);
     }
 
     /// A C3 envelope for this pane (hook or notify); any hook also counts as activity for the quiet timer.
@@ -208,53 +189,24 @@ impl Agent {
         self.on_event(shared, AgentEvent::KeyTyped { enter }, now);
     }
 
-    /// The pane's queue changed: its dispatch looks at it again once the pane has settled.
-    pub fn nudge(&mut self, shared: &Arc<Shared>, now: Instant) {
-        let actions = self.dispatch.nudge(now);
-        self.run_dispatch(shared, actions, now);
-    }
-
-    /// `task.send`: type `task` at the pane's next settled moment, over the user's unsent typing and past a pause.
-    pub fn send_now(&mut self, shared: &Arc<Shared>, task: TaskId, now: Instant) {
-        self.forced = Some(task);
-        let actions = self.dispatch.send_now(task, now);
-        self.run_dispatch(shared, actions, now);
-    }
-
     /// Bytes the user's own key or raw input wrote to the pty, which may leave unsent text in the CLI's input.
-    pub fn on_user_input(&mut self, shared: &Arc<Shared>, bytes: &[u8], now: Instant) {
-        let actions = self.dispatch.on_user_input(bytes, now);
-        self.run_dispatch(shared, actions, now);
+    pub fn on_user_input(&mut self, bytes: &[u8], now: Instant) {
+        self.rest.on_user_input(bytes, now);
     }
 
     /// The user pasted into the pane.
-    pub fn on_user_paste(&mut self, shared: &Arc<Shared>, now: Instant) {
-        let actions = self.dispatch.on_user_paste(now);
-        self.run_dispatch(shared, actions, now);
+    pub fn on_user_paste(&mut self, now: Instant) {
+        self.rest.on_user_paste(now);
     }
 
-    /// The terminal refused the queued task's paste; the task fails.
-    pub fn paste_refused(&mut self, shared: &Arc<Shared>, now: Instant) {
-        let actions = self.dispatch.paste_refused(now);
-        self.run_dispatch(shared, actions, now);
-    }
-
-    /// What the dispatch decided to type since the last call, in order.
-    pub fn take_writes(&mut self) -> Vec<Typed> {
-        std::mem::take(&mut self.writes)
-    }
-
-    /// The next moment [`Agent::on_tick`] has work: the quiet timeout of a running Claude pane, a Codex turn wait, a held progress value, the dispatch's next step or the rest a wanted reload waits for.
+    /// The next moment [`Agent::on_tick`] has work: the quiet timeout of a running Claude pane, a Codex turn wait, a held progress value or the rest a wanted reload waits for.
     pub fn deadline(&self) -> Option<Instant> {
         let quiet = self.quiet_deadline();
         [
             quiet,
             self.turn_wait,
             self.progress.due(),
-            self.dispatch.deadline(),
-            self.reload_wanted
-                .then(|| self.dispatch.rest_at())
-                .flatten(),
+            self.reload_wanted.then(|| self.rest.rest_at()).flatten(),
         ]
         .into_iter()
         .flatten()
@@ -283,16 +235,10 @@ impl Agent {
         if let Some(progress) = self.progress.take_due(now) {
             shared.registry().set_progress(self.pane_id, progress);
         }
-        let actions = self.dispatch.tick(now);
-        self.run_dispatch(shared, actions, now);
     }
 
-    /// The process ended: a typed task fails, its queue's block ends with it, the machine stops, the tailer stops, and what the session skipped is logged.
-    pub fn exit(&mut self, shared: &Arc<Shared>, now: Instant) {
-        let actions = self.dispatch.on_status(PaneStatus::Exited, now);
-        self.run_dispatch(shared, actions, now);
-        shared.registry().block_queue(self.pane_id, None);
-        self.writes.clear();
+    /// The process ended: the machine stops, the tailer stops, and what the session skipped is logged.
+    pub fn exit(&mut self) {
         self.machine.exit();
         self.turn_wait = None;
         self.tailer = None;
@@ -353,70 +299,9 @@ impl Agent {
         }
     }
 
-    /// Carries out the dispatch's actions: the registry's answers are fed back until only writes remain.
-    fn run_dispatch(&mut self, shared: &Arc<Shared>, actions: Vec<Action>, now: Instant) {
-        let mut queue: VecDeque<Action> = actions.into();
-        while let Some(action) = queue.pop_front() {
-            match action {
-                Action::Check if self.reload_wanted => {
-                    tracing::debug!(
-                        pane_id = self.pane_id,
-                        "the queue waits for the pane's reload"
-                    );
-                }
-                Action::Check => {
-                    let claim_pool = self.dispatch.may_claim();
-                    let head = shared.registry().next_task(self.pane_id, claim_pool);
-                    queue.extend(self.dispatch.offer(head, now));
-                }
-                Action::Take(task) => {
-                    let forced = self.forced.take() == Some(task);
-                    let text = shared
-                        .registry()
-                        .take_task(self.pane_id, task, forced, unix_now());
-                    let reads_images = text
-                        .as_deref()
-                        .is_some_and(|t| self.adapter.paste_reads_images(t));
-                    if text.is_some() {
-                        tracing::info!(
-                            pane_id = self.pane_id,
-                            task_id = task,
-                            forced,
-                            reads_images,
-                            "typing a queued task"
-                        );
-                    }
-                    queue.extend(self.dispatch.taken(task, text, reads_images, now));
-                }
-                Action::Paste(text) => self.writes.push(Typed::Paste(text)),
-                Action::Enter => self.writes.push(Typed::Enter),
-                Action::Report {
-                    task,
-                    state,
-                    detail,
-                } => {
-                    tracing::info!(
-                        pane_id = self.pane_id,
-                        task_id = task,
-                        ?state,
-                        detail,
-                        "queued task progressed"
-                    );
-                    shared
-                        .registry()
-                        .task_progress(task, state, detail, unix_now());
-                }
-                Action::Block(reason) => shared.registry().block_queue(self.pane_id, reason),
-            }
-        }
-    }
-
     fn step(&mut self, shared: &Arc<Shared>, signal: &StatusSignal, now: Instant) {
-        let sense = Sense {
-            acknowledges: self.adapter.acknowledges_prompt(signal),
-            shows_prompt: self.adapter.shows_prompt(signal),
-        };
-        if sense.acknowledges {
+        let acknowledges = self.adapter.acknowledges_prompt(signal);
+        if acknowledges {
             self.conversation = shared
                 .registry()
                 .entry(self.pane_id)
@@ -457,10 +342,8 @@ impl Agent {
                 tracing::trace!(pane_id = self.pane_id, ?signal, status = ?before, ignored = self.machine.ignored(), "no transition for this signal");
             }
         }
-        let actions = self
-            .dispatch
-            .on_signal(signal, sense, self.machine.status(), now);
-        self.run_dispatch(shared, actions, now);
+        self.rest
+            .on_signal(signal, acknowledges, self.machine.status(), now);
     }
 }
 

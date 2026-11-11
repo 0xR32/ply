@@ -36,12 +36,11 @@ key, and keeps no token or key.
 line, `#[serde(deny_unknown_fields)]` on every struct, `PROTOCOL_VERSION = 1`
 checked at `hello`. Requests carry an id and a method (`workspace.*`, `pane.*`,
 `session.list`, `theme.set`, `layout.*`, `settings.*`, `daemon.shutdown`,
-`usage.get`, the task queue's `task.*`, `queue.pause` and `skill.list` (which no
-app offers today), and
-the Claude account switch's `account.*` and Codex's sign-in, `codex.*`); plyd
-broadcasts events (`pane.added`, `pane.removed`, `pane.status`, `pane.progress`,
-`pane.meta`, `pane.exit`, `daemon.stopping`, `task.changed`, `queue.changed`,
-`account.changed`, `codex.changed`) to every client.
+`usage.get`, the Claude account switch's `account.*` and Codex's sign-in,
+`codex.*`); plyd broadcasts events (`pane.added`, `pane.removed`,
+`pane.status`, `pane.progress`, `pane.meta`, `pane.exit`, `daemon.stopping`,
+`account.changed`, `codex.changed`) to every client. The task queue and
+`skill.list` were removed with the React app.
 The Rust types in `crates/proto/src/control.rs` and `pane.rs` are the single
 source; plyd and the app both use them. C1 carries no pty bytes (INV-2).
 `docs/control-channel.md` is the whole protocol.
@@ -75,7 +74,7 @@ crates/proto/src
 ├── lib.rs           the three protocols and their versions
 ├── control.rs       C1: ClientMsg, ServerMsg, every request and event, ErrorCode, MAX_LINE_BYTES
 ├── pane.rs          Pane, PaneStatus, Progress, Workspace, Tab, Layout, Session, TerminalTheme, Settings,
-│                    Usage (the CLIs' plan usage), Task, QueueState, Skill (the task queue, R60/R61)
+│                    Usage (the CLIs' plan usage), the Claude and Codex accounts
 ├── data.rs          C2: Frame, the hand-written little-endian codec, FrameReader, cells, styles, input payloads
 ├── hook.rs          C3: HookEnvelope
 └── version.rs       PROTOCOL_VERSION, C2_VERSION, HOOK_VERSION and the one comparison
@@ -100,7 +99,6 @@ crates/agents/src
 │                    usage.rs (token_count rate limits) · account.rs (`codex login` argv, the auth.json and ID token parser)
 ├── install.rs       reads a CLI's version from its install layout without executing it
 ├── usage.rs         what both usage parsers share: window labels, RFC 3339 times
-├── skills.rs        skill, command and prompt files and the plugin registry → Skill records (R61)
 ├── meta.rs · plan.rs · version.rs
 
 crates/hook/src      main.rs: stdin (or Codex's last argv) → one C3 line, 200 ms, exit 0
@@ -111,19 +109,18 @@ crates/daemon/src
 ├── server/          control.rs (C1) · data.rs (C2) · hooks.rs (C3) · mod.rs
 ├── panes/           registry.rs (workspaces, tabs, panes, mirrored to SQLite) · pane.rs (one task per pane:
 │                    the only owner of its Engine, pty channels and attached clients) · agent.rs (one agent
-│                    process's session, status machine, progress limit, tailer and task dispatch) · state.rs (the
-│                    spec 6.3 machine) · launch.rs (create, resume, restore, the move onto a CLI's update) · queue.rs (the task queue's state,
-│                    R60) · dispatch.rs (when a queued task is typed and how it is followed) · mod.rs
+│                    process's session, status machine, progress limit and tailer) · state.rs (the spec 6.3
+│                    machine) · rest.rs (when a process can stop for a reload without losing anything) ·
+│                    launch.rs (create, resume, restore, the move onto a CLI's update) · mod.rs
 ├── tail.rs          C4: finding and tailing a Codex pane's rollout
 ├── usage.rs         usage.get: Claude panes' status line reports, else the CLIs' own files, bounded, cached 5 s
-├── skills.rs        skill.list: the folders each CLI reads its skills from, bounded, read-only, cached 10 s
 ├── accounts.rs      account.list / account.switch: `claude auth status`, the sign-in pane, the restart on a new sign-in;
 │                    accounts/codex.rs: codex.account / codex.sign_in, auth.json read-only, `codex login`, the same restart
 ├── osc.rs · branch.rs   OSC 7/9 and typed input; the git branch label
 ├── publisher.rs     the C2 delivery rules as small clocked state machines
 ├── pty.rs           rustix pty + Command, setsid/TIOCSCTTY in the one audited pre_exec block
 ├── login.rs         the login shell and the environment every pane starts with
-├── db/              mod.rs · migrations/0001_init.sql (schema v1)
+├── db/              mod.rs · migrations/ (schema v3: v1's tables; v2 added `tasks`, v3 drops it)
 ├── config.rs · paths.rs · lock.rs (one plyd per data directory)
 ├── launchd.rs       the LaunchAgent plyd installs for itself (`plyd install-agent`)
 └── power.rs         prevent idle sleep while a pane is running (caffeinate -i -w)
@@ -165,9 +162,7 @@ repaints on the display's next frame, and an idle pane costs nothing. The
 terminal element (`paint.rs`) paints each row as background quads and one
 shaped line per run of one style, every glyph snapped to its cell. Keys, mouse,
 paste and focus go back as C2 events and plyd encodes them against the pane's
-live modes; the app never mirrors terminal modes. A queued task (Ruling R60) is typed the same way,
-by plyd: one paste and one Enter encoded against the pane's modes, only when it
-is the user's turn there (`docs/agents.md`, **Dispatching tasks**). `docs/terminal.md` has the details and the
+live modes; the app never mirrors terminal modes. `docs/terminal.md` has the details and the
 measured numbers.
 
 ## Startup

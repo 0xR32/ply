@@ -487,9 +487,7 @@ async fn relaunch(
     if spec.cli != pane.cli {
         tracing::info!(pane_id, from = ?pane.cli, "no session id to resume; reopening the pane as a shell");
         let title = default_title(spec.cli, &shared.login.get().shell);
-        shared
-            .registry()
-            .set_cli(pane_id, spec.cli, &title, unix_now());
+        shared.registry().set_cli(pane_id, spec.cli, &title);
     }
     shared.set_status(pane_id, initial_status(spec.cli), None);
     if handle

@@ -25,7 +25,7 @@ const QUIET: Duration = Duration::from_millis(1500);
 
 /// Past the time a pane must stay quiet after the user's last key before it counts as at rest.
 const SETTLED: Duration =
-    ply_daemon::panes::dispatch::SETTLE.saturating_add(Duration::from_millis(300));
+    ply_daemon::panes::rest::SETTLE.saturating_add(Duration::from_millis(300));
 
 fn create(c: &mut Control, ws: u64, cli: &str, cwd: &Path) -> u64 {
     c.call(

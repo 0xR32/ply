@@ -1,8 +1,0 @@
-{
-  "t": "evt",
-  "e": "queue.changed",
-  "p": {
-    "pane_id": 2,
-    "paused": "restored"
-  }
-}

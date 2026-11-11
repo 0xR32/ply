@@ -2,9 +2,9 @@
 //!
 //! The app sends [`ClientMsg`] (`hello` first, then `req`); plyd answers with [`ServerMsg`] (`welcome`, `res`,
 //! `evt`). Every struct rejects unknown fields (INV-10). Requests carry a method name in `m` and its params in
-//! `p`; [`Call`] lists every method of the 4.1 table plus ADR-0009's additions, Ruling R59's `usage.get`, Ruling
-//! R60's task queue (`task.*`, `queue.pause`), Ruling R61's `skill.list`, the Claude account switch (`account.*`) and
-//! Codex's sign-in (`codex.*`), and [`METHODS`] names the result type of each. No type here carries pty bytes (INV-2): a task's text is a string the user wrote, typed by plyd.
+//! `p`; [`Call`] lists every method of the 4.1 table plus ADR-0009's additions, Ruling R59's `usage.get`, the
+//! Claude account switch (`account.*`) and Codex's sign-in (`codex.*`), and [`METHODS`] names the result type of
+//! each. No type here carries pty bytes (INV-2).
 //!
 //! ```
 //! use ply_proto::control::{Call, ClientMsg, PaneCloseParams, Request};
@@ -24,8 +24,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::{Error, Result};
 use crate::pane::{
-    AgentCli, ClaudeAccount, Cli, CodexAccount, Layout, Pane, PaneId, PaneStatus, Progress,
-    QueueState, Settings, SignInOutcome, Task, TaskId, TaskTarget, TerminalTheme, UnixSeconds,
+    ClaudeAccount, Cli, CodexAccount, Layout, Pane, PaneId, PaneStatus, Progress, Settings,
+    SignInOutcome, TerminalTheme, UnixSeconds,
 };
 
 /// Longest accepted C1 line in bytes, newline included; a reader must stop buffering at this size.
@@ -352,59 +352,6 @@ pub struct DaemonShutdownParams {
     pub kill_panes: bool,
 }
 
-/// `task.add` params (Ruling R60): the text is typed verbatim into the target pane when it is the user's turn.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct TaskAddParams {
-    /// Workspace of the target.
-    pub workspace_id: u64,
-    /// One agent pane's queue, or a pool the next free matching pane takes from.
-    pub target: TaskTarget,
-    /// What to type: not empty, at most [`crate::pane::MAX_TASK_TEXT_BYTES`], no control characters but newline and tab.
-    pub text: String,
-    /// The invocation of the skill the text starts with, when it was picked from `skill.list`; display only.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub skill: Option<String>,
-}
-
-/// Params naming one task (`task.cancel`, `task.send`).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct TaskRef {
-    /// Task id.
-    pub task_id: TaskId,
-}
-
-/// `task.move` params: a queued task takes `position` among its queue's queued tasks (clamped to the end).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct TaskMoveParams {
-    /// A queued task.
-    pub task_id: TaskId,
-    /// Its new 0-based place.
-    pub position: u32,
-}
-
-/// `queue.pause` params: `paused: false` resumes a queue paused for any reason.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct QueuePauseParams {
-    /// The pane whose queue to pause or resume.
-    pub pane_id: PaneId,
-    /// Pause (`true`) or resume (`false`).
-    pub paused: bool,
-}
-
-/// `skill.list` params (Ruling R61): the CLI whose skills to list and the directory whose project skills count.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct SkillListParams {
-    /// Claude Code or Codex.
-    pub cli: AgentCli,
-    /// Absolute directory, normally the target pane's.
-    pub cwd: String,
-}
-
 /// `account.switch` params: the workspace whose new tab runs `claude auth login`, and the account to sign in to.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -465,27 +412,6 @@ pub enum Call {
     /// `usage.get` → [`crate::pane::Usage`]: the CLIs' plan usage as they last reported it, read-only (Ruling R59).
     #[serde(rename = "usage.get")]
     UsageGet(Empty),
-    /// `task.list` → [`crate::pane::TaskList`]: the workspace's tasks and the queues that are paused or blocked (R60).
-    #[serde(rename = "task.list")]
-    TaskList(WorkspaceRef),
-    /// `task.add` → [`Task`]: queues a task on a pane or in a pool (R60).
-    #[serde(rename = "task.add")]
-    TaskAdd(TaskAddParams),
-    /// `task.cancel` → `{}`: removes a queued task (R60).
-    #[serde(rename = "task.cancel")]
-    TaskCancel(TaskRef),
-    /// `task.move` → `{}`: reorders a queued task within its queue (R60).
-    #[serde(rename = "task.move")]
-    TaskMove(TaskMoveParams),
-    /// `task.send` → `{}`: types a queued task now although the user typed into the pane; the pane must be idle (R60).
-    #[serde(rename = "task.send")]
-    TaskSend(TaskRef),
-    /// `queue.pause` → `{}`: pauses or resumes a pane's queue (R60).
-    #[serde(rename = "queue.pause")]
-    QueuePause(QueuePauseParams),
-    /// `skill.list` → [`crate::pane::SkillList`]: the skills installed for a CLI, read-only (R61).
-    #[serde(rename = "skill.list")]
-    SkillList(SkillListParams),
     /// `account.list` → [`crate::pane::ClaudeAccounts`]: Claude Code's sign-in now, from `claude auth status`, and the accounts seen before.
     #[serde(rename = "account.list")]
     AccountList(Empty),
@@ -519,13 +445,6 @@ impl Call {
             Self::SettingsSet(_) => "settings.set",
             Self::DaemonShutdown(_) => "daemon.shutdown",
             Self::UsageGet(_) => "usage.get",
-            Self::TaskList(_) => "task.list",
-            Self::TaskAdd(_) => "task.add",
-            Self::TaskCancel(_) => "task.cancel",
-            Self::TaskMove(_) => "task.move",
-            Self::TaskSend(_) => "task.send",
-            Self::QueuePause(_) => "queue.pause",
-            Self::SkillList(_) => "skill.list",
             Self::AccountList(_) => "account.list",
             Self::AccountSwitch(_) => "account.switch",
             Self::CodexAccount(_) => "codex.account",
@@ -621,41 +540,6 @@ pub const METHODS: &[MethodInfo] = &[
         name: "usage.get",
         params: "Empty",
         result: "Usage",
-    },
-    MethodInfo {
-        name: "task.list",
-        params: "WorkspaceRef",
-        result: "TaskList",
-    },
-    MethodInfo {
-        name: "task.add",
-        params: "TaskAddParams",
-        result: "Task",
-    },
-    MethodInfo {
-        name: "task.cancel",
-        params: "TaskRef",
-        result: "Empty",
-    },
-    MethodInfo {
-        name: "task.move",
-        params: "TaskMoveParams",
-        result: "Empty",
-    },
-    MethodInfo {
-        name: "task.send",
-        params: "TaskRef",
-        result: "Empty",
-    },
-    MethodInfo {
-        name: "queue.pause",
-        params: "QueuePauseParams",
-        result: "Empty",
-    },
-    MethodInfo {
-        name: "skill.list",
-        params: "SkillListParams",
-        result: "SkillList",
     },
     MethodInfo {
         name: "account.list",
@@ -935,12 +819,6 @@ pub enum Event {
     /// plyd is about to exit.
     #[serde(rename = "daemon.stopping")]
     DaemonStopping(DaemonStopping),
-    /// A task was added or changed state or place; the whole record (R60).
-    #[serde(rename = "task.changed")]
-    TaskChanged(Box<Task>),
-    /// A pane's queue was paused, resumed, blocked or unblocked (R60).
-    #[serde(rename = "queue.changed")]
-    QueueChanged(QueueState),
     /// An `account.switch` ended: signed in, unchanged, failed or cancelled.
     #[serde(rename = "account.changed")]
     AccountChanged(AccountChanged),

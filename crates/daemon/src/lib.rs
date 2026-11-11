@@ -55,7 +55,6 @@ pub mod publisher;
 #[cfg(debug_assertions)]
 pub mod replay;
 pub mod server;
-pub mod skills;
 pub mod tail;
 pub mod usage;
 

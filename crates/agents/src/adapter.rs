@@ -276,14 +276,8 @@ pub trait Adapter: Send + Sync {
     /// Silence after which a `running` pane with no hook becomes `idle` ([`StatusSignal::QuietTimeout`]); `None` disables it.
     fn quiet_timeout(&self) -> Option<Duration>;
 
-    /// Whether `signal` is the CLI confirming it took a prompt typed into it (Ruling R60): a queued task is then `running`.
+    /// Whether `signal` is the CLI confirming it took a prompt typed into it: the pane's session then has a turn to resume, and its input is empty again.
     fn acknowledges_prompt(&self, signal: &StatusSignal) -> bool;
-
-    /// Whether `signal`, raised by the running process, shows the CLI past its startup screens at its prompt; plyd types no queued task into a process before one (Ruling R60).
-    fn shows_prompt(&self, signal: &StatusSignal) -> bool;
-
-    /// Whether the CLI reads an image for part of `text` pasted into it and drops an Enter typed before it has, so a queued task's Enter waits longer (Ruling R60); decided from the text alone, never from the files.
-    fn paste_reads_images(&self, text: &str) -> bool;
 
     /// Passes when `found` is at least [`Adapter::min_version`]; else [`Error::CliTooOld`].
     fn check_version(&self, found: &CliVersion) -> Result<()> {

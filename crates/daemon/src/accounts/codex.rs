@@ -13,7 +13,7 @@
 use std::collections::BTreeMap;
 use std::fs::File;
 use std::io::{ErrorKind, Read};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use ply_agents::codex::account::{AUTH_FILE, parse_auth, same_account, sign_in_argv};
@@ -27,7 +27,6 @@ use super::{
 };
 use crate::daemon::Shared;
 use crate::panes::registry::{MethodResult, refuse};
-use crate::skills::SkillSources;
 
 /// Most bytes of `auth.json` read; a larger file is not one Codex wrote and counts as unreadable.
 pub const MAX_AUTH_BYTES: u64 = 64 * 1024;
@@ -137,7 +136,8 @@ fn decide(before: Option<&CodexAccount>, account: &CodexAccount) -> SignInOutcom
 /// Codex's sign-in from `auth.json` under the `CODEX_HOME` its panes run with (else `~/.codex`); `None` when signed out, or when the file is missing or unreadable.
 async fn current(shared: &Shared) -> Option<CodexAccount> {
     let env = shared.login.settled().await.env_for(&BTreeMap::new());
-    let Some(home) = SkillSources::from_env(&env).codex_home else {
+    let dir = |key: &str| env.get(key).filter(|v| !v.is_empty()).map(PathBuf::from);
+    let Some(home) = dir("CODEX_HOME").or_else(|| dir("HOME").map(|h| h.join(".codex"))) else {
         tracing::warn!("no CODEX_HOME or HOME; Codex's sign-in is unknown");
         return None;
     };

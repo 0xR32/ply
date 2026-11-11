@@ -1,6 +1,6 @@
 //! The Claude account switch against a real plyd and fake-claude: `account.list` reads `claude auth status`,
 //! `account.switch` runs `claude auth login` in a tab of its own, and a new sign-in restarts every Claude pane on it
-//! once at rest (resuming a session it can, ahead of a queued task); a failed, cancelled or unchanged sign-in moves
+//! once at rest (resuming a session it can); a failed, cancelled or unchanged sign-in moves
 //! nothing. Codex's sign-in, against fake-codex: `codex.account` reads `$CODEX_HOME/auth.json`, `codex.sign_in` runs
 //! `codex login` in a tab of its own, and a new account restarts every Codex pane on it the same way.
 
@@ -13,11 +13,11 @@ use std::time::Duration;
 
 use common::fake::{
     Fake, claude_payload, claude_session, codex_thread, hook_program, install, launches,
-    sign_in_done, typed, wait_status,
+    sign_in_done, wait_status,
 };
 use common::{Control, Sandbox, eventually};
 use ply_proto::control::{AccountChanged, CodexChanged, ErrorCode, Event};
-use ply_proto::pane::{PaneStatus, SignInOutcome, TaskState};
+use ply_proto::pane::{PaneStatus, SignInOutcome};
 use serde_json::{Value, json};
 
 const WAIT: Duration = Duration::from_secs(10);
@@ -145,15 +145,6 @@ fn a_new_sign_in_restarts_every_claude_pane_on_it_once_at_rest() {
         json!({"prompt": "a long job"}),
     );
     wait_listed(&mut c, ws, busy, "status", &json!("running"));
-    Fake::ready(&sb, busy).send("submit none");
-    let task = c
-        .call(
-            "task.add",
-            json!({"workspace_id": ws, "target": {"pane": busy}, "text": "after the switch"}),
-        )
-        .unwrap()["id"]
-        .as_u64()
-        .unwrap();
 
     let sign_in = switch(&mut c, ws, Some(account_of(TEAM)));
     let pane = listed(&mut c, ws, sign_in);
@@ -218,11 +209,6 @@ fn a_new_sign_in_restarts_every_claude_pane_on_it_once_at_rest() {
     assert_eq!(listed(&mut c, ws, busy)["status"], "running");
     turn(&sb, busy, "Stop", json!({}));
     wait_status(&mut c, busy, PaneStatus::Starting, WAIT);
-    assert!(
-        typed(&sb, "claude").is_empty(),
-        "the queued task waits for the restart: {:?}",
-        typed(&sb, "claude")
-    );
     wait_listed(&mut c, ws, busy, "status", &json!("idle"));
     let runs = runs_of(&sb, busy);
     assert_eq!(runs.len(), 2, "{runs:?}");
@@ -230,13 +216,6 @@ fn a_new_sign_in_restarts_every_claude_pane_on_it_once_at_rest() {
         runs[1].contains(&format!("--resume {}", claude_session(busy))),
         "{runs:?}"
     );
-    Fake::ready(&sb, busy).send("submit 0.2");
-    let ran = c.wait_event(
-        WAIT,
-        |e| matches!(e, Event::TaskChanged(t) if t.id == task && t.state == TaskState::Running),
-    );
-    assert!(ran.is_some(), "the task runs in the restarted process");
-    assert_eq!(typed(&sb, "claude"), ["after the switch"]);
 
     let after = c.call("account.list", json!({})).unwrap();
     assert_eq!(after["current"], account_of(TEAM));

@@ -45,8 +45,7 @@ GPUI key bindings and the app menu:
 
 There is no key to close a pane, resume a lost one, open settings or show the
 plan usage: plyd offers `pane.close`, `pane.resume`, `settings.set` and
-`usage.get`, and the app does not offer them yet. The task queue (`task.*`) has
-no key either; no app offers it today.
+`usage.get`, and the app does not offer them yet.
 
 ## The mouse
 

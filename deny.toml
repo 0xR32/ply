@@ -5,7 +5,15 @@ targets = ["aarch64-apple-darwin"]
 all-features = true
 
 [advisories]
-ignore = []
+ignore = [
+  { id = "RUSTSEC-2025-0052", reason = "async-std, a gpui dependency; gpui 0.2.2 takes no maintained release" },
+  { id = "RUSTSEC-2024-0436", reason = "paste, a gpui build dependency; gpui 0.2.2 takes no maintained release" },
+  { id = "RUSTSEC-2026-0441", reason = "pin-utils, a gpui dependency; gpui 0.2.2 takes no maintained release" },
+  { id = "RUSTSEC-2026-0173", reason = "proc-macro-error2, a gpui build dependency; gpui 0.2.2 takes no maintained release" },
+  { id = "RUSTSEC-2025-0134", reason = "rustls-pemfile, inside gpui's image-URL client that ply never configures" },
+  { id = "RUSTSEC-2026-0206", reason = "rustybuzz, gpui's text shaping fallback; gpui 0.2.2 takes no maintained release" },
+  { id = "RUSTSEC-2026-0192", reason = "ttf-parser, a gpui font dependency; gpui 0.2.2 takes no maintained release" },
+]
 
 [licenses]
 allow = [
@@ -17,6 +25,7 @@ allow = [
   "ISC",
   "MIT",
   "MIT-0",
+  "MPL-2.0",
   "Unicode-3.0",
   "Zlib",
 ]
