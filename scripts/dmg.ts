@@ -2,7 +2,6 @@ import {
   copyFileSync,
   existsSync,
   mkdirSync,
-  readdirSync,
   readFileSync,
   rmSync,
   statSync,
@@ -17,7 +16,7 @@ const DIST = join(ROOT, 'dist');
 
 /** The values the bundle's Info.plist carries. */
 export interface BundleInfo {
-  /** `app/package.json`'s version, a dotted number as `CFBundleVersion` requires. */
+  /** The root `package.json`'s version, a dotted number as `CFBundleVersion` requires. */
   version: string;
   /** `<version>+<commit>`, the id plyd reports in `welcome.daemon_version`. */
   buildId: string;
@@ -28,7 +27,7 @@ export interface BundleInfo {
 const escapeXml = (s: string) =>
   s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
-/** `ply.app/Contents/Info.plist`: bundle id `dev.ply.app` (the LaunchAgent is `dev.ply.app.plyd`), fonts from `Resources/Fonts`, icon `Resources/ply.icns`. */
+/** `ply.app/Contents/Info.plist`: bundle id `dev.ply.app` (the LaunchAgent is `dev.ply.app.plyd`), icon `Resources/ply.icns`. */
 export function infoPlist(info: BundleInfo): string {
   const entries: [string, string | boolean][] = [
     ['CFBundleDevelopmentRegion', 'en'],
@@ -43,7 +42,6 @@ export function infoPlist(info: BundleInfo): string {
     ['LSApplicationCategoryType', 'public.app-category.developer-tools'],
     ['LSMinimumSystemVersion', info.minimumSystemVersion],
     ['NSHighResolutionCapable', true],
-    ['ATSApplicationFontsPath', 'Fonts'],
     ['CFBundleIconFile', 'ply'],
     ['PlyBuildId', info.buildId],
   ];
@@ -104,7 +102,7 @@ function main(): void {
   if (process.platform !== 'darwin' || process.arch !== 'arm64') {
     throw new Error('just dmg builds an Apple-silicon macOS bundle; run it on an arm64 Mac');
   }
-  const pkg = JSON.parse(readFileSync(join(ROOT, 'app', 'package.json'), 'utf8')) as {
+  const pkg = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')) as {
     version: string;
   };
   const commit = output(['git', 'rev-parse', '--short=12', 'HEAD']).trim();
@@ -116,9 +114,8 @@ function main(): void {
   const app = join(DIST, 'ply.app');
   const contents = join(app, 'Contents');
   const macos = join(contents, 'MacOS');
-  const fonts = join(contents, 'Resources', 'Fonts');
   rmSync(app, { recursive: true, force: true });
-  for (const dir of [macos, fonts]) mkdirSync(dir, { recursive: true });
+  for (const dir of [macos, join(contents, 'Resources')]) mkdirSync(dir, { recursive: true });
 
   step(
     'the app, plyd and ply-hook (profile dist: fat LTO, one codegen unit; libghostty-vt ReleaseFast)',
@@ -146,14 +143,9 @@ function main(): void {
   }
 
   copyFileSync(
-    join(ROOT, 'app', 'assets', 'icon', 'ply.icns'),
+    join(ROOT, 'crates', 'app', 'assets', 'icon', 'ply.icns'),
     join(contents, 'Resources', 'ply.icns'),
   );
-
-  const fontSrc = join(ROOT, 'app', 'assets', 'fonts');
-  for (const f of readdirSync(fontSrc).filter((n) => /\.(ttf|txt)$/.test(n))) {
-    copyFileSync(join(fontSrc, f), join(fonts, f));
-  }
 
   const machO = [join(macos, 'ply'), join(macos, 'plyd'), join(macos, 'ply-hook')];
   const minos = minimumSystemVersion(machO.map((f) => output(['otool', '-l', f])));

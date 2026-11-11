@@ -168,7 +168,7 @@ pub fn who(a: Option<&ClaudeAccount>) -> String {
     )
 }
 
-fn printable(ks: &gpui::Keystroke) -> Option<String> {
+pub(crate) fn printable(ks: &gpui::Keystroke) -> Option<String> {
     if ks.modifiers.control || ks.modifiers.platform {
         return None;
     }

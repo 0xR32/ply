@@ -74,7 +74,7 @@ fn run() -> Result<(), String> {
         ));
     }
     let source = ghostty_source(&out_dir)?;
-    // A purged cache makes the next build fetch the source again; input.test.ts reads its headers.
+    // A purged cache makes the next build fetch the source again.
     println!(
         "cargo:rerun-if-changed={}",
         source.join("build.zig").display()

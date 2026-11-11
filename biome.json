@@ -6,7 +6,7 @@
     "useIgnoreFile": true
   },
   "files": {
-    "includes": ["app/**", "scripts/**", "*.json"]
+    "includes": ["scripts/**", "*.json"]
   },
   "formatter": {
     "enabled": true,
@@ -43,17 +43,5 @@
         }
       }
     }
-  },
-  "overrides": [
-    {
-      "includes": ["app/src/app/App.tsx"],
-      "linter": {
-        "rules": {
-          "style": {
-            "useFilenamingConvention": "off"
-          }
-        }
-      }
-    }
-  ]
+  }
 }

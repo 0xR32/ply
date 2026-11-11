@@ -7,8 +7,8 @@
 //! `$CODEX_HOME/sessions/` (default `~/.codex`). plyd reads the files on a blocking thread, never writes them (INV-8)
 //! and makes no request (INV-1), so the numbers are as old as the CLIs' last report and [`CliUsage::as_of`] says how old.
 //! Rollouts are read from their ends: at most the [`MAX_ROLLOUTS`] most recently written files, at most
-//! [`MAX_BYTES_PER_ROLLOUT`] of each and [`MAX_ROLLOUT_BYTES`] in all. An answer is reused for [`CACHE_FOR`], so a held
-//! ⌘U polling every 5 s reads the files at most once per interval. A missing, unreadable or unexpected file means no
+//! [`MAX_BYTES_PER_ROLLOUT`] of each and [`MAX_ROLLOUT_BYTES`] in all. An answer is reused for [`CACHE_FOR`], so a
+//! client polling every 5 s reads the files at most once per interval. A missing, unreadable or unexpected file means no
 //! usage for that CLI (logged), never an error.
 
 use std::collections::BTreeMap;

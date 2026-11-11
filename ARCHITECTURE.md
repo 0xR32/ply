@@ -4,7 +4,7 @@ ply is three processes and three pieces of wire:
 
 | Piece | Where | Talks to |
 |---|---|---|
-| the app | `crates/app` (Rust, GPUI), binary `ply`; the earlier React app on GPUIX in `app/` still runs | plyd over C1 (`run/plyd.sock`) and C2 (`run/data.sock`); nothing else |
+| the app | `crates/app` (Rust, GPUI), binary `ply` | plyd over C1 (`run/plyd.sock`) and C2 (`run/data.sock`); nothing else |
 | `plyd`, the daemon | `crates/daemon` (Rust, tokio) over `crates/term`, `crates/agents`, `crates/proto` | the app over C1 and C2; every pane's child process over its pty; `ply-hook` over C3 (`run/hook.sock`); Codex rollout files and Claude Code's usage cache on disk, read-only |
 | `ply-hook` | `crates/hook` (std + serde_json) | plyd over C3, once per hook or notify invocation |
 | the agents | the user's own `claude` and `codex`, found on the login-shell `PATH` | their pty; `ply-hook` through the hooks and notify program ply passes per invocation |
@@ -14,16 +14,16 @@ emulates no terminal. plyd is a per-user LaunchAgent, not a child of the app, so
 quitting, closing or crashing the app stops nothing: every pty and every agent
 keeps running, and reopening the app shows each pane's current screen because
 every attach is answered with a Snapshot. plyd has no idle exit; only closing a
-pane or `daemon.shutdown {kill_panes:true}` (the palette's "Quit ply and stop
-sessions") stops a process, and a rebuilt plyd replaces the running one after
-"Restart plyd" (`docs/development.md`).
+pane or `daemon.shutdown {kill_panes:true}` stops a process, and a rebuilt plyd
+replaces the running one only once that one stops (`docs/development.md`,
+**Replacing a running plyd**).
 
 ply makes no network request (INV-1). It never calls a model, holds a key,
 rewrites a prompt or picks a model; everything it knows about a session comes
 from the CLI's own hooks, notify payloads, OSC 9 notifications and Codex's
-rollout files, and the plan usage ⌘U shows is what the CLIs last reported:
-Claude Code's status line payload in any Claude pane, else what the CLIs
-recorded on disk (`usage.get`). Switching the Claude account runs Claude
+rollout files, and the plan usage `usage.get` answers is what the CLIs last
+reported: Claude Code's status line payload in any Claude pane, else what the
+CLIs recorded on disk; no app shows it today. Switching the Claude account runs Claude
 Code's own `claude auth login` in a pane and restarts the Claude panes on the
 new sign-in; ply keeps only the accounts' emails and organizations. Codex's
 sign-in runs its own `codex login` the same way and restarts the Codex panes;
@@ -36,25 +36,24 @@ key, and keeps no token or key.
 line, `#[serde(deny_unknown_fields)]` on every struct, `PROTOCOL_VERSION = 1`
 checked at `hello`. Requests carry an id and a method (`workspace.*`, `pane.*`,
 `session.list`, `theme.set`, `layout.*`, `settings.*`, `daemon.shutdown`,
-`usage.get`, the task queue's `task.*`, `queue.pause` and `skill.list`, and
+`usage.get`, the task queue's `task.*`, `queue.pause` and `skill.list` (which no
+app offers today), and
 the Claude account switch's `account.*` and Codex's sign-in, `codex.*`); plyd
 broadcasts events (`pane.added`, `pane.removed`, `pane.status`, `pane.progress`,
 `pane.meta`, `pane.exit`, `daemon.stopping`, `task.changed`, `queue.changed`,
 `account.changed`, `codex.changed`) to every client.
 The Rust types in `crates/proto/src/control.rs` and `pane.rs` are the single
-source; `bun run gen` writes `app/src/ipc/proto.gen.ts` from them with ts-rs, and
-`check-rules` fails when that file is stale. C1 carries no pty bytes (INV-2).
+source; plyd and the app both use them. C1 carries no pty bytes (INV-2).
 `docs/control-channel.md` is the whole protocol.
 
 **C2, screen data: plyd ⇄ each visible pane.** Binary frames over
 `run/data.sock`, one connection per attached pane, `len:u32 LE · kind:u8 ·
-payload`, at most 1 MiB, encoded by hand in `crates/proto/src/data.rs` and again
-in `app/src/terminal/frames.ts`; golden frames in `crates/proto/tests/golden/c2/`
-keep the two byte-identical, and ATTACH carries `C2_VERSION` (2), which plyd
-checks first. The client sends ATTACH, RESIZE, KEY, MOUSE, PASTE,
+payload`, at most 1 MiB, encoded by hand in `crates/proto/src/data.rs`; golden
+frames in `crates/proto/tests/golden/c2/` pin every byte, and ATTACH carries
+`C2_VERSION` (2), which plyd checks first. The client sends ATTACH, RESIZE, KEY, MOUSE, PASTE,
 FOCUS, FETCH_HISTORY and ACK; plyd sends SNAPSHOT, DELTA (changed rows only),
 HISTORY, TITLE, BELL, EXIT, PASTE_REJECTED, ATTACH_REFUSED and CLIPBOARD_WRITE
-(OSC 52, which the app writes to the pasteboard). Scrollback is addressed by
+(OSC 52; the app does not act on BELL, PASTE_REJECTED or CLIPBOARD_WRITE yet). Scrollback is addressed by
 absolute line from each frame's `scrollback_base`. Colours stay
 symbolic and are resolved against the app's theme. Flow control: at most 4
 unacked Deltas, at most 120 Hz, a forced Snapshot after 3 s blocked, a
@@ -88,7 +87,7 @@ crates/term/src      (feature `engine` = plyd only)
 ├── engine/          cells.rs (cells and styles → C2) · effects.rs (the C callbacks) · encoders.rs · render.rs
 ├── delta.rs         per-client Snapshot / Delta / History building
 ├── input.rs         KEY, MOUSE, PASTE, FOCUS encoded against the pane's live modes
-├── replica.rs       the reference C2 decoder (tests, the command-line client), always compiled
+├── replica.rs       the C2 decoder the app draws from (also the tests' and the command-line client's), always compiled
 └── palette.rs       16 ANSI colours, fg/bg/cursor/selection, the 256-colour cube
 
 crates/agents/src
@@ -129,23 +128,22 @@ crates/daemon/src
 ├── launchd.rs       the LaunchAgent plyd installs for itself (`plyd install-agent`)
 └── power.rs         prevent idle sleep while a pane is running (caffeinate -i -w)
 
-app/src
-├── main.tsx · app/  render(), window options, App, top bar, overlays; bundle.ts (the .app's entry)
-├── state/           store.ts (useSyncExternalStore) · actions.ts · reducer.ts (pure) · selectors.ts ·
-│                    effects.ts (the only ipc caller)
-├── ipc/             control-client.ts (C1, reconnect 100 ms → 2 s) · daemon-launcher.ts (dev plyd or the
-│                    LaunchAgent) · dirs.ts (the new-pane form's folder sources: recents, the bounded
-│                    repository scan, path completion; async fs only) · os.ts · paths.ts ·
-│                    proto.gen.ts (generated) · mock-server.ts (tests only)
-├── terminal/        frames.ts (C2 codec) · data-client.ts · replica.ts · runs.ts (row → <text> runs) ·
-│                    input.ts · selection.ts · links.ts (⌘-click URLs) · session.ts · frame-scheduler.ts (the
-│                    shared flush timer) · host.ts · metrics.ts
-├── keymap/          keymap.ts (every binding, once) · dispatcher.ts (the window's keys, the ⌘U hold) · reserved.ts
-├── features/        panes/ (grid, frame, header, waiting, lost and queue strips, terminal-view, close confirm) · tabs/ ·
-│                    statusbar/ · palette/ · new-pane/ · settings/ · usage/ (the hold-⌘U usage card) ·
-│                    dispatch/ (the ⌘E task form with its skill list, the ⌘⇧E task queue; R60, R61)
-├── ui/              presentational primitives: text, kbd, chip, button, segments, switch, overlay card
-└── theme/           tokens.ts (the only palette and type scale) · chrome.ts
+crates/app/src       (binary `ply`)
+├── main.rs          the window, tabs, the pane grid, the ⌘ chords, the top bar; PaneView: one pane's header, mouse,
+│                    wheel, selection, find bar and terminal canvas
+├── conn.rs          C2 per pane: a reader thread attaches, decodes into a shared ply_term::Replica off the UI
+│                    thread, acks, pages history and re-attaches (100 ms → 2 s)
+├── paint.rs         the terminal element: replica rows → background quads and shaped lines snapped to the cell grid,
+│                    the cursor, the selection and the link underline; the theme for the accent
+├── select.rs        selection, copy text, word and line picks, find, http(s) links under the pointer
+├── keys.rs          GPUI keystrokes → C2 KEY frames
+├── chrome.rs        the palette and type scale, top bar, tab pills, pane frame and header, status chips, find bar
+├── forms.rs         the ⌘N / ⌘T new-pane form, the ⌘⇧A account palette, the Claude and Codex account chips
+├── dirs.rs          the new-pane form's folder suggestions: recents, the bounded repository scan, path completion
+├── field.rs         a one-value text field with a caret
+├── drop.rs          dropped files and pasted images typed as escaped paths; staged drops kept, then released
+├── control.rs       the C1 client: the load, one-shot requests, layout.save, the event stream (reconnects 100 ms → 2 s)
+└── launcher.rs      the data directory, finding plyd, starting it (install-agent, or --foreground under PLY_HOME)
 ```
 
 ## The terminal, end to end
@@ -158,42 +156,47 @@ because Codex probes within 250 ms. Dirty rows become a per-client Delta; while
 DEC 2026 synchronized output is open no Delta is built (150 ms cap); an idle pane
 sends nothing and is compressed after it goes quiet.
 
-In the app, `terminal-view.tsx` mounts only for the active tab's panes (only the
-focused one when zoomed), which the grid lays out as equal columns up to three
-and quadrants at four; plyd caps a tab at four panes (`tab_full`). `data-client.ts` attaches, `replica.ts` applies frames,
-versions and hashes each row, and each visible row renders as one memoized
-`TerminalRow` (`terminal-row.tsx`): a `<div>` whose `<text>` runs are each placed
-absolutely at their own rounded column, `round(col × cell width)`, so neither
-layout rounding nor a fallback glyph can drift the columns after them; rows are
-keyed by content hash, so a scroll moves the rows it kept. Every GPUIX host node
-costs about 0.01 ms per frame, so runs are coalesced and a test keeps a 4-pane
-tab under 2 000 host nodes. Keys, mouse, paste and focus go
-back as C2 events and plyd encodes them against the pane's live modes; the app
-never mirrors terminal modes. A queued task (Ruling R60) is typed the same way,
+In the app, only the active tab's panes have a view, which the grid lays out
+as equal columns up to three and quadrants at four (only the focused one is
+drawn while the tab is zoomed); plyd caps a tab at four panes (`tab_full`). Each
+view's connection (`conn.rs`) reads and decodes C2 on a thread of its own into
+a `ply_term::Replica` and wakes the view once per batch of frames; the view
+repaints on the display's next frame, and an idle pane costs nothing. The
+terminal element (`paint.rs`) paints each row as background quads and one
+shaped line per run of one style, every glyph snapped to its cell. Keys, mouse,
+paste and focus go back as C2 events and plyd encodes them against the pane's
+live modes; the app never mirrors terminal modes. A queued task (Ruling R60) is typed the same way,
 by plyd: one paste and one Enter encoded against the pane's modes, only when it
 is the user's turn there (`docs/agents.md`, **Dispatching tasks**). `docs/terminal.md` has the details and the
 measured numbers.
 
 ## Startup
 
-`bun run dev` connects to `run/plyd.sock`. If nothing
-answers, `daemon-launcher.ts` starts plyd: with `PLY_HOME` set it runs the
-cargo-built `plyd --foreground` against that directory; without it, it calls
+The app (`cargo run -p ply-app`, or the bundle's `MacOS/ply`) resolves its data
+directory (`PLY_HOME`, else `~/Library/Application Support/ply`) and, before it
+opens the window, connects to `run/plyd.sock`. If nothing answers,
+`launcher.rs` starts plyd and waits up to 10 s for it: with `PLY_HOME` set it
+runs `plyd --foreground` against that directory, detached; without it, it calls
 `plyd install-agent`, which writes `~/Library/LaunchAgents/dev.ply.app.plyd.plist`
-and kickstarts it. plyd takes the single-instance lock, opens `ply.db`, restores
+and kickstarts it. It finds plyd as `$PLY_PLYD`, else beside its own executable
+(the bundle's `Contents/MacOS/plyd`, so the LaunchAgent names the bundle's
+plyd), else the checkout's `target/release/plyd`, else `target/debug/plyd`. plyd takes the single-instance lock, opens `ply.db`, restores
 tabs and panes (a pane whose process is gone becomes `lost` and can be resumed
 with the CLI's own resume), binds its sockets under `run/` (mode 0700), reopens
 the lost panes that have no session to resume as fresh shells and, with
 `resume_sessions_on_start` (the default), resumes the others, and serves until
-`daemon.shutdown`. The bundle that `just dmg` builds starts the same way, except
-that `daemon-launcher.ts` finds its plyd beside the app's own executable in
-`ply.app/Contents/MacOS`, so the LaunchAgent names the bundle's plyd.
+`daemon.shutdown`. The app then registers its embedded Geist fonts, reads
+`settings.get` for the text size, opens the window and loads over C1:
+`settings.get`, `theme.set` with the palette for the stored accent,
+`workspace.list` (the home directory's workspace, else the most recently
+opened), `layout.get` and `pane.list`; an event stream on a connection of its
+own (`client` `ply-app`) keeps it current and loads again after a reconnect.
 
 ## Layering rules
 
-- The UI moves from GPUIX + React to GPUI in Rust (the owner reversed D4,
-  INV-3 and INV-13 on 2026-11-11); until then `app/` stays on GPUIX 0.11.0.
-  plyd, ply-term and ply-agents never link `gpui` (`checkCrateLayers`).
+- The UI is GPUI in Rust (the owner reversed D4, INV-3 and INV-13 on
+  2026-11-11). plyd, ply-term and ply-agents never link `gpui`, and the app
+  never links ghostty-sys or tokio (`checkCrateLayers`).
 - libghostty-vt is linked only by plyd: `ghostty-sys` is reached through
   ply-term's `engine` feature, and only ply-daemon enables it
   (`checkInv17Ghostty`, which also checks that `ghostty-sys/build.rs` pins
@@ -202,13 +205,6 @@ that `daemon-launcher.ts` finds its plyd beside the app's own executable in
   (`checkCrateLayers`): every crate has an allow-list, so a new dependency
   needs a row change (dev- and build-dependencies may go beyond it), and
   ply-agents does no I/O beyond reading the files it is given.
-- In the app, features import state, ui, keymap types, theme and terminal but
-  never ipc; ui imports only theme; ipc and terminal never import features or ui
-  (`checkAppLayers`). `effects.ts` is the only file that calls ipc.
-- `onKeyDown` appears only in `keymap/dispatcher.ts`, the overlay forms and
-  `terminal-view.tsx` (`checkInv4KeyHandlers`); no hex colour outside
-  `theme/tokens.ts` (`checkInv5Palette`); no `fetch`, `WebSocket`,
-  `XMLHttpRequest` or remote `<img>` in `app/` (`checkInv1NoNetwork`).
 - ply never creates, removes or records git worktrees; the only worktree column
   is `worktree_seen`, what the CLI reported (`checkInv7Worktrees`).
 - Every direct dependency is admitted in `deps.allow.toml` with its INV-16

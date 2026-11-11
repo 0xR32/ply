@@ -12,6 +12,7 @@ mod forms;
 mod keys;
 mod launcher;
 mod paint;
+mod select;
 
 use std::borrow::Cow;
 use std::cell::RefCell;
@@ -99,6 +100,28 @@ impl Stats {
     }
 }
 
+/// The ⌘F bar of a pane: its query and the matches in the pane's whole scrollback, oldest first.
+#[derive(Default)]
+struct Find {
+    query: field::Field,
+    matches: Vec<select::Selection>,
+    current: Option<usize>,
+    version: (Option<u64>, u64),
+}
+
+fn open_url(url: &str) {
+    if !(url.starts_with("https://") || url.starts_with("http://")) {
+        return;
+    }
+    if let Err(e) = std::process::Command::new("/usr/bin/open")
+        .arg("-u")
+        .arg(url)
+        .spawn()
+    {
+        tracing::warn!(error = %e, "cannot open a link");
+    }
+}
+
 struct PaneView {
     conn: Arc<Conn>,
     info: Option<Pane>,
@@ -107,6 +130,11 @@ struct PaneView {
     scroll_accum: f32,
     grid_origin: Rc<std::cell::Cell<gpui::Point<gpui::Pixels>>>,
     mouse_cell: Option<(u16, u16)>,
+    sel: Option<select::Selection>,
+    selecting: bool,
+    link_press: Option<String>,
+    hover_link: Option<Vec<select::Segment>>,
+    find: Option<Find>,
     position: usize,
     scale: f32,
     shell: String,
@@ -168,6 +196,11 @@ impl PaneView {
             scroll_accum: 0.0,
             grid_origin: Rc::default(),
             mouse_cell: None,
+            sel: None,
+            selecting: false,
+            link_press: None,
+            hover_link: None,
+            find: None,
             position,
             scale: f32::from(metrics.font_size) / 12.5,
             shell: chrome::shell_name(),
@@ -240,6 +273,212 @@ impl PaneView {
         }));
     }
 
+    fn replica(&self) -> std::sync::MutexGuard<'_, ply_term::Replica> {
+        conn::lock(&self.conn.shared.replica)
+    }
+
+    /// The cell under `pos` by absolute line, in the view as scrolled.
+    fn abs_pos(&self, pos: gpui::Point<gpui::Pixels>) -> select::Pos {
+        let (col, row, _, _) = self.pointer(pos);
+        let r = self.replica();
+        let live = select::live_top(&r);
+        let top = self
+            .view_top
+            .unwrap_or(live)
+            .clamp(r.scrollback_base(), live);
+        (top + u64::from(row), col.min(r.size().0.saturating_sub(1)))
+    }
+
+    fn link_at(&self, pos: gpui::Point<gpui::Pixels>) -> Option<(String, Vec<select::Segment>)> {
+        let p = self.abs_pos(pos);
+        select::link_at(&self.replica(), p)
+    }
+
+    /// ⌘ on a link opens it; while the program reports the mouse the click is its own unless ⇧ is held; else it selects.
+    fn left_down(&mut self, e: &gpui::MouseDownEvent, cx: &mut Context<Self>) {
+        if e.modifiers.platform
+            && let Some((url, _)) = self.link_at(e.position)
+        {
+            self.link_press = Some(url);
+            return;
+        }
+        let reporting = self.replica().modes().contains(Modes::MOUSE_REPORTING);
+        if reporting && !e.modifiers.shift {
+            self.report_mouse(MouseAction::Press, Some(e.button), e.position, &e.modifiers);
+            return;
+        }
+        let pos = self.abs_pos(e.position);
+        let sel = match e.click_count {
+            2 => select::word_at(&self.replica(), pos),
+            n if n >= 3 => {
+                let cols = self.replica().size().0;
+                select::Selection {
+                    anchor: (pos.0, 0),
+                    head: (pos.0, cols.saturating_sub(1)),
+                }
+            }
+            _ => match self.sel {
+                Some(s) if e.modifiers.shift => select::Selection {
+                    anchor: s.anchor,
+                    head: pos,
+                },
+                _ => select::Selection::at(pos),
+            },
+        };
+        self.sel = Some(sel);
+        self.selecting = true;
+        cx.notify();
+    }
+
+    fn left_up(&mut self, e: &gpui::MouseUpEvent, cx: &mut Context<Self>) {
+        if let Some(url) = self.link_press.take() {
+            if self.link_at(e.position).is_some_and(|(u, _)| u == url) {
+                open_url(&url);
+            }
+            return;
+        }
+        if self.selecting {
+            self.selecting = false;
+            if e.click_count <= 1
+                && !e.modifiers.shift
+                && self.sel.is_some_and(|s| s.anchor == s.head)
+            {
+                self.sel = None;
+            }
+            cx.notify();
+            return;
+        }
+        self.report_mouse(
+            MouseAction::Release,
+            Some(e.button),
+            e.position,
+            &e.modifiers,
+        );
+    }
+
+    fn mouse_move(&mut self, e: &gpui::MouseMoveEvent, cx: &mut Context<Self>) {
+        let hover = if e.modifiers.platform {
+            self.link_at(e.position).map(|(_, s)| s)
+        } else {
+            None
+        };
+        if hover != self.hover_link {
+            self.hover_link = hover;
+            cx.notify();
+        }
+        if self.selecting && e.pressed_button == Some(MouseButton::Left) {
+            let pos = self.abs_pos(e.position);
+            if let Some(s) = self.sel.as_mut()
+                && s.head != pos
+            {
+                s.head = pos;
+                cx.notify();
+            }
+            return;
+        }
+        self.report_mouse(
+            MouseAction::Motion,
+            e.pressed_button,
+            e.position,
+            &e.modifiers,
+        );
+    }
+
+    /// ⌘C: the selection to the pasteboard; nothing, and never ^C, without one.
+    fn copy(&self, cx: &App) {
+        if let Some(sel) = self.sel {
+            let text = select::copy_text(&self.replica(), &sel);
+            if !text.is_empty() {
+                cx.write_to_clipboard(gpui::ClipboardItem::new_string(text));
+            }
+        }
+    }
+
+    /// Searches again when the query changed or new lines or scrollback pages arrived; a new query starts at the newest match.
+    fn refresh_find(&mut self, query_changed: bool) {
+        let Some(query) = self.find.as_ref().map(|f| f.query.text.clone()) else {
+            return;
+        };
+        let (version, matches) = {
+            let r = conn::lock(&self.conn.shared.replica);
+            let version = (
+                r.last_seq(),
+                self.conn.shared.history_pages.load(Ordering::SeqCst),
+            );
+            if !query_changed && self.find.as_ref().is_some_and(|f| f.version == version) {
+                return;
+            }
+            let to = select::live_top(&r) + u64::from(r.size().1);
+            (version, select::find(&r, &query, r.scrollback_base(), to))
+        };
+        if let Some(f) = self.find.as_mut() {
+            f.version = version;
+            f.current = match f.current {
+                Some(c) if !query_changed && !matches.is_empty() => Some(c.min(matches.len() - 1)),
+                _ => matches.len().checked_sub(1),
+            };
+            f.matches = matches;
+        }
+        if query_changed {
+            self.show_match();
+        }
+    }
+
+    /// The current match becomes the selection and is scrolled into view.
+    fn show_match(&mut self) {
+        let Some(m) = self
+            .find
+            .as_ref()
+            .and_then(|f| f.current.and_then(|i| f.matches.get(i).copied()))
+        else {
+            return;
+        };
+        self.sel = Some(m);
+        let (live, base, rows) = {
+            let r = self.replica();
+            (
+                select::live_top(&r),
+                r.scrollback_base(),
+                u64::from(r.size().1),
+            )
+        };
+        self.view_top = if m.anchor.0 >= live {
+            None
+        } else {
+            Some(m.anchor.0.saturating_sub(rows / 2).max(base))
+        };
+    }
+
+    /// Keys in the find bar: Esc closes it, ⏎ and ↑ step to older matches, ↓ to newer ones, the rest edit the query.
+    fn find_key(&mut self, ks: &gpui::Keystroke, cx: &mut Context<Self>) {
+        let Some(f) = self.find.as_mut() else { return };
+        let last = f.matches.len().saturating_sub(1);
+        match ks.key.as_str() {
+            "escape" => self.find = None,
+            "enter" | "up" => {
+                f.current = f.current.map(|c| c.saturating_sub(1));
+                self.show_match();
+            }
+            "down" => {
+                f.current = f.current.map(|c| (c + 1).min(last));
+                self.show_match();
+            }
+            k => {
+                let changed = match forms::printable(ks) {
+                    Some(t) => {
+                        f.query.insert(&t);
+                        true
+                    }
+                    None => f.query.key(k, ks.modifiers.alt),
+                };
+                if changed {
+                    self.refresh_find(true);
+                }
+            }
+        }
+        cx.notify();
+    }
+
     fn on_scroll(&mut self, ev: &ScrollWheelEvent, _window: &mut Window, cx: &mut Context<Self>) {
         let lines = match ev.delta {
             ScrollDelta::Lines(p) => p.y * 3.0,
@@ -300,6 +539,21 @@ impl PaneView {
 impl Render for PaneView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.conn.shared.dirty.store(false, Ordering::SeqCst);
+        if self.find.is_some() {
+            self.conn.fetch_all();
+            self.refresh_find(false);
+        }
+        let selection = self.sel.map(|s| s.ordered());
+        let underline = self.hover_link.clone().unwrap_or_default();
+        let find_bar = self.find.as_ref().map(|f| {
+            let count = match (f.current, f.matches.len()) {
+                (_, 0) if f.query.text.is_empty() => String::new(),
+                (_, 0) => "no matches".to_string(),
+                (Some(c), n) => format!("{}/{n}", c + 1),
+                (None, n) => format!("{n}"),
+            };
+            chrome::find_bar(Scale(self.scale), &f.query, count)
+        });
         let view_top = self.view_top;
         let scrolled_by = view_top.map(|top| {
             let r = self
@@ -361,16 +615,10 @@ impl Render for PaneView {
             .child(
                 chrome::term_body(sc)
                     .on_scroll_wheel(cx.listener(Self::on_scroll))
+                    .when(self.hover_link.is_some(), |d| d.cursor_pointer())
                     .on_mouse_down(
                         MouseButton::Left,
-                        cx.listener(|v, e: &gpui::MouseDownEvent, _, _| {
-                            v.report_mouse(
-                                MouseAction::Press,
-                                Some(e.button),
-                                e.position,
-                                &e.modifiers,
-                            )
-                        }),
+                        cx.listener(|v, e: &gpui::MouseDownEvent, _, cx| v.left_down(e, cx)),
                     )
                     .on_mouse_down(
                         MouseButton::Right,
@@ -396,14 +644,7 @@ impl Render for PaneView {
                     )
                     .on_mouse_up(
                         MouseButton::Left,
-                        cx.listener(|v, e: &gpui::MouseUpEvent, _, _| {
-                            v.report_mouse(
-                                MouseAction::Release,
-                                Some(e.button),
-                                e.position,
-                                &e.modifiers,
-                            )
-                        }),
+                        cx.listener(|v, e: &gpui::MouseUpEvent, _, cx| v.left_up(e, cx)),
                     )
                     .on_mouse_up(
                         MouseButton::Right,
@@ -427,14 +668,10 @@ impl Render for PaneView {
                             )
                         }),
                     )
-                    .on_mouse_move(cx.listener(|v, e: &gpui::MouseMoveEvent, _, _| {
-                        v.report_mouse(
-                            MouseAction::Motion,
-                            e.pressed_button,
-                            e.position,
-                            &e.modifiers,
-                        )
-                    }))
+                    .on_mouse_move(
+                        cx.listener(|v, e: &gpui::MouseMoveEvent, _, cx| v.mouse_move(e, cx)),
+                    )
+                    .children(find_bar)
                     .child(
                         canvas(
                             move |bounds, _window, _cx| {
@@ -470,7 +707,9 @@ impl Render for PaneView {
                                         view_top,
                                         focused,
                                         cursor_on,
+                                        selection,
                                     },
+                                    &underline,
                                     window,
                                     cx,
                                 );
@@ -882,7 +1121,7 @@ impl Workspace {
         cx.notify();
     }
 
-    /// ply's ⌘ chords that a viewer can honour (`app/src/keymap/keymap.ts`); every other key goes to the focused pane.
+    /// ply's ⌘ chords (`docs/keybindings.md`); every other key goes to the focused pane, or to its find bar while open.
     fn key_down(&mut self, ev: &KeyDownEvent, _window: &mut Window, cx: &mut Context<Self>) {
         if self.overlay.is_some() {
             self.overlay_key(ev, cx);
@@ -907,6 +1146,21 @@ impl Workspace {
                     }
                 }
                 "j" => self.next_waiting(cx),
+                "c" => {
+                    if let Some(p) = self.panes.get(self.focused) {
+                        p.read(cx).copy(cx);
+                    }
+                }
+                "f" => {
+                    if let Some(p) = self.panes.get(self.focused).cloned() {
+                        p.update(cx, |v, cx| {
+                            if v.find.is_none() {
+                                v.find = Some(Find::default());
+                            }
+                            cx.notify();
+                        });
+                    }
+                }
                 "n" => self.open_new_pane(forms::Target::Pane, cx),
                 "t" => self.open_new_pane(forms::Target::Tab, cx),
                 "a" if shift => self.open_accounts(cx),
@@ -954,10 +1208,17 @@ impl Workspace {
             }
             return;
         }
+        if let Some(pane) = self.panes.get(self.focused).cloned()
+            && pane.read(cx).find.is_some()
+        {
+            pane.update(cx, |v, cx| v.find_key(ks, cx));
+            cx.stop_propagation();
+            return;
+        }
         let key = keys::key_event(ks, ev.is_held);
         if let (Some(key), Some(pane)) = (key, self.panes.get(self.focused)) {
             pane.update(cx, |v, cx| {
-                if v.view_top.take().is_some() {
+                if v.view_top.take().is_some() | v.sel.take().is_some() {
                     cx.notify();
                 }
                 v.conn.send(&Frame::Key(key));
@@ -1391,22 +1652,12 @@ fn main() {
     .map_or(12.5, |s| s.font_size);
     Application::new().run(move |cx: &mut App| {
         let fonts: Vec<Cow<'static, [u8]>> = vec![
-            Cow::Borrowed(include_bytes!(
-                "../../../app/assets/fonts/GeistMono-Regular.ttf"
-            )),
-            Cow::Borrowed(include_bytes!(
-                "../../../app/assets/fonts/GeistMono-Medium.ttf"
-            )),
-            Cow::Borrowed(include_bytes!(
-                "../../../app/assets/fonts/GeistMono-SemiBold.ttf"
-            )),
-            Cow::Borrowed(include_bytes!(
-                "../../../app/assets/fonts/Geist-Regular.ttf"
-            )),
-            Cow::Borrowed(include_bytes!("../../../app/assets/fonts/Geist-Medium.ttf")),
-            Cow::Borrowed(include_bytes!(
-                "../../../app/assets/fonts/Geist-SemiBold.ttf"
-            )),
+            Cow::Borrowed(include_bytes!("../assets/fonts/GeistMono-Regular.ttf")),
+            Cow::Borrowed(include_bytes!("../assets/fonts/GeistMono-Medium.ttf")),
+            Cow::Borrowed(include_bytes!("../assets/fonts/GeistMono-SemiBold.ttf")),
+            Cow::Borrowed(include_bytes!("../assets/fonts/Geist-Regular.ttf")),
+            Cow::Borrowed(include_bytes!("../assets/fonts/Geist-Medium.ttf")),
+            Cow::Borrowed(include_bytes!("../assets/fonts/Geist-SemiBold.ttf")),
         ];
         if let Err(e) = cx.text_system().add_fonts(fonts) {
             tracing::warn!(error = %e, "loading Geist failed; the system fonts stand in");

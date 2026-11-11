@@ -1,4 +1,4 @@
-//! Starting plyd when nothing answers, as `app/src/ipc/daemon-launcher.ts` did for the Bun app.
+//! Starting plyd when nothing answers: the bundle's own plyd as a LaunchAgent, or a foreground one under `PLY_HOME`.
 
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};

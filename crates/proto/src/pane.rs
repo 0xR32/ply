@@ -5,9 +5,8 @@
 use std::fmt;
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
-use ts_rs::TS;
 
-/// Unique id of a pane: C1 names panes by it and C2 ATTACH carries it; ids stay below 2^53 so TypeScript numbers hold them.
+/// Unique id of a pane: C1 names panes by it and C2 ATTACH carries it.
 pub type PaneId = u64;
 
 /// Most panes one tab holds (Ruling R56): up to three side by side, four as quadrants; plyd refuses a fifth.
@@ -17,7 +16,7 @@ pub const MAX_PANES_PER_TAB: usize = 4;
 pub type UnixSeconds = u64;
 
 /// The program a pane runs (schema v1 `panes.cli`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Cli {
     /// Claude Code (`claude`).
@@ -29,7 +28,7 @@ pub enum Cli {
 }
 
 /// The CLIs that send C3 hook and notify payloads; a shell pane has no hooks.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AgentCli {
     /// Claude Code hooks (`ply-hook claude <Event>`).
@@ -39,7 +38,7 @@ pub enum AgentCli {
 }
 
 /// Pane state per the spec 6.3 machine, a plain string on the wire; for `Exited` the code travels in `exit_code`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PaneStatus {
     /// Spawned; the CLI has not reported readiness yet.
@@ -59,9 +58,8 @@ pub enum PaneStatus {
 }
 
 /// Plan progress reported by the agent (spec 6.4): `done <= total`; `current` is the in-progress item's text.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-#[ts(optional_fields)]
 pub struct Progress {
     /// Completed items.
     pub done: u32,
@@ -73,9 +71,8 @@ pub struct Progress {
 }
 
 /// A live or finished pane as plyd tracks it; `id` is the C2 `pane_id` the terminal view attaches with.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-#[ts(optional_fields)]
 pub struct Pane {
     /// Pane id, equal to the C2 ATTACH `pane_id`.
     pub id: PaneId,
@@ -131,7 +128,7 @@ pub struct Pane {
 }
 
 /// A directory ply opened; one default workspace (the home directory) exists after first run.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Workspace {
     /// Workspace id.
@@ -145,9 +142,8 @@ pub struct Workspace {
 }
 
 /// One tab of a workspace with its pane order, focus and zoom.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-#[ts(optional_fields)]
 pub struct Tab {
     /// Tab id.
     pub id: u64,
@@ -165,9 +161,8 @@ pub struct Tab {
 }
 
 /// The tab arrangement of one workspace, as `layout.get` returns it and `layout.save` stores it.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-#[ts(optional_fields)]
 pub struct Layout {
     /// Tabs in any order; `Tab::position` orders them.
     pub tabs: Vec<Tab>,
@@ -177,9 +172,8 @@ pub struct Layout {
 }
 
 /// The stored record of a pane, kept after it closes (F3); `session.list` returns these.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-#[ts(optional_fields)]
 pub struct Session {
     /// Id of the pane that ran the session.
     pub pane_id: PaneId,
@@ -216,8 +210,7 @@ pub struct Session {
 }
 
 /// An opaque sRGB colour, `"#RRGGBB"` on the wire (either case accepted, upper case written).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, TS)]
-#[ts(type = "string")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Rgb {
     /// Red, 0–255.
     pub r: u8,
@@ -255,14 +248,11 @@ impl<'de> Deserialize<'de> for Rgb {
     }
 }
 
-/// The terminal palette (`theme.set`, spec R-R4); camelCase keys to match the terminal view's `theme` prop.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+/// The terminal palette (`theme.set`, spec R-R4), with camelCase keys on the wire.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct TerminalTheme {
-    /// ANSI colours 0–15; exactly 16 entries or the message is rejected (a 16-tuple in TypeScript).
-    #[ts(
-        type = "[string, string, string, string, string, string, string, string, string, string, string, string, string, string, string, string]"
-    )]
+    /// ANSI colours 0–15; exactly 16 entries or the message is rejected.
     pub ansi: [Rgb; 16],
     /// Default foreground (answers OSC 10).
     pub fg: Rgb,
@@ -278,8 +268,8 @@ pub struct TerminalTheme {
     pub selection_fg: Rgb,
 }
 
-/// Accent colour choice; the names match `accentAlternatives` in `app/src/theme/tokens.ts`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
+/// Accent colour choice; `theme_for` in `crates/app/src/paint.rs` gives each its colour.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AccentName {
     /// The default accent.
@@ -293,7 +283,7 @@ pub enum AccentName {
 }
 
 /// Which ⌥ key acts as Meta (spec K5); `off` keeps ⌥ for typing layout characters.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum OptionAsMeta {
     /// Neither ⌥ is Meta (the default).
@@ -307,7 +297,7 @@ pub enum OptionAsMeta {
 }
 
 /// User settings (`settings.get` / `settings.set`, ADR-0009); every field is required on the wire.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Settings {
     /// Accent colour of the chrome and the terminal cursor.
@@ -344,9 +334,8 @@ impl Default for Settings {
 }
 
 /// What `usage.get` returns (Ruling R59): each CLI's plan usage as it last reported it.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-#[ts(optional_fields)]
 pub struct Usage {
     /// Claude Code's, from the newest status line report of a Claude pane or the usage cache in its `.claude.json`, whichever is newer; absent when there is neither.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -357,9 +346,8 @@ pub struct Usage {
 }
 
 /// One CLI's plan usage, as recorded at `as_of`; the numbers are the CLI's, never computed by ply.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-#[ts(optional_fields)]
 pub struct CliUsage {
     /// When the CLI recorded these numbers; they may be hours old.
     pub as_of: UnixSeconds,
@@ -371,9 +359,8 @@ pub struct CliUsage {
 }
 
 /// One rate-limit window: how much of it is used and when it starts over.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-#[ts(optional_fields)]
 pub struct UsageWindow {
     /// What the window is, for display: `"Session · 5h"`, `"Week · all models"`, `"Week · Opus"`, `"Week"`, `"2 d"`.
     pub label: String,
@@ -402,7 +389,7 @@ pub const MAX_QUEUED_TASKS: usize = 32;
 pub const MAX_OPEN_TASK_TEXT_BYTES: usize = 256 * 1024;
 
 /// Where a task stands (Ruling R60); `ended` means the turn it started ended, which ply cannot tell from an interrupt.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TaskState {
     /// Waiting in its pane's queue or its pool for the pane to be free.
@@ -420,7 +407,7 @@ pub enum TaskState {
 }
 
 /// The next-free-pane target: the first idle pane of `cli` whose directory is `cwd` or inside it takes the task.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TaskPool {
     /// The CLI the pane must run.
@@ -430,7 +417,7 @@ pub struct TaskPool {
 }
 
 /// Where `task.add` sends a task: one pane's queue, or a pool that the next free matching pane takes from.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TaskTarget {
     /// The queue of this agent pane.
@@ -440,9 +427,8 @@ pub enum TaskTarget {
 }
 
 /// One task: text the user wrote or picked, typed verbatim into a pane when it is the user's turn (Ruling R60).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-#[ts(optional_fields)]
 pub struct Task {
     /// Task id.
     pub id: TaskId,
@@ -480,7 +466,7 @@ pub struct Task {
 }
 
 /// Why a pane's queue holds its tasks back until the user resumes it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PauseReason {
     /// The user paused it (`queue.pause`).
@@ -492,7 +478,7 @@ pub enum PauseReason {
 }
 
 /// Why the next task of an unpaused queue cannot be typed right now.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum BlockReason {
     /// The user typed into the pane since its last prompt, so its input may hold unsent text; `task.send` overrides.
@@ -502,9 +488,8 @@ pub enum BlockReason {
 }
 
 /// The state of one pane's queue beyond its tasks; `queue.changed` carries it, and a queue with neither field is running.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-#[ts(optional_fields)]
 pub struct QueueState {
     /// The pane.
     pub pane_id: PaneId,
@@ -517,7 +502,7 @@ pub struct QueueState {
 }
 
 /// What `task.list` returns: the open tasks and the most recent finished ones, and every queue that is paused or blocked.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TaskList {
     /// Queued, sent and running tasks, then finished ones newest first.
@@ -527,7 +512,7 @@ pub struct TaskList {
 }
 
 /// Where a skill was found (Ruling R61).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SkillSource {
     /// The project: `.claude/` of the pane's directory for Claude Code, `.agents/` or `.codex/` for Codex.
@@ -543,9 +528,8 @@ pub enum SkillSource {
 }
 
 /// One skill or command a CLI offers, as its files on this machine describe it; ply only reads them.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-#[ts(optional_fields)]
 pub struct Skill {
     /// The skill's name.
     pub name: String,
@@ -565,7 +549,7 @@ pub struct Skill {
 }
 
 /// What `skill.list` returns: the CLI's skills, project first, then user, plugins, system and prompts.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SkillList {
     /// The skills, each invocation once.
@@ -573,9 +557,8 @@ pub struct SkillList {
 }
 
 /// A claude.ai sign-in as `claude auth status` reports it, personal or a Team or Enterprise organization (`org_id` tells them apart under one email); ply keeps no credential of it.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-#[ts(optional_fields)]
 pub struct ClaudeAccount {
     /// The account's email address.
     pub email: String,
@@ -591,9 +574,8 @@ pub struct ClaudeAccount {
 }
 
 /// What `account.list` returns: the account Claude Code uses now and the ones ply saw it signed in to.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-#[ts(optional_fields)]
 pub struct ClaudeAccounts {
     /// Absent while Claude Code is signed out or authenticates another way (an API key, a cloud provider).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -606,9 +588,8 @@ pub struct ClaudeAccounts {
 }
 
 /// Codex's sign-in as its `auth.json` records it; ply keeps no token or key of it.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-#[ts(optional_fields)]
 pub struct CodexAccount {
     /// The ChatGPT account's email, from the sign-in's ID token; absent for an API key.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -621,9 +602,8 @@ pub struct CodexAccount {
 }
 
 /// What `codex.account` returns: Codex's sign-in now and the `codex.sign_in` under way.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-#[ts(optional_fields)]
 pub struct CodexAccounts {
     /// Absent while Codex is signed out, or when its `auth.json` is missing or unreadable.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -634,7 +614,7 @@ pub struct CodexAccounts {
 }
 
 /// How an `account.switch` or a `codex.sign_in` ended (`account.changed`, `codex.changed`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SignInOutcome {
     /// Signed in to the account asked for, or to any when none was named (for Codex, to another account than before); the CLI's panes move to it.

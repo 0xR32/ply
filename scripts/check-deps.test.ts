@@ -22,8 +22,8 @@ describe('check-deps', () => {
   });
 
   test('an exception skips the thresholds but not the recorded fields', () => {
-    expect(admissionProblems('npm:x', { ...passing, stars: 1, exception: 'D4' })).toEqual([]);
-    expect(admissionProblems('npm:x', { exception: 'D4' })).toHaveLength(5);
+    expect(admissionProblems('npm:x', { ...passing, stars: 1, exception: 'D5' })).toEqual([]);
+    expect(admissionProblems('npm:x', { exception: 'D5' })).toHaveLength(5);
   });
 
   test('the committed allow list round-trips through the renderer', async () => {

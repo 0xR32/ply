@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { infoPlist, minimumSystemVersion } from './dmg';
 
 describe('infoPlist', () => {
-  test('is a valid property list naming the executable, the bundle id and the font folder', () => {
+  test('is a valid property list naming the executable and the bundle id', () => {
     const xml = infoPlist({
       version: '0.1.0',
       buildId: '0.1.0+0123456789ab',
@@ -31,7 +31,6 @@ describe('infoPlist', () => {
         CFBundleVersion: '0.1.0',
         LSMinimumSystemVersion: '11.0',
         NSHighResolutionCapable: true,
-        ATSApplicationFontsPath: 'Fonts',
         CFBundleIconFile: 'ply',
         PlyBuildId: '0.1.0+0123456789ab',
       });

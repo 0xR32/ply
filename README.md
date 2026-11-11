@@ -17,11 +17,10 @@ Two processes cooperate over three local Unix-socket protocols:
 - **Ply.app** is a Rust app on Zed's [GPUI](https://www.gpui.rs) (`crates/app`, painted with Metal). It draws the tabs,
   panes, the new-pane form, the account switch and the terminal view, and sends control requests. Each visible pane's
   screen rows are decoded on a thread of their own and painted by one element per pane on the display's refresh, so
-  an idle window draws nothing. Dropped files are typed as paths, ⌘V pastes text or an image (saved, then typed as a
-  path the CLI reads), and clicks and drags reach programs that report the mouse. It never opens a pty, never spawns
-  an agent and never sees raw pty bytes. The earlier
-  React app on GPUIX (`app/`, `bun run dev`) still runs and still has what the GPUI app has not taken over yet
-  (selection and copy, find, the needs-you and queue strips, settings, ⌘U usage, ⌘E tasks).
+  an idle window draws nothing. Text is selected with the mouse and copied with ⌘C, ⌘F finds in a pane's scrollback,
+  ⌘-click opens a link, dropped files are typed as paths, ⌘V pastes text or an image (saved, then typed as a path the
+  CLI reads), and clicks and drags reach programs that report the mouse. It never opens a pty, never spawns an agent
+  and never sees raw pty bytes.
 - **plyd** is a per-user LaunchAgent, not a child of the app. It owns every pane's process and pty, runs one
   [libghostty-vt](https://github.com/ghostty-org/ghostty) terminal per pane, encodes keys, mouse, focus and paste
   against that terminal's live modes, derives each pane's status from the CLIs' own hooks and notifications, and
@@ -31,22 +30,21 @@ Two processes cooperate over three local Unix-socket protocols:
 The protocols are **C1** control (JSON lines on `run/plyd.sock`: panes, tabs, sessions, status events), **C2** screen
 data (binary frames on `run/data.sock`, one connection per visible pane: snapshots, deltas, history, input) and **C3**
 hook ingress (`ply-hook`, which Claude Code hooks and Codex's notify program run, forwards one JSON line to
-`run/hook.sock`). The wire types live in `crates/proto`; the TypeScript side of C1 and C3 is generated from them.
+`run/hook.sock`). The wire types live in `crates/proto`, which plyd and the app share.
 
 ## Repository layout
 
 ```
 Cargo.toml, rust-toolchain.toml   Rust workspace (toolchain 1.97.1), exact dependency pins
-package.json, bun.lock            Bun workspace ["app"]
+package.json, bun.lock            Bun, Biome and TypeScript for scripts/ (exact pins)
 crates/proto                      ply-proto: C1, C2, C3 wire types and protocol versions
 crates/ghostty-sys                the Zig build of libghostty-vt and its C declarations (the only FFI crate)
 crates/term                       ply-term: the libghostty-vt engine wrapper (plyd only) and the C2 replica
 crates/agents                     ply-agents: Claude Code and Codex launch specs, hook and rollout parsing
 crates/daemon                     ply-daemon, binary plyd
 crates/hook                       ply-hook, the hook and notify forwarder
-crates/app                        ply-app, binary ply: the app on GPUI that `just dmg` bundles
-app/                              the earlier React app (src/), the icon and the bundled fonts (assets/, SIL OFL)
-scripts/                          repository gates: check-rules, check-deps, check-pr, gen
+crates/app                        ply-app, binary ply: the app on GPUI that `just dmg` bundles; its icon and fonts in assets/ (SIL OFL)
+scripts/                          repository gates (check-rules, check-deps, check-pr) and the bundle script (dmg)
 deps.allow.toml                   every admitted dependency with its INV-16 numbers
 docs/                             one document per subject (control channel, screen protocol, agents, terminal, …)
 ARCHITECTURE.md                   processes, wire boundaries, module map, layering
@@ -61,7 +59,7 @@ macOS 13 or later on Apple Silicon, with:
   full gate set
 - Zig 0.17.0 on `PATH` or in `$ZIG` (libghostty-vt builds with it; the first build downloads the ghostty source, about
   40 MB, once)
-- Bun 1.3.10
+- Bun 1.3.10, for the gates and the bundle script in `scripts/`
 - [just](https://github.com/casey/just)
 - `claude` and/or `codex` installed and signed in, for real agent panes
 
@@ -69,15 +67,13 @@ macOS 13 or later on Apple Silicon, with:
 
 | Command | What it does |
 |---|---|
-| `bun install` | installs the app's dependencies (exact pins from `bun.lock`) |
-| `bun run dev` | opens the ply window with hot reload (`bun --hot app/src/main.tsx`) |
-| `cargo build --workspace` | builds every crate, including `plyd` and `ply-hook` |
-| `just check` | rustfmt, clippy `-D warnings`, rustdoc, check-rules, check-deps, Biome, tsc |
-| `just test` | `cargo nextest run` and `bun test` |
-| `just e2e` | journeys J1–J7 on the full app against the release `plyd` and fake CLIs (opens windows, unfocused) |
+| `bun install` | installs the scripts' tools: Biome, TypeScript, Bun's types (exact pins from `bun.lock`) |
+| `cargo build --workspace` | builds every crate, including `plyd`, `ply-hook` and the app |
+| `cargo run -p ply-app` | opens the ply window; set `PLY_HOME=<dir>` to keep it and its plyd off the real data directory |
+| `just check` | rustfmt, clippy `-D warnings`, rustdoc, check-rules, check-deps, Biome, tsc on `scripts/` |
+| `just test` | `cargo nextest run`, the doctests and `bun test ./scripts` |
 | `just deny` | cargo-deny: licences, advisories, the HTTP-client ban |
-| `bun run gen` | regenerates `app/src/ipc/proto.gen.ts` from ply-proto |
-| `just dmg` | builds `dist/ply.app` and `dist/ply-<version>.dmg`: optimised `plyd`, the app compiled to bytecode, Geist bundled |
+| `just dmg` | builds `dist/ply.app` and `dist/ply-<version>.dmg`: the app, `plyd` and `ply-hook` whole-program optimised |
 
 ## Documentation
 
@@ -85,9 +81,9 @@ macOS 13 or later on Apple Silicon, with:
 - [Control channel](docs/control-channel.md) and [screen protocol](docs/screen-protocol.md): the two protocols
   between the app and plyd, byte for byte.
 - [Agents](docs/agents.md): how Claude Code and Codex are launched and tracked, and the status state machine.
-- [Terminal](docs/terminal.md): libghostty-vt, input encoding and the React terminal view.
+- [Terminal](docs/terminal.md): libghostty-vt, input encoding and the GPUI terminal view.
 - [Keybindings](docs/keybindings.md) and [configuration](docs/configuration.md).
 - [Development guide](docs/development.md): toolchain setup, the run directory and logs, running plyd in the
   foreground, how the gates work, and how to admit a dependency.
-- [Performance and commissioning](docs/perf.md): the journeys, P1–P5 and F1–F4 measured against their targets,
-  the real-CLI runs and the soak, and how to rerun them.
+- [Performance and commissioning](docs/perf.md): the GPUI app measured against the React app it replaced, then the
+  React app's journeys, P1–P5 and F1–F4, real-CLI runs and soak, kept as history.

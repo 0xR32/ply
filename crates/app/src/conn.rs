@@ -4,7 +4,7 @@
 use std::io::{BufReader, Write};
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::thread;
 use std::time::Duration;
@@ -39,6 +39,8 @@ pub struct Shared {
     pub history_pending: AtomicBool,
     /// A start plyd answered with no rows, not asked again until the next Snapshot.
     pub history_exhausted: Mutex<Option<u64>>,
+    /// Counts HISTORY pages applied, so find knows when to search again.
+    pub history_pages: AtomicU64,
 }
 
 pub struct Conn {
@@ -115,6 +117,25 @@ impl Conn {
         let start = line
             .saturating_sub(u64::from(MAX_HISTORY_ROWS) / 2)
             .max(base);
+        if *lock(&self.shared.history_exhausted) == Some(start)
+            || self.shared.history_pending.swap(true, Ordering::SeqCst)
+        {
+            return;
+        }
+        self.send(&Frame::FetchHistory(FetchHistory {
+            start,
+            count: MAX_HISTORY_ROWS,
+        }));
+    }
+
+    /// Asks for the next page of scrollback not fetched yet, from its first missing line; find calls it until all is here.
+    pub fn fetch_all(&self) {
+        let first = {
+            let r = lock(&self.shared.replica);
+            let (base, top) = (r.scrollback_base(), crate::select::live_top(&r));
+            (base..top).find(|&l| r.history_row(l).is_none())
+        };
+        let Some(start) = first else { return };
         if *lock(&self.shared.history_exhausted) == Some(start)
             || self.shared.history_pending.swap(true, Ordering::SeqCst)
         {
@@ -232,6 +253,7 @@ impl Conn {
                             *lock(&self.shared.history_exhausted) = Some(h.start);
                         }
                         self.shared.history_pending.store(false, Ordering::SeqCst);
+                        self.shared.history_pages.fetch_add(1, Ordering::SeqCst);
                     }
                 }
                 Frame::Title(t) => *lock(&self.shared.title) = t.clone(),

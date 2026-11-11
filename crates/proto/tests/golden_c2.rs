@@ -1,9 +1,8 @@
 //! Golden C2 frames: one binary per frame kind in `tests/golden/c2/`, written by this crate's encoder.
 //!
-//! `app/src/terminal/frames.ts` decodes every file and re-encodes it byte for byte (`frames.test.ts`), so the two
-//! hand-written codecs cannot drift apart. The values sit inside JavaScript's safe-integer range, which the
-//! TypeScript codec enforces for `u64`/`i64` fields. After an intended layout change, regenerate the files with
-//! `PLY_BLESS=1 cargo test -p ply-proto --test golden_c2` and update the TypeScript expectations with them.
+//! The encoder must write each file byte for byte and the decoder must read it back to the same frame, so the layout
+//! cannot change unnoticed. After an intended layout change, regenerate the files with
+//! `PLY_BLESS=1 cargo test -p ply-proto --test golden_c2`.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 

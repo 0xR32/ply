@@ -7,10 +7,8 @@ raw pty output never reaches the view (INV-2). What the terminal does with the
 input, and how the app draws the rows, is `docs/terminal.md`.
 
 There is no serialisation crate. `crates/proto/src/data.rs` (`Frame::encode`,
-`Frame::decode`, `FrameReader`) is the layout on the Rust side and
-`app/src/terminal/frames.ts` (`encodeFrame`, `decodeFrame`, `FrameReader`) on
-the TypeScript side. The golden frames keep the two byte-identical (see the end
-of this document).
+`Frame::decode`, `FrameReader`) is the layout, which plyd and the app share, and
+the golden frames pin it byte for byte (see the end of this document).
 
 ## Where it is
 
@@ -23,9 +21,9 @@ of this document).
 It sits beside the control socket in the same `0700` run directory
 (`docs/control-channel.md`). A connection attaches to exactly one pane; a pane
 may have any number of attached connections, each with its own style table,
-sequence numbers and acknowledgement window. The app opens one only for each
-visible pane (the active tab's panes, only the focused one while zoomed) and
-closes it when the pane leaves the screen.
+sequence numbers and acknowledgement window. The app opens one for each pane
+of the active tab (a zoomed tab's other panes stay attached, undrawn) and closes
+it when the tab is left.
 
 ## Frames
 
@@ -45,9 +43,8 @@ is above the cap before they buffer the payload.
 
 Decoding is strict (INV-10): an unknown kind, a payload cut short, bytes left
 over after the last field, a value outside its range, an unknown flag bit and
-invalid UTF-8 are all errors, and the receiver drops the connection. The
-TypeScript codec also refuses a u64 above JavaScript's safe-integer range
-(2^53 − 1), so every value plyd sends stays inside it.
+invalid UTF-8 are all errors, and the receiver drops the connection. Every
+value plyd sends stays within 2^53 − 1, which the golden frames exercise.
 
 | Kind | Name | Direction | Payload |
 |---|---|---|---|
@@ -302,8 +299,7 @@ dropped and logged. Clipboard reads are never answered.
 **Versions.** `C2_VERSION` is 2. Version 2 added `scrollback_base` to SNAPSHOT
 and DELTA and the CLIPBOARD_WRITE kind; a view and a plyd of different
 versions never exchange a screen frame, because plyd answers the other
-version's ATTACH with reason 1 and the view shows that message instead of
-re-attaching in a loop.
+version's ATTACH with reason 1 and the app stops re-attaching that pane.
 
 ## Attaching
 
@@ -331,9 +327,8 @@ RESIZE sets it: the client that sized it last wins, and the others receive a
 Snapshot at the new size with their next update.
 
 **Re-attaching** is a new connection, so sequence numbers and the style table
-start over. The app's replica forgets its last sequence number when its
-connection drops (`Replica.resetSequence`), keeps the old screen until the new
-Snapshot replaces it, and then draws the new one.
+start over. The app keeps drawing the old screen until the new Snapshot arrives,
+which replaces its replica with a fresh one.
 
 ## Updates
 
@@ -426,24 +421,27 @@ Scrollback lives in plyd; the client fetches the rows it wants to show.
   (which also answers every resize, where the primary screen reflows) drops
   them all.
 
-The app (`app/src/terminal/session.ts`) keeps at most one request in flight,
-asks for the first run of missing lines around what it shows (at most 1 000),
-and marks a start that came back empty as exhausted until the next Snapshot.
+The app (`crates/app/src/conn.rs`) keeps at most one request in flight, asks
+for the page of missing lines around what it shows (at most 1 000), or, while
+its find bar is open, the first missing page of the whole scrollback, and marks
+a start that came back empty as exhausted until the next Snapshot.
 
 ## The app's data client
 
-`app/src/terminal/data-client.ts`, one connection per mounted TerminalView:
+`crates/app/src/conn.rs`, one connection per attached pane, read on a thread of
+its own:
 
 - it connects to `$PLY_HOME/run/data.sock` (or the default path) and sends
   ATTACH with the view's grid and cell size;
-- after each socket read it hands that read's frames to the view in wire order
-  and then sends one ACK for the newest Snapshot or Delta among them;
-- a frame sent while not attached is dropped, not queued; a RESIZE made before
-  the first Snapshot is sent once it arrives;
+- it applies each frame to the pane's `ply_term::Replica` as it is read and
+  sends an ACK for every Snapshot and Delta;
+- a frame sent while not connected is dropped, not queued; a RESIZE replaces
+  the grid the next ATTACH sends;
 - a dropped connection or a protocol error re-attaches after 100 ms, doubling
-  to at most 2 s, and the delay resets on the next Snapshot;
-- ATTACH_REFUSED ends the connection for good and the view shows its message;
-- it records decode time per socket read (`DecodeStats`).
+  to at most 2 s, and the delay resets after an attachment that got its
+  Snapshot;
+- ATTACH_REFUSED ends the connection for good;
+- BELL, PASTE_REJECTED and CLIPBOARD_WRITE are read and not acted on yet.
 
 ## A worked example
 
@@ -478,7 +476,7 @@ e2 89 88                   text "≈"
 The golden ACK (`ack.bin`), acknowledging sequence number 2^53 − 1:
 `08 00 00 00 · 14 · ff ff ff ff ff ff 1f 00`.
 
-## Golden frames and the TypeScript codec
+## Golden frames
 
 `crates/proto/tests/golden/c2/` holds one `.bin` per frame kind (KEY twice), 19 files, each
 a whole frame with its header. `crates/proto/tests/golden_c2.rs` writes them
@@ -491,12 +489,8 @@ colour tag, every attr, wide, spacer and grapheme cells, and u64 values at
 - `c2_goldens_cover_every_kind_and_nothing_else` fails when a kind has no golden
   or a file has no value.
 
-`app/src/terminal/frames.test.ts` mirrors `goldens()` value for value and, for
-every file, decodes it to that value and re-encodes it byte for byte; it also
-fails when a golden is added or removed on one side only. After an intended
-layout change, regenerate the files with
-`PLY_BLESS=1 cargo test -p ply-proto --test golden_c2` and update the
-TypeScript expectations to match.
+After an intended layout change, regenerate the files with
+`PLY_BLESS=1 cargo test -p ply-proto --test golden_c2`.
 
 `crates/proto/tests/golden.rs` adds `c2_layouts_are_the_documented_byte_counts`
 (ATTACH 18, RESIZE 8, FETCH_HISTORY 10, ACK 8, FOCUS 1, EXIT 4, BELL 0, KEY 12
@@ -504,8 +498,6 @@ TypeScript expectations to match.
 `c2_max_size_frame_passes_and_oversized_frames_are_rejected`,
 `c2_malformed_payloads_are_rejected`, `c2_encoding_refuses_inconsistent_graphemes`,
 `c2_version_mismatch_is_detectable` and `c2_reader_reports_a_frame_cut_short`.
-The TypeScript side has the same strictness tests in `frames.test.ts` and the
-client's in `app/src/terminal/data-client.test.ts`.
 
 End to end, `crates/daemon/tests/lifecycle.rs` checks that a shell survives
 detach and re-attach with the same screen

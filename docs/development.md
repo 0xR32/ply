@@ -24,20 +24,16 @@ directory holding the packages extracted by hash. Never run `zig build` by hand 
 
 | Recipe | Runs |
 |---|---|
-| `just check` (default) | `cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo doc --workspace --no-deps` with warnings as errors, `scripts/check-rules.ts`, `scripts/check-deps.ts`, `biome check`, `tsc -p app`, `tsc -p scripts` |
-| `just test` | `cargo nextest run --workspace`, the doctests (`cargo test --doc`) and `bun test ./app ./scripts` |
-| `just e2e` | `cargo build --release -p ply-daemon -p ply-hook`, then `PLY_E2E=1 bun test ./app/e2e`: journeys J1–J7 on the full app (`bun app/src/main.tsx` under GPUIX's stdio automation) with a throwaway `PLY_HOME` and `HOME` and the fake CLIs; needs a GUI session and opens windows without focus. Without `PLY_E2E=1` the journeys skip, so `just test` stays window-free |
+| `just check` (default) | `cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo doc --workspace --no-deps` with warnings as errors, `scripts/check-rules.ts`, `scripts/check-deps.ts`, `biome check`, `tsc -p scripts` |
+| `just test` | `cargo nextest run --workspace`, the doctests (`cargo test --doc`) and `bun test ./scripts` |
 | `just deny` | `cargo deny check` (licences, advisories, banned crates) |
-| `just gen` | `bun scripts/gen.ts`: runs ply-proto's `export_bindings` test with `PLY_GEN_OUT`, formats the ts-rs output with Biome and writes `app/src/ipc/proto.gen.ts` (`--check` compares instead) |
-| `just dev` | `bun --hot app/src/main.tsx` |
 | `just fmt` | `cargo fmt --all` and `biome check --write` |
-| `just fonts` | copies `app/assets/fonts/*.ttf` into `~/Library/Fonts`, where the app run from the checkout finds Geist (GPUIX loads no font file; the bundle carries its own); run it once yourself, nothing else does |
 | `just dmg` | `bun scripts/dmg.ts`: builds `dist/ply.app` and `dist/ply-<version>.dmg` (**The app bundle**, below) |
-| `just icon` | renders `app/assets/icon/ply.svg` at every size macOS asks for with `resvg` (`brew install resvg`) and packs them with `iconutil` into `app/assets/icon/ply.icns`, which is committed, so `just dmg` needs neither tool |
+| `just icon` | renders `crates/app/assets/icon/ply.svg` at every size macOS asks for with `resvg` (`brew install resvg`) and packs them with `iconutil` into `crates/app/assets/icon/ply.icns`, which is committed, so `just dmg` needs neither tool |
 
-`bun run dev`, `bun run check`, `bun run test` and `bun run gen` are the same entry points for the TypeScript side.
-`PLY_WINDOW_FOCUS=0 bun run dev` opens the window without taking focus, which keeps scripted or agent-driven runs from
-pulling it in front of your editor.
+`bun run check` and `bun run test` run the TypeScript half of the gates. `cargo run -p ply-app` opens the app;
+`PLY_WINDOW_FOCUS=0` opens its window without taking focus, which keeps scripted or agent-driven runs from pulling it
+in front of your editor.
 
 ## Where ply keeps its files
 
@@ -47,7 +43,7 @@ pulling it in front of your editor.
 | Settings | `~/Library/Application Support/ply/config.toml` (also keeps the last `theme.set` palette) |
 | Instance lock | `~/Library/Application Support/ply/plyd.lock` (holds the running plyd's pid) |
 | Sockets and per-pane files | `~/Library/Application Support/ply/run/` (mode 0700): `plyd.sock` (C1), `data.sock` (C2), `hook.sock` (C3), `panes/<id>/claude-settings.json` and `panes/<id>/launch.json` |
-| Logs | `~/Library/Logs/ply/app.YYYY-MM-DD.log` and `plyd.YYYY-MM-DD.log`, kept 14 days |
+| Logs | `~/Library/Logs/ply/plyd.YYYY-MM-DD.log`, kept 14 days, and the app's `app.YYYY-MM-DD` |
 | LaunchAgent | `~/Library/LaunchAgents/dev.ply.app.plyd.plist` |
 
 Socket paths must stay under 104 bytes, the macOS limit for a Unix socket path.
@@ -80,35 +76,32 @@ database written by a newer plyd (also with status 0, so launchd does not restar
 exit: it stops only on `daemon.shutdown`, SIGTERM, SIGINT or SIGHUP. Panes whose process ran when plyd stopped come
 back as `lost` and can be relaunched with `pane.resume`.
 
-How the app finds plyd (`app/src/ipc/daemon-launcher.ts`): `$PLY_PLYD`, else a `plyd` beside the app's own
-executable (the bundle's, in `ply.app/Contents/MacOS`), else `target/release/plyd`, else `target/debug/plyd` (the
-release build wins when both exist). With `PLY_HOME` set it spawns that binary as `plyd --foreground`,
-detached; otherwise it runs `plyd install-agent` with it, so `bun run dev` without `PLY_HOME` installs a LaunchAgent
-pointing at the cargo-built plyd. plyd is the only writer of that plist. `docs/configuration.md` lists everything a
-run writes to the machine.
+How the app finds plyd (`crates/app/src/launcher.rs`), once, when it starts and nothing answers on the control
+socket: `$PLY_PLYD`, else a `plyd` beside the app's own executable (the bundle's, in `ply.app/Contents/MacOS`, or the
+one cargo built into the same `target/<profile>/`), else `target/release/plyd`, else `target/debug/plyd`. With
+`PLY_HOME` set it spawns that binary as `plyd --foreground`, detached; otherwise it runs `plyd install-agent` with it,
+so `cargo run -p ply-app` without `PLY_HOME` installs a LaunchAgent pointing at the cargo-built plyd. It then waits up
+to 10 s for plyd to answer. plyd is the only writer of that plist. `docs/configuration.md` lists everything a run
+writes to the machine.
 
 ### Replacing a running plyd
 
 A rebuilt plyd runs only once the running one stops: plyd has no idle exit, and `install-agent` never boots out an
-agent whose plyd holds the lock. The status bar says "plyd is from another build — cargo build --release -p
-ply-daemon, then Restart plyd" whenever the connected plyd's build id (`welcome.daemon_version`, `<version>+<commit>`,
-stamped by `crates/daemon/build.rs`) differs from the app's (`<version>+<commit>` of the checkout's `HEAD`). The
-comparison is with the commit, not with the binary on disk: after a commit, or a debug-only rebuild while
-`target/release/plyd` exists (the release build wins), a restart starts the same stale binary again, so build first
-(`cargo build --release -p ply-daemon -p ply-hook`), then stop the running plyd. Three ways to stop it:
+agent whose plyd holds the lock. The app does not compare builds; plyd's build id (`welcome.daemon_version` and
+`plyd --version`, `<version>+<commit>`, stamped by `crates/daemon/build.rs`) says which one runs. So build first
+(`cargo build --release -p ply-daemon -p ply-hook`), stop the running plyd, and start the app again: it starts plyd
+only when it starts, and after an outage it reconnects to whatever answers.
 
-- **"Restart plyd"** in the palette (⌘K) sends `daemon.shutdown {kill_panes:false}`. The app reconnects, finds nothing
-  and starts the cargo-built plyd as always (`install-agent`, or `--foreground` under `PLY_HOME`); running agents
-  lose their pty with the old plyd and come back `lost`, to be resumed, and shells reopen by themselves.
-- **"Quit ply and stop sessions"** asks first, sends `daemon.shutdown {kill_panes:true}` and quits the app; the next
-  `bun run dev` starts the new plyd.
-
-A newly installed bundle is the same case: its app and plyd share one build id, so while the previous build's plyd
-still runs the status bar says it is from another build, and "Restart plyd" hands the LaunchAgent to the bundle's.
 - **From a shell**, with the app open or not: `launchctl kill TERM gui/$(id -u)/dev.ply.app.plyd` stops the
   LaunchAgent's plyd cleanly (a SIGTERM stop exits 0, so launchd does not restart it), and
-  `kill $(cat "$PLY_HOME/plyd.lock")` one under `PLY_HOME`. `install-agent` names the palette commands and the
-  `launchctl` line when it leaves a running plyd's changed plist alone.
+  `kill $(cat "$PLY_HOME/plyd.lock")` one under `PLY_HOME`. Running agents lose their pty with the old plyd and come
+  back `lost`, which the new plyd resumes at its start (`resume_sessions_on_start`); shells reopen by themselves.
+  `install-agent` names the `launchctl` line when it leaves a running plyd's changed plist alone.
+- **Over C1**, `daemon.shutdown` does the same, and with `kill_panes: true` stops every pane's process first; the app
+  has no command for it yet.
+
+A newly installed bundle is the same case: while the previous build's plyd still runs, the bundle's app talks to it;
+stop it and open the app again to hand the LaunchAgent to the bundle's plyd.
 
 A C2 change bumps `C2_VERSION` and a C1 change `PROTOCOL_VERSION`, so an app and a plyd of different protocol versions
 refuse each other cleanly (ATTACH_REFUSED reason 1, `version_mismatch`) rather than misreading frames.
@@ -126,7 +119,7 @@ PLY_HOME=/tmp/ply-dev cargo run -p ply-daemon --example ply-cli -- screen 1
 `create <cli> <cwd> [prompt]`, `type <pane> <text>` (`\r`, `\n` and `\e` are escapes), `answer <pane> <yes|no>`,
 `close <pane>` and `watch <secs>` (every C1 event, stamped in Unix milliseconds) drive an agent pane by hand, for
 example to time a real CLI's hooks against its `pane.status` events. `usage` prints the `usage.get` answer, the plan
-usage ⌘U shows, as JSON.
+usage the CLIs last reported, as JSON.
 
 Tests that start real or fake CLIs also set a sandboxed `HOME` (and `CODEX_HOME`), so `~/.claude/settings.json` and
 `~/.codex/config.toml` are never written (INV-8). plyd's own integration tests (`crates/daemon/tests/`) start plyd
@@ -143,75 +136,50 @@ mounted image, because the LaunchAgent will name the plyd inside whichever copy 
 
 ```
 ply.app/Contents/
-├── Info.plist                  dev.ply.app, the minimum macOS of the binaries, ATSApplicationFontsPath = Fonts
+├── Info.plist                  dev.ply.app, the minimum macOS of the binaries
 ├── MacOS/ply                   the app (crates/app, GPUI), cargo profile dist
 ├── MacOS/plyd, MacOS/ply-hook  cargo profile dist; plyd finds ply-hook beside itself; the app finds plyd beside itself
-├── Resources/ply.icns          the icon, CFBundleIconFile
-└── Resources/Fonts/            Geist and Geist Mono (SIL OFL); the app also carries them compiled in
+└── Resources/ply.icns          the icon, CFBundleIconFile
 ```
 
 All three binaries are built at `[profile.dist]`: the release profile with fat LTO and one codegen unit,
 whole-program optimisation across ply's crates. libghostty-vt is Zig's `ReleaseFast` in every build. When no plyd
 answers, the app runs `plyd install-agent` with the plyd beside it (or, with `PLY_HOME` set, starts `plyd
---foreground`), as the React app's launcher did.
+--foreground`).
 
 The script checks that `plyd --version` names the same `<version>+<commit>` it compiles into the app as
-`PLY_BUILD_ID` (a bundle has no checkout for `git rev-parse`; the GPUI app reads it at compile time and says it in
-`hello`), so the app and plyd of one bundle report the same build; it warns when the tree has uncommitted changes, which the id does not show. The Geist fonts work without
-`just fonts`: `ATSApplicationFontsPath` registers them with CoreText for the bundle's own process only, and
-`fontDirs` in `app/src/ipc/os.ts` looks in `Contents/Resources/Fonts`.
+`PLY_BUILD_ID` (the root `package.json`'s version and the checkout's commit; the app reads it at compile time and says
+it in `hello`), so the app and plyd of one bundle report the same build; it warns when the tree has uncommitted
+changes, which the id does not show. The app carries Geist and Geist Mono compiled in.
 
 Every Mach-O file is signed ad hoc (nested code first, then the bundle) and `codesign --verify --strict` must pass;
 nothing is notarised, so a copy downloaded from elsewhere carries the quarantine flag and Gatekeeper refuses it until
 `xattr -dr com.apple.quarantine /Applications/ply.app`. An ad-hoc signature changes with every build, so macOS asks
 again for any permission it granted plyd's panes, as it does after every cargo build today. The image is LZFSE
 (`ULFO`), which opens faster than zlib's `UDZO` at a similar size; `hdiutil verify` checks it. Apple-silicon Macs
-only, like the addon.
+only.
 
-## The terminal view on its own
+## Measuring the app
 
-`app/src/dev/terminal-demo.tsx` shows plyd's panes in a bare window, without the app shell. It sends the ply palette
-(`theme.set`), then opens `PLY_DEMO_PANES` (1–6) new shell panes in the home directory, or attaches to existing ones
-with `PLY_DEMO_ATTACH=<id,id,…>`:
-
-```sh
-PLY_HOME=/tmp/ply-dev bun --hot app/src/dev/terminal-demo.tsx
-PLY_HOME=/tmp/ply-dev PLY_DEMO_PANES=4 PLY_DEMO_INPUT='yes | head -c 50000000' PLY_TERMINAL_STATS=1 \
-  bun app/src/dev/terminal-demo.tsx
-```
-
-| Variable | Effect |
-|---|---|
-| `PLY_DEMO_INPUT` | a command typed into every new pane once it is attached (sent as C2 `INPUT_RAW`) |
-| `PLY_DEMO_WIDTH`, `PLY_DEMO_HEIGHT` | the window size (default 1280 × 800); attaching sizes the pane to the view |
-| `PLY_TERMINAL_STATS=1` | GPUIX's frame overlay, a decode/render line in each pane, and a timing line in the app log every 2 s |
-| `PLY_WINDOW_FOCUS=0` | open the window without taking focus |
-| `PLY_WINDOW_ZOOM=0` | keep the opening size (1280 × 800) instead of zooming the window to fill its screen; the journeys set it |
-
-For the P1 bench a debug plyd replays the recorded agent streams into live panes: `plyd --replay <dir> [--speed N]
-[--panes K]` asks the running plyd of `PLY_HOME` for K shell panes (default 6) and makes each `exec` a feeder that
-writes one `<dir>/*.bytes` stream to its pty at N × 4 KiB/s, looping. It prints the pane ids for `PLY_DEMO_ATTACH`:
+`ply --stats` (`cargo run --release -p ply-app -- --stats`) logs a `frame stats` line every second to the app log
+(`docs/terminal.md`, **Measured**). For streaming load a debug plyd replays the recorded agent streams into live
+panes: `plyd --replay <dir> [--speed N] [--panes K]` opens a workspace on `<dir>` in the running plyd of `PLY_HOME`,
+asks it for K shell panes (default 6) and makes each `exec` a feeder that writes one `<dir>/*.bytes` stream to its
+pty at N × 4 KiB/s, looping, then prints the pane ids:
 
 ```sh
-PLY_HOME=/tmp/ply-dev target/debug/plyd --replay "$PWD/crates/term/tests/fixtures" --speed 10 --panes 6
-PLY_HOME=/tmp/ply-dev PLY_DEMO_ATTACH=<printed ids> PLY_TERMINAL_STATS=1 bun app/src/dev/terminal-demo.tsx
+PLY_HOME=/tmp/ply-dev target/debug/plyd --replay "$PWD/crates/term/tests/fixtures" --speed 10 --panes 4
 ```
 
-The commissioning numbers are measured on the full app instead: `app/e2e/perf.ts` (`p1`, `p2`, `idle`, `p5`, `soak`)
-drives `bun app/src/main.tsx` with its own sandbox, and `docs/perf.md` lists the runs and their results. In the full
-app `PLY_TERMINAL_STATS=1` also turns on GPUIX's frame overlay and logs a `frame stats` line (GPUI draw times and
-main-thread stalls) every second.
+`docs/perf.md` has the GPUI app's numbers against the React app's.
 
-The TypeScript C2 codec is pinned to ply-proto's by `crates/proto/tests/golden/c2/*.bin`: after an intended layout
-change, regenerate them with `PLY_BLESS=1 cargo test -p ply-proto --test golden_c2` and update
-`app/src/terminal/frames.test.ts` to match. The recorded screens in `app/src/terminal/fixtures/` are ply-term
-Snapshots and Deltas of the scrubbed streams in `crates/term/tests/fixtures/`. Under `bun test` a terminal view with
-no `TerminalHostContext` above it never connects, so no test reaches a real plyd or the pasteboard.
+The golden C2 frames in `crates/proto/tests/golden/c2/*.bin` pin ply-proto's codec: after an intended layout change,
+regenerate them with `PLY_BLESS=1 cargo test -p ply-proto --test golden_c2`.
 
 ## The gates
 
 CI (`.github/workflows/ci.yml`) runs three jobs on macOS: `rust` (rustfmt, clippy, nextest, doctests, cargo-deny, rustdoc), `ts`
-(Biome, tsc, bun test) and `rules` (check-rules, check-deps, and check-pr on pull requests). Locally, `just check`
+(Biome, tsc and bun test on `scripts/`) and `rules` (check-rules, check-deps, and check-pr on pull requests). Locally, `just check`
 runs the formatting, lint, rustdoc, rule and type gates; `just test` runs nextest, the doctests and `bun test`;
 `just deny` runs cargo-deny. Only check-pr has no local recipe.
 
@@ -219,13 +187,11 @@ runs the formatting, lint, rustdoc, rule and type gates; `just test` runs nextes
   with `-D warnings`, so an undocumented public item fails. `clippy::unwrap_used` and `expect_used` are denied outside
   tests (`clippy.toml`).
 - **`scripts/check-rules.ts`** prints one line per violation and exits non-zero on any. One function per rule:
-  INV-1 (no network API in `app/`), INV-2 (no byte fields in C1 types, no pty API in `app/`), INV-4 (`onKeyDown` only in the keymap dispatcher, the overlay forms and the terminal view), INV-5
-  (colour literals only in `app/src/theme/tokens.ts` and fixtures), INV-7 (no `git worktree` call, no worktree column
-  but `worktree_seen`), INV-11 (no real home path or committer identity in any file), INV-17 (`ghostty-sys` reaches only `plyd` through `ply-term`, and
-  `crates/ghostty-sys/build.rs` pins the ghostty commit, an archive URL naming it and the archive's SHA-256), the
-  dependency layers of spec 8.2 for crates and for `app/src` imports, the unsafe and `anyhow` rules of spec 9.1, exact
-  version pins, and the freshness of `proto.gen.ts`. A check that needs code a later work package writes prints a
-  `notice:` line instead.
+  INV-2 (no byte fields in C1 types), INV-7 (no `git worktree` call, no worktree column but `worktree_seen`), INV-11
+  (no real home path or committer identity in any file), INV-17 (`ghostty-sys` reaches only `plyd` through
+  `ply-term`, and `crates/ghostty-sys/build.rs` pins the ghostty commit, an archive URL naming it and the archive's
+  SHA-256), the dependency layers of spec 8.2 for crates, the unsafe and `anyhow` rules of spec 9.1, and exact version
+  pins. A check that needs code a later work package writes prints a `notice:` line instead.
 - **`scripts/check-deps.ts`** fails when a direct dependency of any `Cargo.toml` or `package.json` is missing from
   `deps.allow.toml`, or when its recorded numbers fail INV-16.
 - **`scripts/check-pr.ts`** requires a `Spec: x.y.z` line and a `WP: n` line in the pull-request body (`$PR_BODY`, or a
@@ -236,9 +202,8 @@ runs the formatting, lint, rustdoc, rule and type gates; `just test` runs nextes
 ## Adding a dependency
 
 INV-16 admits a direct third-party dependency only with at least 1 000 stars, a commit in the last six months, at
-least three contributors with five or more commits, and no "experimental" label from its maintainers. GPUIX (D4) and
-libghostty-vt (D5) are the only exceptions, by decision; GPUIX's lasts until the GPUI app replaces `app/` (D4 was
-reversed on 2026-11-11).
+least three contributors with five or more commits, and no "experimental" label from its maintainers. libghostty-vt
+(D5), `thiserror` and `anyhow` (R35) are the only exceptions, by decision.
 
 1. Check the numbers and add the entry in one step (needs an authenticated `gh`):
 

@@ -1,5 +1,23 @@
 # Performance and commissioning
 
+Everything after **The GPUI app against the React app** measured the React app on GPUIX, which was deleted on
+2026-11-11 together with its harness (`app/e2e/`); it is kept as that app's history.
+
+## The GPUI app against the React app
+
+Measured on 2026-11-11 with the same plyd, four panes, the two apps' runs interleaved, at a machine load of 12–66.
+The GPUI app reports its frames and stalls with `ply --stats` (`docs/terminal.md`, **Measured**); a stall is a gap
+of more than 16.7 ms between the ticks of a 1 ms timer on the main thread.
+
+| Run | React app (GPUIX 0.11) | GPUI app |
+|---|---|---|
+| replayed agent output at 10×, 60 s, two runs each | CPU 33.5–37.4 % of a core; stalls > 16.7 ms: 21 and 233; longest 109–172 ms; 197–211 MB | CPU 8.0–8.1 %; stalls > 16.7 ms: 4 and 7; longest 62–70 ms; 51–55 MB |
+| `yes` in four panes, 20 s | 36 frames/s; 224 stalls | 53.4–59.6 frames/s (60 Hz display); 6–92 stalls |
+| four filled idle panes, 120 s | 1.68 % of a core | 0.42 % |
+| tab switch, 4 tabs × 4 panes, 100 switches | p50 28.4, p99 78.0 ms | p50 26.0, p99 39.8 ms |
+
+## The React app's commissioning
+
 The evidence for the success criteria of spec 1.2 (P1–P5, F1–F4), the journeys
 of spec 14 (J1–J6, and J7 for the task queue of Ruling R60), one run each of the real `claude` and `codex` through the
 app, and a shortened soak: how each was run and what it measured, marked
@@ -19,7 +37,7 @@ The runs predate two later changes: the needs-you strip now answers Yes (`1`) an
 tab holds at most four panes laid out as columns, then quadrants (8f51326). Where a row below names Yes/Always/No or
 the main-plus-stack layout, that is what was measured then.
 
-## Results against the targets
+### Results against the targets
 
 | ID | Criterion (spec 1.2) | Target | Measured | Verdict |
 |---|---|---|---|---|
@@ -59,7 +77,7 @@ at most one 16 ms render cadence of the terminal flush. The slow tail (the worst
 of each run: 40, 52, 56 ms) coincides with the two streaming panes' flushes and
 a machine at load 4–5; it was not investigated further.
 
-## Journeys J1–J7
+### Journeys J1–J7
 
 `just e2e`, all six of J1–J6 passing in about 13 s on 2026-09-25; J7 was added with the task queue on 2026-09-26 (last run: see the list of runs at the
 end). Each starts from an empty `PLY_HOME`, lets the app start plyd, and checks
@@ -76,7 +94,7 @@ what plyd holds (a C1 client of its own).
 | J6 daemon restart | plyd SIGKILLed; the app's launcher starts a new one; the Claude and Codex panes (with session ids) show "Lost" and a Resume button, the agent pane that never reported a session and the shell are back as fresh shells by themselves (R50); Resume brings Claude back with `--resume <id>` and Codex with `resume <thread>`, both idle; `session.list` keeps the ids |
 | J7 task queue | a Claude pane made busy by its own prompt; two tasks queued through ⌘E (Tab to Prompt, typed, ⌘⏎); the header badge counts 2 and the top bar pill says "2 queued"; the turn ends: the fake reads "first task", then "second task", each typed only after the previous turn ended (`sent_at` after the other's `ended_at`); both `ended`; badge and pill gone |
 
-## The real Claude Code and Codex, through the app
+### The real Claude Code and Codex, through the app
 
 2026-09-25, Claude Code 2.1.282 and Codex 0.157.0 (Codex had updated itself
 earlier; ply never runs it for a version), both signed in, the user's real
@@ -142,7 +160,7 @@ by one addition only, Codex saving the trust decision it asked for:
 (`last_updated`, `last_revision` or any other) changed. Nothing of it came from
 ply: Codex received only the four `-c` overrides.
 
-## The task queue with the real Claude Code and Codex
+### The task queue with the real Claude Code and Codex
 
 2026-09-26, Claude Code 2.1.283 and Codex 0.157.1, both signed in, the user's
 real `HOME`, `PLY_HOME` a throwaway directory, the release plyd of 4366b4c and a
@@ -173,7 +191,7 @@ startup screens are answered. Trusting hooks is the user's decision, so the
 run stopped there: Codex taking a queued task is shown by the fake-Codex tests
 only.
 
-## Soak
+### Soak
 
 `bun app/e2e/perf.ts soak 20`, 7d7ccfd, 20 minutes: two fake Claude Code panes,
 a fake Codex pane and three shells in one tab of the full app. Each agent went
@@ -197,7 +215,7 @@ off, so the 8-hour soak should confirm the plateau. At 31 MB for six live,
 uncompressed panes it stays within P4's 15 MB per pane. Under this load the app
 used 12.6 % of a core on average and plyd 0.8 %.
 
-## Checked by eye in the live app
+### Checked by eye in the live app
 
 | What | Result |
 |---|---|
@@ -207,7 +225,7 @@ used 12.6 % of a core on average and plyd 0.8 %.
 | narrow pane header | at the default text size a stack pane shortens its title ("co…", "cla…") and its branch label and nothing overlaps; four steps larger (⌘= four times) the progress bar is drawn over the branch label, the title shrinks to nothing, a Claude pane's branch runs under its CLI and model chip, and the status bar's counts are cut off at the window's right edge |
 | real CLIs | the Nerd Font icons of the user's own Claude Code status line render as missing-glyph boxes in Menlo |
 
-## Open
+### Open
 
 - **The needs-you strip's No can approve.** With auto mode available Claude
   Code 2.1.282 shows four choices (1 Yes, 2 "Yes, and always allow access to
@@ -242,9 +260,9 @@ used 12.6 % of a core on average and plyd 0.8 %.
   (`blocked: startup`); the status itself is unchanged.
 - **The real Codex run of the task queue** waits for the hooks review above.
 
-## How the runs work
+### How the runs work
 
-All of them drive the full app, `bun app/src/main.tsx`, in its own process
+These commands ran the React app's harness, deleted with it. All of them drove the full app, `bun app/src/main.tsx`, in its own process
 through GPUIX's stdio automation (`app/e2e/harness.ts`): the app starts `plyd`
 itself through its launcher, exactly as `bun run dev` does, and a second C1
 client of the test's own reads what plyd holds. Each run makes a throwaway
@@ -275,7 +293,7 @@ without `PLY_E2E=1` they are skipped, so `just test` and CI never open a window.
 | `p5` | four tabs of four shell panes; each pane prints a marker (two of the sixteen print one every 10 ms, streaming); then ⌘1–⌘4 in turn, 100 times | the time from sending the chord until GPUI has painted the markers of all four panes of the new tab (`getPaintedText`, so the frame was drawn, not only committed), which includes attaching four C2 connections |
 | `soak` | two fake Claude panes, a fake Codex pane and three shells in one tab; the shells loop `date`, `seq 1 3000` and `ls -la /usr/bin`; each agent cycles prompt → running → needs permission → answered through the needs-you strip's button → idle, again and again | every expected status is checked through C1 within 15 s (a miss is a stuck status); footprint and CPU of the app and plyd every minute; both processes alive throughout |
 
-## The runs recorded here
+### The runs recorded here
 
 All on 2026-09-25, Apple M1 Pro (8 cores, 16 GB), macOS 26.6; load averages as
 `uptime` showed them when each run started.

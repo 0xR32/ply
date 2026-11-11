@@ -3,11 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import {
-  checkAppLayers,
-  checkInv1NoNetwork,
   checkInv2NoPtyBytes,
-  checkInv4KeyHandlers,
-  checkInv5Palette,
   checkInv7Worktrees,
   checkInv11PersonalData,
   crateLayerViolations,
@@ -34,41 +30,14 @@ afterEach(() => {
 });
 
 describe('check-rules', () => {
-  test('INV-5 rejects a colour literal in a feature and allows it in tokens.ts', () => {
-    const { root, files } = repo({
-      'app/src/features/x.tsx': "export const c = '#fff';\n",
-      'app/src/theme/tokens.ts': "export const c = '#FFFFFF';\n",
-      'app/src/features/panes/fixtures/screen.ts': "export const c = '#123456';\n",
-    });
-    const v = checkInv5Palette(root, files).violations;
-    expect(v.map((x) => `${x.file}:${x.line}`)).toEqual(['app/src/features/x.tsx:1']);
-  });
-
-  test('INV-4 allows onKeyDown only in the listed files', () => {
-    const { root, files } = repo({
-      'app/src/keymap/dispatcher.ts': 'export const h = { onKeyDown: () => {} };\n',
-      'app/src/features/tabs/tab-bar.tsx': 'const p = { onKeyDown: () => {} };\n',
-    });
-    const v = checkInv4KeyHandlers(root, files).violations;
-    expect(v.map((x) => x.file)).toEqual(['app/src/features/tabs/tab-bar.tsx']);
-  });
-
   test('INV-2 rejects byte fields in C1 types but not byte-typed function parameters', () => {
-    const { root, files } = repo({
+    const { root } = repo({
       'crates/proto/src/control.rs':
         'pub struct A {\n    pub ids: Vec<u64>,\n}\npub fn decode(line: &[u8]) {}\npub enum B {\n    Raw(Vec<u8>),\n}\n',
       'crates/proto/src/pane.rs': 'pub struct P {\n    pub bytes: [u8; 4],\n}\n',
     });
-    const v = checkInv2NoPtyBytes(root, files).violations.map((x) => `${x.file}:${x.line}`);
+    const v = checkInv2NoPtyBytes(root).violations.map((x) => `${x.file}:${x.line}`);
     expect(v).toEqual(['crates/proto/src/control.rs:6', 'crates/proto/src/pane.rs:2']);
-  });
-
-  test('INV-1 rejects network APIs in app/', () => {
-    const { root, files } = repo({
-      'app/src/ipc/a.ts': "await fetch('x');\nnew WebSocket('y');\n",
-      'app/src/ipc/b.ts': 'export function fetchHistory() {}\n',
-    });
-    expect(checkInv1NoNetwork(root, files).violations.map((x) => x.line)).toEqual([1, 2]);
   });
 
   test('INV-7 rejects git worktree calls and worktree columns other than worktree_seen', () => {
@@ -180,23 +149,5 @@ describe('check-rules', () => {
         .sort();
       expect(listed, name).toEqual([...rule.onlyAllowed, ...rule.allowedPly].sort());
     }
-  });
-
-  test('layer rules: features never import another feature or ipc; ui imports only theme', () => {
-    const { root, files } = repo({
-      'app/src/features/tabs/tab-bar.tsx':
-        "import { a } from '../panes/pane-grid';\nimport { b } from '../../ipc/control-client';\nimport { t } from '../../theme/tokens';\n",
-      'app/src/ui/text.tsx': "import { s } from '../state/store';\n",
-      'app/src/state/reducer.ts': "import { c } from '../ipc/control-client';\n",
-      'app/src/state/effects.ts': "import { c } from '../ipc/control-client';\n",
-      'app/src/state/actions.ts': "import type { Pane } from '../ipc/proto.gen';\n",
-    });
-    const v = checkAppLayers(root, files).violations.map((x) => `${x.file}:${x.line}`);
-    expect(v.sort()).toEqual([
-      'app/src/features/tabs/tab-bar.tsx:1',
-      'app/src/features/tabs/tab-bar.tsx:2',
-      'app/src/state/reducer.ts:1',
-      'app/src/ui/text.tsx:1',
-    ]);
   });
 });

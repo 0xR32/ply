@@ -147,7 +147,7 @@ pub fn install_with(
             tracing::warn!(pid, plist = %plan.plist.display(), "plyd is running; not replacing its LaunchAgent");
             let _ = writeln!(
                 report,
-                "plyd (pid {pid}) is running; {} was left unchanged so its sessions keep running. To switch to {}, run \"Restart plyd\" in ply's command palette (⌘K; running sessions come back lost, to be resumed) or \"Quit ply and stop sessions\", or stop plyd with `{KILL_HINT}`; ply installs this plyd the next time it starts one",
+                "plyd (pid {pid}) is running; {} was left unchanged so its sessions keep running. To switch to {}, stop plyd with `{KILL_HINT}` (running sessions come back lost, to be resumed); ply installs this plyd the next time it starts one",
                 plan.plist.display(),
                 plyd.display()
             );
@@ -333,10 +333,8 @@ mod tests {
         .unwrap();
         assert!(report.contains("is running"), "{report}");
         assert!(
-            report.contains("\"Restart plyd\"")
-                && report.contains("\"Quit ply and stop sessions\"")
-                && report.contains(KILL_HINT),
-            "the report names the palette commands and the launchctl fallback: {report}"
+            report.contains(KILL_HINT),
+            "the report names the launchctl way to stop plyd: {report}"
         );
         assert!(
             calls.is_empty(),

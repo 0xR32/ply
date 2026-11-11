@@ -14,7 +14,7 @@
 //!   R-R10), including the ⇧⏎ → LF rule (R-R6).
 //!
 //! Always available: [`Replica`], the reference C2 decoder that applies Snapshot, Delta and History frames into a
-//! grid (used by plyd's tests and the CLI test client; the app has its own TypeScript replica), and [`Palette`].
+//! grid (the app draws from it; plyd's tests and the CLI test client use it too), and [`Palette`].
 //!
 //! The crate never does I/O, never spawns threads, and depends on neither gpui nor tokio (spec 3.2, 8.2). Every
 //! call is synchronous and bounded; an [`Engine`] is `Send` but not `Sync`, so plyd serializes each pane's calls.

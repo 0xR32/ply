@@ -1,4 +1,4 @@
-//! ply's window chrome in GPUI, from the app's tokens and components (top bar, tab bar, pane frame and header).
+//! ply's window chrome: the palette, the type scale, the top bar, tab pills, pane frames and headers, the find bar.
 
 use gpui::{
     BoxShadow, Div, FontWeight, Hsla, Pixels, SharedString, div, point, prelude::*, px, rgb,
@@ -420,7 +420,7 @@ pub fn tab(s: Scale, index: usize, name: &str, active: bool, dot_color: u32, pan
     let (kfg, kbg, kring) = if active {
         (c(ACCENT), ca(ACCENT, 0.12), ca(ACCENT, 0.40))
     } else {
-        (c(TEXT3), white(0.02), white(0.10))
+        (c(TEXT_SOFT), white(0.05), white(0.16))
     };
     pill.when(index < 9, |d| {
         d.child(kbd(
@@ -429,23 +429,23 @@ pub fn tab(s: Scale, index: usize, name: &str, active: bool, dot_color: u32, pan
             18.0,
             5.0,
             (kfg, kbg, kring),
-            400.0,
+            500.0,
         ))
     })
     .child(text(
         s,
         Type::Body,
-        if active { 500.0 } else { 400.0 },
-        c(if active { TEXT } else { TEXT2 }),
+        500.0,
+        c(if active { TEXT } else { TEXT_SOFT }),
         false,
         name.to_string(),
     ))
     .child(dot(s, 6.0, c(dot_color)))
     .child(text(
         s,
-        Type::Label,
-        400.0,
-        c(HINT),
+        Type::Small,
+        500.0,
+        c(if active { TEXT_SOFT } else { TEXT2 }),
         true,
         panes.to_string(),
     ))
@@ -473,4 +473,51 @@ pub fn needs_you_pill(s: Scale, count: usize) -> Div {
         .child(dot(s, 7.0, c(AMBER)))
         .child(text(s, Type::Body, 500.0, c(AMBER), false, words))
         .child(text(s, Type::Label, 400.0, ca(AMBER, 0.75), true, "⌘J"))
+}
+
+/// The ⌘F bar over a pane's top right: the query with its caret, the match count and the esc cap.
+pub fn find_bar(s: Scale, query: &crate::field::Field, count: String) -> Div {
+    let (a, b) = query.halves();
+    let shown = |t: &str| text(s, Type::Body, 400.0, c(TEXT), true, t.to_string());
+    div()
+        .absolute()
+        .top(s.z(8.0))
+        .right(s.z(8.0))
+        .h(s.z(32.0))
+        .min_w(s.z(240.0))
+        .pl(s.z(10.0))
+        .pr(s.z(6.0))
+        .rounded(s.z(8.0))
+        .bg(ca(0x181B27, 0.97))
+        .border_1()
+        .border_color(ca(ACCENT, 0.45))
+        .shadow(vec![shadow(ca(0x000000, 0.6), 8.0, 24.0, -8.0, s)])
+        .flex()
+        .items_center()
+        .gap(s.z(8.0))
+        .child(text(s, Type::Small, 500.0, c(TEXT3), false, "Find"))
+        .child(
+            div()
+                .flex_1()
+                .min_w(px(0.0))
+                .flex()
+                .items_center()
+                .overflow_hidden()
+                .child(shown(a))
+                .child(div().w(px(1.5)).h(s.z(16.0)).bg(c(ACCENT)))
+                .child(shown(b)),
+        )
+        .child(text(s, Type::Small, 500.0, c(TEXT2), true, count))
+        .child(
+            div()
+                .h(s.z(20.0))
+                .px(s.z(6.0))
+                .rounded(s.z(5.0))
+                .bg(white(0.05))
+                .border_1()
+                .border_color(white(0.10))
+                .flex()
+                .items_center()
+                .child(text(s, Type::Key, 400.0, c(TEXT2), true, "esc")),
+        )
 }

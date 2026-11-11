@@ -3,8 +3,7 @@
 //! `ply-proto` is the single source of truth for both sides of every boundary in spec 3.3:
 //!
 //! - [`control`]: C1 control, JSON lines over `run/plyd.sock` (spec 4.1 plus ADR-0009's `pane.resume`,
-//!   `settings.get` and `settings.set`). The app's TypeScript types are generated from it by ts-rs into
-//!   `app/src/ipc/proto.gen.ts` (`bun run gen`), which CI keeps fresh.
+//!   `settings.get` and `settings.set`).
 //! - [`data`]: C2 screen data, binary frames over `run/data.sock` (spec 4.2 with ADR-0005's field corrections,
 //!   Rulings R20 and R21), hand-encoded little-endian with no serialisation crate.
 //! - [`hook`]: C3 hook ingress, the envelope `ply-hook` writes to `run/hook.sock` (spec 4.3).

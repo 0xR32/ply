@@ -1,4 +1,4 @@
-//! Dropped files and a ⌘V image reach the CLI as typed paths, as `app/src/terminal/drop.ts` does; nothing is read.
+//! Dropped files and a ⌘V image reach the CLI as typed paths, escaped as terminals type them; the app reads none of them.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;

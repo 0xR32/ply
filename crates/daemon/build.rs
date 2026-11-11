@@ -1,8 +1,7 @@
 //! Stamps plyd with its build id, `<package version>+<commit>`: the 12-character hash of the checkout's `HEAD`, or
 //! `t<unix seconds>` of this script's run outside a git checkout. It reaches the crate as `PLYD_BUILD_ID`; C1's
-//! `welcome.daemon_version` carries it, and the app compares it with its own id (`app/src/ipc/os.ts`, same format) to
-//! say that the running plyd is from another build. The script runs `git` read-only, offline, and reruns when `HEAD`
-//! or a branch moves.
+//! `welcome.daemon_version` and `plyd --version` carry it, and `just dmg` checks that the bundled plyd reports the
+//! bundle's id. The script runs `git` read-only, offline, and reruns when `HEAD` or a branch moves.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;

@@ -4,7 +4,7 @@
 //! `<dir>` and makes each one `exec` a feeder, `plyd --replay-feed <file> [--speed N]`, which writes one of the
 //! `*.bytes` streams in `<dir>` to its pty at N × [`BASE_BYTES_PER_SECOND`] and starts over at the end. The bytes
 //! take the real path (pty reader thread, libghostty-vt, publisher, C2), so a view attached to those panes measures
-//! what P1 asks for. The pane ids are printed one per line, ready for `PLY_DEMO_ATTACH`. The recorded streams carry
+//! what P1 asks for. The pane ids are printed one per line. The recorded streams carry
 //! no timestamps, so "real speed" is the nominal agent output rate [`BASE_BYTES_PER_SECOND`], not the capture's own
 //! pacing. The feeder attaches only to type the `exec` line and detaches again, so the viewer that attaches next
 //! decides the pane size.

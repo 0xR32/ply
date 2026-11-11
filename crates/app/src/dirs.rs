@@ -1,4 +1,4 @@
-//! The new-pane form's folder sources, as `app/src/ipc/dirs.ts` and `app/src/state/dir-match.ts` define them.
+//! The new-pane form's folder sources: recent folders, the bounded `$HOME` repository scan, path completion and their ranking.
 
 use std::collections::{HashSet, VecDeque};
 use std::path::{Path, PathBuf};

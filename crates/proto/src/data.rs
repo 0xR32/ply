@@ -2,8 +2,8 @@
 //!
 //! A frame is `len:u32 LE · kind:u8 · payload[len]` with `len <= MAX_FRAME_LEN`; every integer is little-endian,
 //! every bool is one byte that must be 0 or 1, and text is UTF-8 filling the rest of the payload. There is no
-//! serialisation crate: [`Frame::encode`] and [`Frame::decode`] are the layout, and `app/src/terminal/frames.ts`
-//! must match them byte for byte. Decoding is strict: unknown kinds, out-of-range values, unknown flag bits,
+//! serialisation crate: [`Frame::encode`] and [`Frame::decode`] are the layout, and the golden frames in
+//! `tests/golden/c2/` pin it byte for byte. Decoding is strict: unknown kinds, out-of-range values, unknown flag bits,
 //! truncated payloads and trailing bytes are errors (INV-10).
 //!
 //! Colours stay symbolic ([`Color`]); the app resolves them against its theme. Screen rows are indexed from the top of

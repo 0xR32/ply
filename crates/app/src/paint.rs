@@ -22,7 +22,7 @@ fn hex(v: u32) -> Rgb {
     }
 }
 
-/// `terminalThemeFor` of `tokens.ts`: fixed ANSI, cursor in the accent, selection the accent at 25 % over the ground.
+/// The terminal palette for an accent: fixed ANSI, cursor in the accent, selection the accent at 25 % over the ground.
 pub fn theme_for(settings: &Settings) -> TerminalTheme {
     let accent = match settings.accent {
         AccentName::Blue => 0x8AB4FF,
@@ -97,6 +97,8 @@ pub struct View {
     pub view_top: Option<u64>,
     pub focused: bool,
     pub cursor_on: bool,
+    /// The selection's first and last cell, by absolute line, in reading order.
+    pub selection: Option<((u64, u16), (u64, u16))>,
 }
 
 /// Paints the live screen, or the view from absolute line `view_top`; returns the first scrollback line it lacked.
@@ -105,6 +107,7 @@ pub fn paint_screen(
     pal: &Palette,
     m: Metrics,
     v: View,
+    underline: &[(u64, u16, u16)],
     window: &mut Window,
     cx: &mut App,
 ) -> Option<u64> {
@@ -113,6 +116,7 @@ pub fn paint_screen(
         view_top,
         focused,
         cursor_on,
+        selection,
     } = v;
     let (cols, rows) = replica.size();
     let default_bg = pal.bg;
@@ -258,6 +262,25 @@ pub fn paint_screen(
                 r.color,
             ));
         }
+        if let Some(((l0, c0), (l1, c1))) = selection
+            && (l0..=l1).contains(&line)
+        {
+            let from = if line == l0 { c0 } else { 0 };
+            let to = if line == l1 {
+                c1
+            } else {
+                cols.saturating_sub(1)
+            };
+            if to >= from {
+                window.paint_quad(fill(
+                    Bounds::new(
+                        point(bounds.origin.x + m.cell_w * from as f32, row_y),
+                        size(m.cell_w * (to - from + 1) as f32, m.cell_h),
+                    ),
+                    hsla(pal.selection_bg),
+                ));
+            }
+        }
         for s in segs {
             let line = window.text_system().shape_line(
                 s.text.into(),
@@ -270,6 +293,19 @@ pub fn paint_screen(
         }
     }
 
+    for &(line, from, to) in underline {
+        if line < top || line >= top + u64::from(rows) || to < from {
+            continue;
+        }
+        let y = bounds.origin.y + m.cell_h * (line - top) as f32 + m.cell_h - px(1.5);
+        window.paint_quad(fill(
+            Bounds::new(
+                point(bounds.origin.x + m.cell_w * from as f32, y),
+                size(m.cell_w * (to - from + 1) as f32, px(1.5)),
+            ),
+            hsla(pal.cursor),
+        ));
+    }
     let cursor = replica.cursor();
     let modes = replica.modes();
     let cursor_row = live_top - top + u64::from(cursor.row);

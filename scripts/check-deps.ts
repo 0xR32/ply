@@ -19,7 +19,7 @@ export interface Admission {
   last_commit: string;
   contributors_5plus: number;
   checked: string;
-  /** Decision id (D4, D5) that admits the dependency outside INV-16; the numbers are still recorded. */
+  /** Decision id (R35, D5) that admits the dependency outside INV-16; the numbers are still recorded. */
   exception?: string;
   note?: string;
 }
@@ -94,20 +94,18 @@ export function directDependencies(root: string): DirectDep[] {
     if (typeof spec === 'object' && spec.path) continue;
     out.push({ ecosystem: 'cargo', name, manifest: 'Cargo.toml' });
   }
-  for (const manifest of ['package.json', 'app/package.json']) {
-    const text = readText(root, manifest);
-    if (text === null) continue;
-    const pkg = JSON.parse(text) as Record<string, Record<string, string> | undefined>;
-    for (const section of [
-      'dependencies',
-      'devDependencies',
-      'optionalDependencies',
-      'peerDependencies',
-    ]) {
-      for (const [name, spec] of Object.entries(pkg[section] ?? {})) {
-        if (spec.startsWith('workspace:')) continue;
-        out.push({ ecosystem: 'npm', name, manifest });
-      }
+  const pkg = JSON.parse(readText(root, 'package.json') ?? '{}') as Record<
+    string,
+    Record<string, string> | undefined
+  >;
+  for (const section of [
+    'dependencies',
+    'devDependencies',
+    'optionalDependencies',
+    'peerDependencies',
+  ]) {
+    for (const name of Object.keys(pkg[section] ?? {})) {
+      out.push({ ecosystem: 'npm', name, manifest: 'package.json' });
     }
   }
   if (readText(root, 'crates/ghostty-sys/build.rs')?.includes('GHOSTTY_ARCHIVE_URL')) {

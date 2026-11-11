@@ -8,7 +8,7 @@
 //! be missing and read back as blanks. Each row carries a content hash over its resolved cells (style values, not
 //! ids), stable across Snapshots, which a renderer can use as its run-cache key.
 //!
-//! plyd's tests and the CLI test client use it; the app has its own TypeScript replica (WP5).
+//! The app draws each pane from one; plyd's tests and the CLI test client use it too.
 
 use std::collections::{BTreeMap, HashMap};
 use std::hash::{DefaultHasher, Hash, Hasher};

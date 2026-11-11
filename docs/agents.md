@@ -538,10 +538,11 @@ Transitions not in the table are ignored and counted.
 - The pane's task publishes the machine's state when it adopts the process; the
   keep-awake assertion follows `running` panes.
 
-**Presentation** (`app/src/state/selectors.ts`): "your turn" is `idle`; "done"
-is `idle` with every plan item complete; "needs you" is `waiting_permission` or
-`waiting_input`, which ⌘J cycles through across tabs; `exited` shows its code;
-a shell pane shows the shell's name while it runs.
+**Presentation** (`status_chip`, `needs_you` and `tab_dot` in
+`crates/app/src/chrome.rs`): "Your turn" is `idle`; "Done" is `idle` with every
+plan item complete; "Needs you" is `waiting_permission` or `waiting_input`,
+which ⌘J cycles through across tabs; `exited` shows its code; a shell pane shows
+the shell's name while it runs.
 
 ## The version check
 
@@ -566,9 +567,9 @@ launches anyway. The adapters also name a `--version` probe
 
 ## Plan usage
 
-Holding ⌘U shows each CLI's plan usage (`usage.get`, Ruling R59). ply computes
-none of it and asks no server: it shows what the CLIs themselves last reported,
-with its age, and reads their files without ever writing them
+`usage.get` answers each CLI's plan usage (Ruling R59); no app shows it today.
+ply computes none of it and asks no server: it answers what the CLIs themselves
+last reported, with its age, and reads their files without ever writing them
 (`crates/daemon/src/usage.rs`; the parsers are
 `crates/agents/src/claude/usage.rs` and `crates/agents/src/codex/usage.rs`).
 
@@ -599,7 +600,7 @@ with its age, and reads their files without ever writing them
   Code's internal state, not a published format: a window that is missing,
   `null` or renamed is left out, and a cache without `fetchedAtMs` or any
   readable window counts as none, so a change in a Claude Code release makes
-  the view show less, never fail. plyd parses the whole file (64 MiB at most)
+  the answer hold less, never fail. plyd parses the whole file (64 MiB at most)
   and keeps only that object.
 - **Codex** records the account's rate limits in every `token_count`
   `event_msg` of its rollouts: `rate_limits: {limit_id, limit_name, primary,
@@ -613,14 +614,15 @@ with its age, and reads their files without ever writing them
   limit other than `codex` adds its name. `plan_type` and the age come from the
   newest record.
 
-An answer is reused for 5 s. A CLI with no readable record is simply absent,
-and the view says "No usage recorded yet".
+An answer is reused for 5 s. A CLI with no readable record is simply absent
+from it.
 
 ## Dispatching tasks
 
 The task queue (Ruling R60) lets the user line up prompts and skills for a pane
 and has plyd type each one in when it is their turn there
-(`docs/control-channel.md`, **The task queue**). plyd types a task's text
+(`docs/control-channel.md`, **The task queue**). It lives in plyd alone: no app
+offers it today, so tasks reach it only from a C1 client that sends `task.*`. plyd types a task's text
 exactly as written, into the pane's terminal as the user would, and nothing
 else: it never answers a dialog, passes an option or changes a prompt. Each
 agent process's `Agent` owns a small clocked machine for it
@@ -694,11 +696,7 @@ with Claude Code 2.1.283 on an Apple-silicon Mac, one to three Retina
 screenshots (3.5–8.6 MB) took 0.41–0.55 s to read, idle or with every core busy,
 and a 50 ms Enter was lost every time; 2 s is about four times that. A read
 that takes longer still leaves the task failing as not submitted, with its text
-in the input for the user's Enter. Files dropped on the ⌘E form put their paths
-into the task this way, one per line; a ⌘⇧4 thumbnail's is the path of the copy
-ply kept, since its own file is gone before the task is typed, and that copy is
-deleted when the task ends, fails or is cancelled (`docs/terminal.md`,
-**Dropped files**).
+in the input for the user's Enter.
 
 **How it is followed**, from the signals the status machine already uses:
 
@@ -723,8 +721,8 @@ does when typed there. The queue never hands one session's output to another
 
 ## Skills
 
-The task form (⌘E) lists the skills each CLI offers on this machine
-(`skill.list`, Ruling R61). ply runs none of them and changes none of their
+`skill.list` lists the skills each CLI offers on this machine (Ruling R61), for a
+task's text; no app shows them today. ply runs none of them and changes none of their
 files: it reads what the CLI itself reads and shows each skill with the text
 the user types to run it (`crates/daemon/src/skills.rs` walks the folders,
 `crates/agents/src/skills.rs` reads each file).
@@ -815,8 +813,7 @@ leaves `lost` at once; a second `pane.resume` while one runs is refused. A
 `pane.close {kill:true}` while it runs is kept until the pane adopts the new
 process, which it then stops, and closes the pane at once when the resume fails
 (`a_close_with_kill_during_a_resume_stops_the_resumed_process_and_closes_the_pane`). The app
-offers the action on every lost pane: the Resume button of the strip under it
-and a "Resume <pane>" palette command. The screen is not restored: plyd does
+shows a lost pane as "Lost" and offers no resume of its own yet. The screen is not restored: plyd does
 not keep screens across its own restarts, so a resumed pane starts on an empty
 terminal and the CLI repaints it.
 
@@ -901,9 +898,9 @@ recently signed in to first, and never a credential.
    are untouched.
 
 `account.changed` reports the outcome and the number of panes that restart;
-the app shows it in the status bar and the top bar shows the new account. One
-switch runs at a time: while one is open the top bar says "Signing in to
-Claude…" and it, ⌘⇧A and the palette's "Go to the Claude sign-in" go to the
+the app says it in the top bar for 5 s and its account chip shows the new
+account. One switch runs at a time: while one is open the chip says "Signing in
+to Claude…", and ⌘⇧A offers "Go to the Claude sign-in", which goes to the
 sign-in tab. The switch is held
 in memory, so after a plyd restart the sign-in tab comes back as a fresh shell
 and its switch is forgotten.

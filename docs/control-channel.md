@@ -7,9 +7,8 @@ implement it from here; `crates/daemon/examples/ply-cli.rs` (through
 plyd to keep that true.
 
 The Rust types in `crates/proto/src/control.rs` and `crates/proto/src/pane.rs`
-are the single source. `bun run gen` writes `app/src/ipc/proto.gen.ts` from them
-with ts-rs, and `check-rules` (`checkGeneratedTypes`) fails when the committed
-file is stale. The screen itself travels on a second socket;
+are the single source; plyd and the app both use them. The screen itself
+travels on a second socket;
 `docs/screen-protocol.md` is that one. C1 carries no pty bytes (INV-2,
 `checkInv2NoPtyBytes` and `c1_types_carry_no_pty_bytes`).
 
@@ -57,7 +56,8 @@ Every message is an object tagged by `"t"`:
 Every struct rejects unknown fields (`#[serde(deny_unknown_fields)]`, INV-10),
 nested ones included. An optional field is omitted when absent; `null` is
 accepted in its place. Integers that are ids or times are unsigned and stay
-below 2^53, so a JavaScript number holds them. Times are Unix seconds, UTC.
+below 2^53, so a client that reads JSON numbers as doubles holds them exactly.
+Times are Unix seconds, UTC.
 
 ## The handshake
 
@@ -113,8 +113,7 @@ plyd subscribes the connection to the event broadcast *before* it writes
 ```
 
 - `id` is the client's, a u64 it chooses; plyd echoes it. The app numbers from
-  1 when it starts and keeps counting across reconnects, so no id repeats
-  within one run of the app. Id 0 is reserved for plyd's answer to a refused `hello`
+  1 on each connection. Id 0 is reserved for plyd's answer to a refused `hello`
   (`HANDSHAKE_ID`).
 - `m` is the method name and `p` its params. `p` is required; methods without
   params take `{}`.
@@ -138,7 +137,7 @@ other.
 ## Methods
 
 The table in `crates/proto/src/control.rs` (`Call` and `METHODS`) is the
-complete list; `proto.gen.ts` exports it as the `Methods` type map. The records
+complete list. The records
 the results are made of are under **Records**.
 
 | Method | Params | Result |
@@ -259,7 +258,7 @@ differ by CLI, version and permission mode). The pane must be
 `waiting_permission` or `waiting_input`, else `invalid_state`. The keys also
 count as a key typed, so the pane moves to `running` (`docs/agents.md`). This
 replaced the positional `choice` within protocol version 1: a plyd from before
-refuses the new field with `bad_request`, so the mismatch is loud, and the app
+refuses the new field with `bad_request`, so the mismatch is loud, and a client
 can still send it `daemon.shutdown` to replace it.
 
 ### `pane.resume`
@@ -296,8 +295,8 @@ Applies `palette` to every pane's terminal, which answers OSC 4, 10, 11 and 12
 and the colour-scheme query from it (`docs/terminal.md`), and then stores it in
 `config.toml`. A spawn waiting for a palette proceeds. When `config.toml` cannot
 be written the palette is in force all the same (until plyd stops), and the
-failure is logged and answered `internal`. The app sends it on every connect,
-before anything else that could spawn, and again whenever the accent changes.
+failure is logged and answered `internal`. The app sends it on every load (at
+start and after a reconnect), before anything else that could spawn.
 
 ### `layout.get`
 
@@ -345,18 +344,13 @@ to 4 s for them. It then stops serving, removes its sockets and exits. Without
 `lost` on the next start. The first shutdown request wins; SIGTERM, SIGINT and
 SIGHUP stop plyd the same way with `kill_panes: false`.
 
-The app sends it from two palette commands (Ruling R53): "Restart plyd" sends
-`kill_panes: false`, and the reconnect that follows starts the build in
-`target/` (see **Starting plyd** below), whose panes come back as a restart
-leaves them (a shell reopens by itself, an agent pane is `lost` until
-resumed); "Quit ply and stop sessions" asks first, sends `kill_panes: true`
-and quits the app once the answer arrives (or at once when plyd is not
-connected).
+The app has no command that sends it yet; `docs/development.md` (**Replacing a
+running plyd**) has the other ways to stop plyd.
 
 ### `usage.get`
 
-The plan usage Claude Code and Codex last reported (Ruling R59), for the app's
-hold-⌘U view. For Claude Code, the newest status line report of any Claude pane
+The plan usage Claude Code and Codex last reported (Ruling R59); no app shows
+it today. For Claude Code, the newest status line report of any Claude pane
 answers when it is newer than the cache. Otherwise plyd reads, on a blocking thread and
 never writing them (INV-8), Claude Code's `.claude.json` (in `CLAUDE_CONFIG_DIR`
 when the login shell sets it, else the home directory) and the ends of Codex's
@@ -369,8 +363,8 @@ each file.
 
 ### The task queue (Ruling R60)
 
-A task is text the user wrote or picked from `skill.list`. plyd keeps it in a
-queue and types it into its pane, verbatim, when it is the user's turn there;
+No app offers the task queue today; plyd serves it to any C1 client. A task is
+text the user wrote or picked from `skill.list`. plyd keeps it in a queue and types it into its pane, verbatim, when it is the user's turn there;
 `docs/agents.md` (**Dispatching tasks**) has when plyd types and how it follows
 the task through the CLI's own signals. plyd never answers a dialog for a task
 and never changes its text.
@@ -689,9 +683,8 @@ protocol change.
 | `tab_full` | The tab named by `tab_id` already holds 4 panes (`MAX_PANES_PER_TAB`, Ruling R56); open a new tab instead. `pane.resume` and R50's shell reopen reuse their pane, so they never meet it. | `pane.create` |
 | `internal` | Anything else, such as a failed SQLite or `config.toml` write (`theme.set` and `settings.set` have applied their values by then); the details are in plyd's log. | any method |
 
-The app's client adds two codes of its own, never sent by plyd: `disconnected`
-(the connection dropped, or the request was made while not connected) and
-`timeout` (no answer in 10 s).
+The app's client reports a connection that fails or drops as an error message
+of its own, never a code; it sets no request timeout.
 
 ## What plyd guarantees
 
@@ -706,9 +699,9 @@ The app's client adds two codes of its own, never sent by plyd: `disconnected`
   in either order: a client must accept either and treat them as one pane.
   Events plyd emits after it built a response can also reach the client before
   that response, so a pane in a response (`pane.create`, `pane.resume`,
-  `pane.list`) may be older than the events already read: the app places a
-  pane a response brings that it does not know yet, and of a pane it knows it
-  takes only `cli` and `title` from a `pane.create` or `pane.resume` answer.
+  `pane.list`) may be older than the events already read: the app loads again
+  on `pane.added` and `pane.removed`, and focuses a pane it created once a load
+  brings it in.
 - **A slow client is dropped, not waited for.** A connection may fall 1 024
   events behind (`EVENT_CAPACITY`); one step further and plyd closes it, so the
   client reconnects and reloads rather than holding a gap.
@@ -718,56 +711,33 @@ The app's client adds two codes of its own, never sent by plyd: `disconnected`
 
 ## The app's client
 
-`app/src/ipc/control-client.ts`, driven by `app/src/state/effects.ts`, the only
-module that calls it.
+`crates/app/src/control.rs`.
 
-- **States.** `connecting`, then `connected` after `welcome`. `down` while plyd
-  cannot be reached, with the reason and the next retry. `incompatible` when
-  plyd answered `version_mismatch` or a `welcome` with another version; the grid
-  shows the reason.
-- **Another build.** At start the app reads its own build id,
-  `<app/package.json version>+<commit>`, with `git rev-parse --short=12 HEAD`
-  in its checkout (`readBuildId`, `app/src/ipc/os.ts`). While it is connected
-  to a plyd whose `daemon_version` differs, the status bar says "plyd is from
-  another build — cargo build --release -p ply-daemon, then Restart plyd"
-  (`selectForeignDaemon`): the app's id is the checkout's `HEAD`, plyd's the
-  commit its binary was built from, so after a commit plyd must be rebuilt
-  before a restart runs anything newer. With no id (git
-  cannot tell) it says nothing.
-- **Reconnect.** A failed connect or a closed connection retries after 100 ms,
-  doubling to at most 2 s; a `welcome` resets the delay. The retries continue
-  in `incompatible` too, until a compatible plyd answers.
-- **Starting plyd.** The first failed connect of an outage calls
-  `createDaemonStarter()` (`app/src/ipc/daemon-launcher.ts`) before the first
-  retry: with `PLY_HOME` set it spawns the cargo-built `plyd --foreground`
-  detached; without it, it runs `plyd install-agent`, which installs and
-  kickstarts the LaunchAgent (`docs/configuration.md`). Once the retries reach
-  their 2 s cap (an outage of about 3 s) it runs again before every retry,
-  because a start can come to nothing: after "Restart plyd" the new plyd may
-  find the old one still holding the instance lock and exit (Ruling R54). A
-  start that fails is appended to the `down` reason.
-- **Timeouts.** A `welcome` must arrive within 5 s of connecting, else the
-  client closes and retries. A request with no answer in 10 s fails with
-  `timeout`; a late answer is logged and dropped.
-- **Drops.** Every pending request fails with `disconnected` when the
-  connection goes. Events arriving before `welcome` are ignored.
-- **Loading.** On every `connected` the effects run, in order: `settings.get`;
-  `theme.set` with the palette for the stored accent (a failure is shown and the
-  load goes on); `workspace.list`, taking the workspace whose path is the home
-  directory, else the most recently opened one, else `workspace.open` of the
-  home directory; then `layout.get` and `pane.list` together. A reconnect runs
-  the same load, so nothing depends on events missed while away. Every pane
-  event read from sending `pane.list` until the loaded session is in the store
-  is applied again after it (the reductions are idempotent): one that arrives
-  in the same socket read as the `pane.list` answer is applied before the
-  answer's promise resumes, and the older list would otherwise replace it.
+- **Starting plyd.** Once, before the window opens, the app connects to the
+  control socket; when nothing answers it starts plyd (`crates/app/src/launcher.rs`:
+  `plyd --foreground` under `PLY_HOME`, else `plyd install-agent`) and waits up
+  to 10 s for it to answer (`docs/configuration.md`). It never starts plyd
+  again while it runs.
+- **Requests.** Each request opens a connection of its own (`client`
+  `ply-app-request`), sends `hello` with the app's build id (`PLY_BUILD_ID` at
+  compile time, else its package version), sends the request and closes once
+  the answer arrives; an error answer's `msg` is what the app shows. Requests
+  run off the UI thread. Lines read are capped at `MAX_LINE_BYTES`.
+- **Loading.** At start and after every reconnect of the event stream, on one
+  connection: `settings.get`; `theme.set` with the palette for the stored
+  accent (a failure is logged and the load goes on); `workspace.list`, taking
+  the workspace whose path is the home directory, else the most recently
+  opened one; then `layout.get` and `pane.list`. A reconnect runs the same
+  load, so nothing depends on events missed while away.
+- **Events.** A connection of its own (`client` `ply-app`, so plyd moves idle
+  agent panes onto their CLI's update when it connects) reads events on a
+  thread. It subscribes before the first load, so no event between the load
+  and the stream is lost. `pane.added` and `pane.removed` load again;
+  `pane.status` and `pane.meta` update the pane in place; `account.changed`
+  and `codex.changed` show the outcome and read the accounts again. When the
+  connection goes it reconnects after 100 ms, doubling to at most 2 s.
 - **Saving.** Layout changes (tab order, focus, zoom, active tab) are sent with
-  `layout.save` 250 ms after the last one; settings changes with `settings.set`
-  300 ms after the last one.
-
-`app/src/ipc/mock-server.ts` is a C1 server for development and tests only. It
-answers every method from memory, refuses to start without `PLY_HOME`, and is
-never imported by `main.tsx`.
+  `layout.save` 250 ms after the last one.
 
 ## A worked example
 
@@ -831,10 +801,3 @@ are allowed for those two pairs.
 - `crates/daemon/src/panes/registry.rs` unit tests (layout, closing, event
   order) and `crates/daemon/src/server/control.rs`
   (`lines_are_capped_and_split_at_newlines`).
-- `app/src/ipc/control-client.test.ts` (handshake, errors, reconnect, starting
-  plyd at the first failed connect and again once the retries reach their cap,
-  incompatibility) and `app/src/state/effects.test.ts`
-  (the load order, an event in the same read as the `pane.list` answer, a
-  failed `theme.set`, the saves) against the mock server, and
-  `app/src/state/reducer.test.ts` (a `pane.create` answer that events
-  overtook).

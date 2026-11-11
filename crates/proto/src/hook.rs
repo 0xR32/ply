@@ -5,7 +5,6 @@
 //! the field names here are the contract both sides keep.
 
 use serde::{Deserialize, Serialize};
-use ts_rs::TS;
 
 use crate::error::{Error, Result};
 use crate::pane::{AgentCli, PaneId};
@@ -17,9 +16,8 @@ pub const MAX_LINE_BYTES: usize = 1 << 20;
 pub const MAX_PAYLOAD_BYTES: usize = MAX_LINE_BYTES - 4096;
 
 /// `{"v":1,"pane_id":2,"cli":"claude","event":"Notification","payload":{…}}`; `event` is absent for Codex notify.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-#[ts(optional_fields)]
 pub struct HookEnvelope {
     /// Envelope version, [`crate::HOOK_VERSION`].
     pub v: u8,

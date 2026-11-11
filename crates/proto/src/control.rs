@@ -21,7 +21,6 @@ use std::fmt;
 
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
-use ts_rs::TS;
 
 use crate::error::{Error, Result};
 use crate::pane::{
@@ -36,7 +35,7 @@ pub const MAX_LINE_BYTES: usize = 1 << 20;
 pub const HANDSHAKE_ID: u64 = 0;
 
 /// Messages from the app to plyd, tagged by `"t"`.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "t", rename_all = "snake_case")]
 pub enum ClientMsg {
     /// First line on every connection.
@@ -46,7 +45,7 @@ pub enum ClientMsg {
 }
 
 /// Messages from plyd to the app, tagged by `"t"`.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "t", rename_all = "snake_case")]
 pub enum ServerMsg {
     /// Answer to `hello` when the versions match.
@@ -58,7 +57,7 @@ pub enum ServerMsg {
 }
 
 /// Handshake from the app; `v` must equal [`crate::PROTOCOL_VERSION`].
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Hello {
     /// Protocol version the client speaks.
@@ -77,7 +76,7 @@ impl Hello {
 }
 
 /// Handshake answer from plyd.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Welcome {
     /// Protocol version plyd speaks.
@@ -87,13 +86,12 @@ pub struct Welcome {
 }
 
 /// A method call: `{"t":"req","id":…,"m":"<method>","p":{…}}`; `p` is required, `{}` for methods without params.
-#[derive(Debug, Clone, PartialEq, Deserialize, TS)]
+#[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(try_from = "RequestWire")]
 pub struct Request {
     /// Caller-chosen id, echoed by the response; unique per connection, starting at 1.
     pub id: u64,
     /// The method and its params.
-    #[ts(flatten)]
     pub call: Call,
 }
 
@@ -223,12 +221,12 @@ pub fn decode_line<T: DeserializeOwned>(line: &[u8]) -> Result<T> {
 }
 
 /// Params of methods that take none: the empty object `{}`; also the result of methods that return nothing.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Empty {}
 
 /// `workspace.open` params.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct WorkspaceOpenParams {
     /// Absolute directory path; opening a known path returns the existing workspace.
@@ -236,7 +234,7 @@ pub struct WorkspaceOpenParams {
 }
 
 /// Params naming one workspace (`pane.list`, `layout.get`).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct WorkspaceRef {
     /// Workspace id.
@@ -244,7 +242,7 @@ pub struct WorkspaceRef {
 }
 
 /// Params naming one pane (`pane.resume`).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PaneRef {
     /// Pane id.
@@ -252,7 +250,7 @@ pub struct PaneRef {
 }
 
 /// The worktree option of `pane.create`, passed through to `claude --worktree <name>` (INV-7).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct WorktreeOption {
     /// Worktree name as Claude Code expects it.
@@ -260,9 +258,8 @@ pub struct WorktreeOption {
 }
 
 /// `pane.create` params; without `tab_id` the pane opens a new tab, and `worktree` is valid for Claude only.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-#[ts(optional_fields)]
 pub struct PaneCreateParams {
     /// Workspace to create the pane in.
     pub workspace_id: u64,
@@ -282,7 +279,7 @@ pub struct PaneCreateParams {
 }
 
 /// `pane.close` params: `kill: false` on a live pane fails with `pane_alive`; `kill: true` sends SIGHUP, then SIGKILL after 2 s.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PaneCloseParams {
     /// Pane to close.
@@ -292,7 +289,7 @@ pub struct PaneCloseParams {
 }
 
 /// What `pane.answer` says to the CLI's dialog, by meaning, since option positions differ by CLI, version and mode (R55).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Answer {
     /// Allow this once: the dialog's first option, "Yes" in every Claude Code and Codex dialog.
@@ -302,7 +299,7 @@ pub enum Answer {
 }
 
 /// `pane.answer` params.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PaneAnswerParams {
     /// Pane showing the CLI's dialog.
@@ -312,7 +309,7 @@ pub struct PaneAnswerParams {
 }
 
 /// `session.list` params.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SessionListParams {
     /// Workspace whose sessions to list.
@@ -322,7 +319,7 @@ pub struct SessionListParams {
 }
 
 /// `theme.set` params.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ThemeSetParams {
     /// Palette every pane's terminal answers colour queries from; stored across restarts.
@@ -330,7 +327,7 @@ pub struct ThemeSetParams {
 }
 
 /// `layout.save` params.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LayoutSaveParams {
     /// Workspace the layout belongs to.
@@ -340,7 +337,7 @@ pub struct LayoutSaveParams {
 }
 
 /// `settings.set` params.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SettingsSetParams {
     /// The complete settings, replacing the stored ones.
@@ -348,17 +345,16 @@ pub struct SettingsSetParams {
 }
 
 /// `daemon.shutdown` params.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct DaemonShutdownParams {
-    /// Stop every pane's process before exiting ("Quit ply and stop sessions").
+    /// Stop every pane's process before exiting.
     pub kill_panes: bool,
 }
 
 /// `task.add` params (Ruling R60): the text is typed verbatim into the target pane when it is the user's turn.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-#[ts(optional_fields)]
 pub struct TaskAddParams {
     /// Workspace of the target.
     pub workspace_id: u64,
@@ -372,7 +368,7 @@ pub struct TaskAddParams {
 }
 
 /// Params naming one task (`task.cancel`, `task.send`).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TaskRef {
     /// Task id.
@@ -380,7 +376,7 @@ pub struct TaskRef {
 }
 
 /// `task.move` params: a queued task takes `position` among its queue's queued tasks (clamped to the end).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TaskMoveParams {
     /// A queued task.
@@ -390,7 +386,7 @@ pub struct TaskMoveParams {
 }
 
 /// `queue.pause` params: `paused: false` resumes a queue paused for any reason.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct QueuePauseParams {
     /// The pane whose queue to pause or resume.
@@ -400,7 +396,7 @@ pub struct QueuePauseParams {
 }
 
 /// `skill.list` params (Ruling R61): the CLI whose skills to list and the directory whose project skills count.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SkillListParams {
     /// Claude Code or Codex.
@@ -410,9 +406,8 @@ pub struct SkillListParams {
 }
 
 /// `account.switch` params: the workspace whose new tab runs `claude auth login`, and the account to sign in to.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-#[ts(optional_fields)]
 pub struct AccountSwitchParams {
     /// Workspace to open the sign-in tab in.
     pub workspace_id: u64,
@@ -422,7 +417,7 @@ pub struct AccountSwitchParams {
 }
 
 /// Every C1 method with its params, tagged `"m"` with params in `"p"`; [`METHODS`] gives each result type.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "m", content = "p", deny_unknown_fields)]
 pub enum Call {
     /// `workspace.list` → `Workspace[]`.
@@ -539,18 +534,18 @@ impl Call {
     }
 }
 
-/// One row of the method table: the wire name and the TypeScript names of its params and result.
+/// One row of the method table: the wire name and the type names of its params and result.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MethodInfo {
     /// Wire name, the value of `"m"`.
     pub name: &'static str,
-    /// Params type name in `proto.gen.ts`.
+    /// Params type name.
     pub params: &'static str,
-    /// Result type in `proto.gen.ts` (the value of a successful response's `"r"`).
+    /// Result type (the value of a successful response's `"r"`); `Array<T>` for a list.
     pub result: &'static str,
 }
 
-/// The C1 method table in [`Call`] order; `proto.gen.ts` exports it as the `Methods` type map.
+/// The C1 method table in [`Call`] order.
 pub const METHODS: &[MethodInfo] = &[
     MethodInfo {
         name: "workspace.list",
@@ -685,7 +680,7 @@ pub const METHODS: &[MethodInfo] = &[
 ];
 
 /// Closed set of C1 error codes (snake_case on the wire); clients match on these, never on `msg`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ErrorCode {
     /// The CLI is not on the login-shell `PATH`.
@@ -715,7 +710,7 @@ pub enum ErrorCode {
 }
 
 /// The error of a failed request.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ErrorBody {
     /// Machine-readable code.
@@ -725,9 +720,8 @@ pub struct ErrorBody {
 }
 
 /// The answer to a request: `{"t":"res","id","ok":true,"r":…}` or `{"t":"res","id","ok":false,"err":{…}}`.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(try_from = "ResponseWire", into = "ResponseWire")]
-#[ts(as = "ResponseTs")]
 pub struct Response {
     /// Id of the request answered.
     pub id: u64,
@@ -804,26 +798,8 @@ impl From<Response> for ResponseWire {
     }
 }
 
-#[derive(TS)]
-#[ts(rename = "Response", untagged)]
-#[allow(dead_code)]
-enum ResponseTs {
-    Ok {
-        id: u64,
-        #[ts(type = "true")]
-        ok: bool,
-        r: serde_json::Value,
-    },
-    Err {
-        id: u64,
-        #[ts(type = "false")]
-        ok: bool,
-        err: ErrorBody,
-    },
-}
-
 /// `pane.removed` payload.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PaneRemoved {
     /// The pane that was closed.
@@ -831,9 +807,8 @@ pub struct PaneRemoved {
 }
 
 /// `pane.status` payload; `exit_code` is present exactly when `status` is `exited`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-#[ts(optional_fields)]
 pub struct PaneStatusChanged {
     /// The pane.
     pub pane_id: PaneId,
@@ -850,9 +825,8 @@ pub struct PaneStatusChanged {
 }
 
 /// `pane.progress` payload, sent at most 4 times a second per pane; no `progress` hides the bar.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-#[ts(optional_fields)]
 pub struct PaneProgress {
     /// The pane.
     pub pane_id: PaneId,
@@ -862,9 +836,8 @@ pub struct PaneProgress {
 }
 
 /// `pane.meta` payload (Ruling R4): what the session reports about itself; absent fields are unknown.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-#[ts(optional_fields)]
 pub struct PaneMeta {
     /// The pane.
     pub pane_id: PaneId,
@@ -888,7 +861,7 @@ pub struct PaneMeta {
 }
 
 /// `pane.exit` payload.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PaneExit {
     /// The pane.
@@ -900,7 +873,7 @@ pub struct PaneExit {
 }
 
 /// `daemon.stopping` payload, sent to every client before plyd exits.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct DaemonStopping {
     /// Whether the panes' processes are being stopped too.
@@ -908,9 +881,8 @@ pub struct DaemonStopping {
 }
 
 /// `account.changed` payload: an `account.switch` ended.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-#[ts(optional_fields)]
 pub struct AccountChanged {
     /// The pane that ran `claude auth login`; closed already unless the sign-in failed.
     pub pane_id: PaneId,
@@ -924,9 +896,8 @@ pub struct AccountChanged {
 }
 
 /// `codex.changed` payload: a `codex.sign_in` ended.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-#[ts(optional_fields)]
 pub struct CodexChanged {
     /// The pane that ran `codex login`; closed already unless the sign-in failed.
     pub pane_id: PaneId,
@@ -940,7 +911,7 @@ pub struct CodexChanged {
 }
 
 /// Daemon events, tagged `"e"` with the payload in `"p"`; broadcast to every connected client.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "e", content = "p", deny_unknown_fields)]
 pub enum Event {
     /// A pane was created (by any client).

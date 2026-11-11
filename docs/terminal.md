@@ -2,14 +2,14 @@
 
 How a pane's bytes become the rows on screen, and how keys get back. plyd owns
 the pty and emulates it with libghostty-vt; the app receives decoded rows over
-C2 and draws them with GPUIX. Raw pty output never enters JavaScript (INV-2),
+C2 and paints them with GPUI. Raw pty output never reaches the app (INV-2),
 and the app never mirrors terminal modes: it sends what the user did, and plyd
 encodes it against the pane's live state.
 
 ```
 child ──pty──► reader thread ──► pane task: Engine.write ──► dirty rows ──► DeltaBuilder ──C2──►
                                    │ replies (DA, DSR, OSC 10/11 …) ─► pty writer thread
-data-client ──► Replica (a version per row) ──► TerminalRow: <text> runs ──► GPUIX
+conn.rs reader thread ──► ply_term::Replica ──► paint.rs: quads and shaped lines ──► GPUI
 keys, mouse, paste, focus ──C2──► encode_input (against the live modes) ──► pty writer thread
 ```
 
@@ -135,7 +135,7 @@ This is what makes Codex's startup probe work before any view is attached
 | `pwd` (OSC 7 `file://host/path`) | percent-decoded to the pane's `cwd` and announced with `pane.meta`; other schemes are ignored |
 | `notifications` (OSC 9, OSC 777) | an OSC 9 body goes to the pane's agent session (C8: approval, question, plan prompt or turn complete; `docs/agents.md`); every notification is also logged |
 | `progress` (OSC 9;4) | unused |
-| `clipboard_writes` (OSC 52) | the `text/plain` part (UTF-8, at most one frame, 1 MiB) goes at once to every attached client as CLIPBOARD_WRITE, which the app writes to the pasteboard; a write while no client is attached is dropped. Clipboard reads get no callback, so they are refused |
+| `clipboard_writes` (OSC 52) | the `text/plain` part (UTF-8, at most one frame, 1 MiB) goes at once to every attached client as CLIPBOARD_WRITE (which the app does not act on yet); a write while no client is attached is dropped. Clipboard reads get no callback, so they are refused |
 
 **Dirty tracking.** libghostty-vt's render state consumes the terminal's dirty
 flags, so each engine owns one render state and records, per viewport row, the
@@ -238,272 +238,170 @@ installs no clipboard-read callback.
 
 ## The view
 
-The app side lives in `app/src/terminal/` and
-`app/src/features/panes/terminal-view.tsx`.
+The app side lives in `crates/app/src`: `conn.rs` (the connection), `paint.rs`
+(the terminal element), `select.rs`, `keys.rs`, `drop.rs` and `PaneView` in
+`main.rs`.
 
-**Mounting.** A TerminalView exists only for a visible pane: the active tab's
-panes, only the focused one while the tab is zoomed
-(`app/src/features/panes/pane-grid.tsx`, `visiblePaneIds`). The grid lays them
-out by count (Ruling R56, `gridShape`): one fills the tab, two and three are
-equal full-height columns, four are equal quadrants, in position order. Every
-count uses the same grid parent, so a re-flow (a pane added or closed) moves
-the views without remounting them: each one measures its new box and sends a
-RESIZE, not a new ATTACH. Switching tabs
-unmounts the old views, which detach, and mounts the new ones, which attach and
-receive a Snapshot each. Hidden panes keep running and emulating in plyd; their
-status keeps arriving over C1.
+**Which panes attach.** Only the active tab's panes have a view, laid out by
+count (Ruling R56): one fills the tab, two and three are equal full-height
+columns, four are equal quadrants, in position order. While the tab is zoomed
+only the focused pane is drawn; the others stay attached. Switching tabs
+detaches the panes the new tab does not hold and attaches its own, each
+answered with a Snapshot. Hidden panes keep running and emulating in plyd;
+their status keeps arriving over C1.
 
-**Title, bell and exit** reach the pane through TerminalView's callbacks
-(`pane-frame.tsx`): a TITLE replaces the pane's name in the palette and the
-close confirmation (the header shows no title), a BELL marks a pane that
-is not the focused one with a bell until it is, and an EXIT marks the pane
-`exited` with its code at once (C1 `pane.exit` says the same a moment later).
+**The connection** (`conn.rs`). A view attaches when it is first laid out: a
+thread of its own (`c2-pane-<id>`) connects to `run/data.sock`, sends ATTACH
+with the grid and cell size, and reads frames into the pane's
+`ply_term::Replica` (`crates/term/src/replica.rs`), the strict decoder the
+tests use too, behind a mutex, so decoding never runs on the UI thread. It acks
+every Snapshot and Delta, keeps TITLE and EXIT, and wakes the view only when the
+view has painted since the last wake, so a burst of Deltas costs one repaint
+and an idle pane costs nothing. A dropped connection or a bad frame re-attaches
+after 100 ms, doubling to 2 s; ATTACH_REFUSED ends it. FOCUS is sent when the
+pane gains or loses focus, and again after each Snapshot. BELL, PASTE_REJECTED
+and CLIPBOARD_WRITE are not acted on yet: a bell marks nothing, a paste plyd
+refuses as unsafe is dropped without a word, and a program's OSC 52 write does
+not reach the pasteboard.
 
-**A narrow header degrades.** The header measures its own width the way the
-view does (every 250 ms) and, in unscaled pixels (its width over the font
-scale, since everything grows with ⌘=), drops the plan's numbers below 480,
-the model below 400, the plan bar below 330, the branch below 290 and the CLI
-label below 240; the project and the branch ellipsize, and the header clips
-rather than letting items overlap (`pane-header.tsx`, `headerFit`). The status
-bar's key hints wrap onto a hidden second line, so hints that do not fit drop
-whole from the right (`large-font.test.tsx` checks both at the largest font
-size).
+**Size.** Every layout measures the pane's body and sends the whole cells that
+fit: ATTACH the first time, RESIZE when the grid or the cell changes. The cell
+is Geist Mono's: the advance of `m` at the text size wide, and round(1.3 × size)
+high; ATTACH and RESIZE carry it rounded to whole pixels. The app embeds Geist
+and Geist Mono (`crates/app/assets/fonts/`, SIL OFL) and registers them at
+startup, so nothing has to be installed; should that fail, the system fonts
+stand in.
 
-**Size.** The view measures its box every 250 ms (every 16 ms until the first
-measurement) and sends the whole cells that fit (`gridFor` in
-`app/src/terminal/metrics.ts`): ATTACH the first time, RESIZE when the grid or
-cell size changes. The cell comes from the terminal font's own tables:
+**Painting** (`paint.rs`). Each frame of a pane paints its rows from the
+replica: the live screen, or the view from an absolute line when scrolled back,
+asking for a missing page of scrollback (one request in flight, at most
+`MAX_HISTORY_ROWS` lines). Per row, runs of cells with a background other than
+the default become one quad each; text becomes one shaped line per run of cells
+of one style, every glyph snapped to the cell grid (GPUI's `shape_line` with the
+cell width), so a fallback glyph cannot drift the columns after it; a wide
+character or a grapheme cluster gets a run of its own, and trailing blank cells
+are not drawn. Colours resolve through `ply_term::Palette`, built from the
+theme the app derives from the accent (`theme_for`) and sends with `theme.set`.
+Inverse swaps fg and bg, faint blends fg halfway into bg, invisible paints fg in
+bg; bold is semibold; italic, underline (curly drawn wavy, the others straight,
+in the underline colour) and strikethrough are drawn; overline and blink are
+not. The selection is painted in the theme's selection colour behind the text,
+and a ⌘-hovered link is underlined in the cursor colour.
 
-| Font | Cell width | Cell height |
-|---|---|---|
-| Geist Mono | 0.6 × size (the advance of `m`) | round(1.3 × size) |
-| Menlo | 1233/2048 × size | round(2384/2048 × size) |
+**The cursor** is a block (85 % opaque), a bar or an underline in the cursor
+colour; an unfocused pane draws a hollow block. It shows while it is visible and
+the program has DECTCEM on, and blinks at 530 ms while the pane has focus and
+the program asked for a blinking cursor.
 
-The height is the font's ascent plus descent, rounded to whole pixels, which is
-the line height at which its box-drawing glyphs join. The width stays
-fractional; ATTACH and RESIZE carry it rounded to a whole pixel. Geist Mono is
-used only when the Geist fonts are installed (in `~/Library/Fonts` or
-`/Library/Fonts`; the TTFs are in `app/assets/fonts/`, and `just fonts` installs
-them), because GPUIX cannot
-load a font file; otherwise the terminal uses Menlo and the chrome the system
-font (`app/src/ipc/os.ts`, `geistAvailable`).
-
-**The replica** (`app/src/terminal/replica.ts`) is the app's copy of the screen.
-It applies Snapshot, Delta and History frames and is strict like ply-term's
-reference `Replica` (`crates/term/src/replica.rs`): a frame with a sequence
-number that does not increase, a style id that is 0 or already known, an unknown
-style or a row outside the grid throws `ReplicaError` and changes nothing, and
-the view drops the connection and re-attaches. Each row keeps its cells as typed
-arrays, a version that changes whenever the row is replaced, and an FNV-1a hash
-of its cells and the style epoch (bumped by every Snapshot, which may reuse
-ids). Scrollback rows it fetched are kept by absolute line number
-(`scrollback_base` onwards, `docs/screen-protocol.md`), so they stay right after
-the scrollback cap starts dropping lines, and a Delta whose base moved on drops
-the lines plyd no longer keeps.
-
-**Rendering.** Every pane's changes are flushed by one shared timer
-(`app/src/terminal/frame-scheduler.ts`), at once for a pane's first change
-after an idle stretch and then at most once per 16 ms for the focused pane and
-once per 50 ms for the others, which ride in the focused pane's batch (up to a
-frame early) rather than cost a redraw of their own; all due panes re-render in
-one React batch. plyd publishes up to 120 Hz, so the view draws at most 60. A
-timer that fires 8 ms late or more means the main thread is busy drawing, and it
-doubles the interval, up to 100 ms (10 Hz), so keys and scrolling still get a
-turn; each timer on time takes 4 ms back off. A row is one `TerminalRow`
-(`terminal-row.tsx`), memoized: it re-renders only when its cells, the selection
-columns, the style epoch, the resolver or the cell size changed. Rows are keyed
-by content hash, so a scroll moves the rows it kept instead of re-rendering every
-position.
-
-A row draws as the fewest `<text>` runs (`rowRuns` in `app/src/terminal/runs.ts`):
-
-- cells of one resolved style merge into one run;
-- a wide character, a grapheme cluster, and any glyph Geist Mono does not draw
-  at exactly one cell (`isNarrowGlyph`, a table taken from the font) get a run
-  of their own, one or two cells wide, so a fallback glyph cannot push the
-  columns after it;
-- spacer cells are skipped, and trailing default blanks and any run of blanks
-  that paints nothing are dropped: runs sit at absolute columns, so an
-  invisible run holds no place (a blank that paints a background or a line, or
-  a selected one, stays).
-
-Each run is positioned absolutely at `round(col × cell width)` with the width to
-the next rounded edge, so layout rounding cannot drift columns across a row.
-Every host node costs GPUIX about 0.01 ms per frame, which is why runs are
-coalesced: a test holds a 4-pane tab of 160 × 50 recorded agent screens under
-2 000 host nodes, and the chrome alone under 400.
-
-**Colours and attributes** (`StyleResolver`): colours resolve against the
-theme (`default` → the theme's fg or bg, indexed 0–15 → its ANSI colours,
-16–255 → the xterm cube and greys, RGB as sent). Inverse swaps fg and bg; faint
-blends fg halfway into the background; invisible paints fg in the background
-colour; the selection overrides both with the theme's selection colours; bold
-is weight 600; any underline kind draws as an underline, else strikethrough as
-a line-through. GPUIX styles no italic, overline or underline colour, and blink
-is not drawn. The default background is never painted, so the pane body's
-colour shows through.
-
-**The cursor** is a positioned `<div>`: a bar, an underline, or a block that
-draws the character under it in the theme's cursor-text colour. It shows once a
-Snapshot has arrived, when the cursor is visible and the program has DECTCEM on,
-and while the live row it sits on is on screen. An unfocused pane draws a hollow
-block. A blinking cursor blinks at 530 ms while the pane has focus and the
-system's reduce-motion setting is off, and every screen change restarts the
-blink.
+**The header and frame** (`chrome.rs`) show the pane's position, project,
+branch, plan progress, CLI and model, how far back the view is scrolled, and a
+status chip (Starting, Running, Needs you, Done, Your turn, Exited n, Lost, or
+the shell's name for a shell); the frame glows amber while the pane needs you.
+A TITLE names the pane while plyd's record has no title.
 
 ## Selection, clipboard, scrollback and search
 
-These are ply's own, done in the app against the replica.
+These are ply's own, done in the app against the replica (`select.rs`).
 
 **Selection.** Dragging with the primary button selects by cell; a double click
 by word (letters, digits and `_-./~:@%+#`), a triple click by line; ⇧-click
-extends. Dragging past the top or bottom scrolls. A click without a drag clears
-the selection, and so does typing. While the program reports the mouse, clicks
-go to the program and ⇧ bypasses that to select.
+extends. A click without a drag clears the selection, and so does a key typed
+into the pane. While the program reports the mouse, clicks go to the program and
+⇧ bypasses that to select. The selection is held by absolute line, so it stays
+on its text while output scrolls.
 
-**Copy and paste.** ⌘C copies the selection — after fetching any scrollback it
-covers, for up to 5 s — joining rows with newlines except after a soft-wrapped
-row and trimming each line's trailing blanks; with no selection it does nothing
-and never sends ^C. ⌘V pastes the pasteboard's text as a PASTE frame. The
-pasteboard is reached through `pbcopy` and `pbpaste` (`app/src/terminal/host.ts`),
-because GPUIX gives JavaScript no clipboard API; under `bun test` an inert host
-never touches it. When plyd refuses a paste as unsafe the view asks, and ⏎
-resends it with `allow_unsafe` while esc drops it. A program's OSC 52 write
-arrives as CLIPBOARD_WRITE and goes to the pasteboard the same way (an empty
-text clears it); a program can never read the pasteboard.
+**Copy and paste.** ⌘C copies the selection, joining rows with newlines except
+after a soft-wrapped row and trimming each line's trailing blanks; scrollback
+lines not fetched yet are left out. With no selection it does nothing and never
+sends ^C. ⌘V pastes the pasteboard's text as one PASTE frame, never with
+`allow_unsafe`. An image on the pasteboard is saved as a file in `ply-drops`
+(turned into PNG with `sips` when the CLIs cannot read its format) and its path
+typed, which Claude Code turns into its own `[Image #N]`. A program can never
+read the pasteboard.
 
-**Dropped files.** Files dropped on a pane (GPUIX's `onFileDrop`, which gives
-absolute paths) are typed the way Ghostty, iTerm2 and Terminal.app type them:
-each path with its shell metacharacters (space, tab and `\()[]{}<>"'`
-`` ` `` `!#$&;|*?`) backslash-escaped, joined by one space with none after, as
-one PASTE frame (`app/src/terminal/drop.ts`); the pane becomes the focused one.
-Claude Code strips the escapes and turns a pasted image path (png, jpeg, gif,
-webp) into its own `[Image #N]`; ply types the path and never reads the file.
-Files dropped anywhere on the ⌘E form join its prompt instead, one escaped path
-per line, and reach the pane when the task is typed (`docs/agents.md`, **How it
-is typed**). An image on the pasteboard is Claude Code's own ⌃V, which reaches
-it as a key; ⌘V pastes text only.
+**Dropped files.** Files dropped on a pane are typed the way Ghostty, iTerm2
+and Terminal.app type them: each path with its shell metacharacters (space, tab
+and `\()[]{}<>"'` `` ` `` `!#$&;|*?`) backslash-escaped, joined by one space
+with none after, as one PASTE frame (`drop.rs`); the pane becomes the focused
+one. Claude Code strips the escapes and turns a pasted image path (png, jpeg,
+gif, webp) into its own `[Image #N]`; ply types the path and never reads the
+file.
 
 **The ⌘⇧4 thumbnail** offers a file AppKit staged in
 `…/TemporaryItems/NSIRD_screencaptureui_*/`, which screencaptureui deletes as
 soon as the drag ends; Claude Code reads a pasted image asynchronously, finds it
 gone and drops it without a word ([anthropics/claude-code#80980], in every
 terminal). So a dropped path under `/TemporaryItems/` is kept first:
-`keepDroppedFile` hard-links it (or copies it, when a link fails) into a fresh
-folder in `ply-drops` (`docs/configuration.md`) under its own name, and that path
-is typed or put into the prompt instead. It runs synchronously in the drop's
-event handler, which GPUIX calls in the event-loop turn right after AppKit's
-`performDragOperation`, before screencaptureui hears the drag ended; a real
-thumbnail drag logs `kept a dropped file its source deletes when the drag
-ends`. A staged file already gone, or one that cannot be kept, is typed as
-dropped and logged at `warn`. Any other path is typed as it is.
+`keep_dropped` hard-links it (or copies it, when a link fails) into a fresh
+folder in `ply-drops` (`docs/configuration.md`) under its own name, in the drop
+handler itself, and that path is typed instead; a real thumbnail drag logs
+`kept a dropped file its source deletes when the drag ends`. A staged file that
+cannot be kept is typed as dropped and logged at `warn`. Any other path is typed
+as it is.
 
 A kept copy goes once nothing will open it. Claude Code reads the image into
-memory at the paste (and numbers it `[Image #N]` by its own count, which only
-grows during a session), but it also tells the model `[Image source: <path>]`,
-so a tool in that turn may still open the file. A pane's copies
+memory at the paste, but it also tells the model `[Image source: <path>]`, so a
+tool in that turn may still open the file. A pane's copies and pasted images
 (`ply-drops/pane-<id>-<ms>-*`) therefore live through the turn that sent them:
-when the pane starts a turn (its status becomes `running`), `state/effects.ts`
-deletes its copies made before the turn it started last, so a screenshot goes
-when the turn after the one that used it begins, and one removed from the
-input goes a turn later; all of them go when the pane is closed. A task's
-copies (`ply-drops/task-<ms>-*`) go when the task ends, fails or is cancelled
-(`releaseTaskDrops`, found by the paths in its text), and the ⌘E form deletes
-the ones it kept that no queued task names when it closes: removed from the
-prompt, or never queued. A prompt sent to a new pane keeps its copies, which
-the temporary directory's own cleanup removes.
+when the pane starts a turn (its status becomes `running`), the app deletes its
+copies made before the turn it started last, so a screenshot goes when the turn
+after the one that used it begins; all of them go when the pane is closed.
 
 [anthropics/claude-code#80980]: https://github.com/anthropics/claude-code/issues/80980
 
-Three GPUIX limits shape this (found on 0.10.0). It reports the drop alone, so nothing
-marks a pane while a file is dragged over it. GPUI counts no element hovered
-while the last input was a key, and a file drop does not end that
-(`Window::dispatch_event`), while a drag from another app brings the window
-drag events, not mouse moves: a file dropped right after typing, before the
-pointer has moved over the window (8 px or more since GPUIX 0.11), reaches nothing and is lost; move the pointer over ply once and drop again
-(`terminal-view.test.tsx` pins this). And GPUIX fires `onClick` on the drop's
-release, so a drop clicks what it lands on unless that element takes the drop
-itself: every clickable on the ⌘E form takes it, and the needs-you strip's Yes
-and No swallow it, so a drop never queues, closes or answers anything. Elsewhere
-(tabs, pane headers, the status bar) a drop still clicks, which at worst
-switches to or opens something.
-
 **Scrollback** stays in plyd (`scrollback_lines`, default 10 000). The wheel
-scrolls ply's own view of it and the session fetches the pages it shows
-(`docs/screen-protocol.md`); new output keeps a scrolled-back view in place,
-and a key press returns to the live screen. On the alternate screen there is no
-scrollback, and without mouse reporting the wheel sends arrow keys instead.
-With reporting on, the wheel goes to the program as buttons 4 and 5, at most
-ten steps per event. ⌘A selects every line plyd keeps and starts fetching them.
+scrolls ply's own view of it and the view fetches the pages it shows
+(`docs/screen-protocol.md`); new output keeps a scrolled-back view in place, and
+a key press or a paste returns to the live screen. On the alternate screen
+without mouse reporting the wheel sends arrow keys instead; with reporting on it
+goes to the program as buttons 4 and 5, at most ten steps per event.
 
-**Search.** ⌘F opens a find bar and fetches the whole scrollback. Matching is a
-case-insensitive substring search over the screen and the fetched lines; the bar
-starts at the newest match, ↑ and ⏎ step to older ones and ↓ to newer ones, and
-each match is scrolled into view and selected. Esc closes it and returns focus
-to the pane. Keys typed into the find field never reach the pty: the field
-marks each key it handled, and the terminal skips that event when it bubbles up.
-(The engine's own `search` is not used by the app.)
+**Search.** ⌘F opens a find bar over the pane and fetches the whole scrollback,
+a page at a time. Matching is a case-insensitive substring search over the
+screen and the fetched lines, redone as lines and pages arrive; the bar shows
+the current match and the count, starts at the newest match, ↑ and ⏎ step to
+older ones and ↓ to newer ones, and each match is selected and scrolled into
+view. Esc closes it. Keys typed into it never reach the pty. (The engine's own
+`search` is not used by the app.)
 
 **Links.** ⌘-click on an http or https URL opens it in the default browser
-through `open -u` (`linkAt` in `app/src/terminal/links.ts`, `openUrl` in
-`host.ts`). A URL is found in the text of the soft-wrapped line under the
-pointer, so one the terminal wrapped opens whole; one the program broke with a
-newline opens only up to the break. Trailing `.,:;!?'*` and a `)` or `]` with
-no opening partner are left out, so `(https://…)` and `[text](https://…)` work
-and a balanced `Rust_(language)` stays. No other scheme is a link, because the
-text is the program's output and a custom scheme could launch an app; the host
-refuses one as well. The link opens when the button is released over the link
-it was pressed on, and neither the press nor the release reaches the program or
-touches the selection. While ⌘ is held over a link it is underlined and the
-pointer is a hand. GPUIX reports no modifier change, so the underline follows
-the last mouse move: it appears when the pointer moves with ⌘ down, and goes on
-the next move without ⌘, a key or a blur. OSC 8 hyperlinks are not read: panes
-run with `TERM=xterm-256color` and no `TERM_PROGRAM`, so neither CLI sends them.
-
-**Diff rows.** A row a CLI draws as a diff line gets a low-contrast band
-across the pane, mint for an added line and red for a removed one
-(`tokens.diffAdd`, `tokens.diffRemove`, 20 % over the terminal). A row counts
-when it opens with an optional line number and then a `+` drawn green (ANSI 2
-or 10, or an RGB green) or a `-` drawn red (ANSI 1 or 9, or an RGB red), set
-against the line or not, and that marker sits on the ground: no background, or
-ANSI black, which ply draws as the ground (`diffKind` in
-`app/src/terminal/diff.ts`). That is how Claude Code draws its edits under
-ply's `dark-ansi` theme (`      22 +changed line 22`, the marker in bright green
-or red), how its expanded diff draws them (every cell on ANSI black, so on a
-diff row ply leaves ANSI-black cells unpainted and the band shows), and how
-Codex draws its diffs. The 16-colour theme has no dim green or red to paint a
-row with, so Claude Code paints none. The colour check keeps a list item,
-"12 - 4" or a plain `+1` plain, and a theme that already paints its diff rows,
-such as Claude Code's own `dark` with "Use ply colours in Claude Code" off,
-keeps its own colours. A diff line the CLI wrapped onto a second row tints only
-its first.
+through `/usr/bin/open -u` (`link_at` in `select.rs`). A URL is found in the
+text of the soft-wrapped line under the pointer, so one the terminal wrapped
+opens whole; one the program broke with a newline opens only up to the break.
+Sentence punctuation and a `)` or `]` with no opening partner at its end are
+left out, so `(https://…)` and `[text](https://…)` work. No other scheme is a
+link, because the text is the program's output and a custom scheme could launch
+an app. The link opens when the button is released over the link it was pressed
+on, and neither the press nor the release reaches the program or touches the
+selection. While ⌘ is held over a link it is underlined and the pointer is a
+hand; the underline follows the mouse moves. OSC 8 hyperlinks are not read:
+panes run with `TERM=xterm-256color` and no `TERM_PROGRAM`, so neither CLI sends
+them.
 
 **IME** is not implemented: every KEY frame carries `composing` 0 and the text
-GPUIX reports for the key, so dead keys and CJK composition do not work in a
+GPUI reports for the key, so dead keys and CJK composition do not work in a
 pane.
 
 ## Input in the view
 
-`app/src/terminal/input.ts` turns GPUIX key events into KEY frames:
+`keys.rs` turns GPUI keystrokes into KEY frames:
 
-- **⌘ chords never become KEY frames** (`keyFrame` returns `null`); they belong
-  to the keymap, and the four the terminal handles itself are in
-  `docs/keybindings.md`.
-- The physical key comes from GPUIX's key name through `GHOSTTY_KEYS`, the
-  libghostty-vt key table in enum order (`input.test.ts` checks it name for name
-  against `key/event.h`); AppKit's shifted US characters fold back to their key.
-  A layout key with no physical code (`ö`) is key 0 with its text.
-- Text is the character GPUIX reports, dropped when it is a control character
-  or when Ctrl is held (plyd encodes Ctrl chords from the key). With ⌥ as Meta
-  the key's own character is sent with ⌥ unconsumed, so plyd prefixes ESC;
-  otherwise ⌥'s layout character is sent with ⌥ consumed. GPUIX reports no key
-  side, so `left` and `right` both act on either ⌥ (`right` also sets the
-  right-Option bit).
-- Presses, repeats and releases are all sent.
+- **⌘ chords never become KEY frames**; they belong to the app
+  (`docs/keybindings.md`).
+- The physical key comes from GPUI's key name through a table of libghostty-vt
+  key codes (letters, digits, punctuation, Enter, Tab, Esc, Backspace, Delete,
+  Home, End, Page Up and Down, the arrows, F1–F25). A layout key with no code
+  (`ö`) is key 0 with its text.
+- Text is the character GPUI reports, dropped when it is a control character or
+  when Ctrl is held (plyd encodes Ctrl chords from the key). ⌥ and ⇧ are marked
+  consumed when they changed the key's character, so ⌥'s layout character is
+  typed as text.
+- Presses and repeats are sent; releases are not.
 
 Mouse events become MOUSE frames only while the program reports the mouse
-(motion only when the cell under the pointer changes); focus changes become
-FOCUS frames once the view is attached.
+(motion only when the cell under the pointer changes), positioned at the
+centre of the cell in plyd's whole-pixel cells; focus changes become FOCUS
+frames once the view is attached.
 
 ## Measured
 
@@ -532,54 +430,19 @@ one Snapshot (`crates/term/tests/memory.rs`, macOS `phys_footprint`):
 
 The test asserts at most 15 MB per pane after compression.
 
-The view records its own cost per pane: decode time per socket read
-(`DecodeStats` in `data-client.ts`) and render time per commit (`RenderStats` in
-`session.ts`), read through `terminalStats()` and shown in the view's corner
-with `PLY_TERMINAL_STATS=1`. The target (P1) is a p99 frame time within 16.6 ms
-with six streaming panes. A debug plyd streams the recorded agent output into
-live panes for that measurement (`plyd --replay`, `crates/daemon/src/replay.rs`;
-`docs/development.md` shows the run). The numbers below were measured for the
-terminal view (WP5) with the npm GPUIX build, Menlo, on a machine loaded by
-parallel builds (load 3–40), single runs.
+The app's own numbers — CPU, frame stalls, memory and tab switches, measured
+against the React app it replaced — are in `docs/perf.md`. `ply --stats` logs a
+`frame stats` line every second to the app log: frames drawn, pane wakes, the
+time from a frame's render to its paint (p50, p99, max), the interval between
+painted frames, and the main thread's stalls, measured as the gaps of a 1 ms
+timer (p99, max, how many over 16.7 and 33.3 ms). A debug plyd streams the
+recorded agent output into live panes for such runs (`plyd --replay`,
+`crates/daemon/src/replay.rs`; `docs/development.md` shows the run).
 
-**Decode** stays on the main thread (no Worker): a worst-case 1 MiB Snapshot
-(300 × 495 cells, 1 043 094 bytes) decodes in 0.82 ms p50, 1.52 ms p90, 6.6 ms
-max (JIT warm-up); a 160 × 50 agent screen in 0.04 ms; live frames take
-0.01–0.03 ms on average, 5.8 ms once.
-
-**Test renderer**, 1440 × 900, every row of every pane changing every frame (the
-160 × 50 recorded screens rotated by a row per frame):
-
-| Panes | Host nodes (chrome) | GPUI draw p50 / p99 | React per pane, average |
-|---|---|---|---|
-| 1 | 266 (20) | 2.0 / 2.35 ms | 0.64 ms |
-| 4 | 972 (72) | 7.1 / 8.2 ms | 0.76 ms |
-| 6 | 1 456 (106) | 11.0 / 11.9 ms | 0.77 ms |
-
-Before rows were keyed by content, React took 1.6–4.2 ms per pane for the same
-load. The node-count test (a 4-pane tab of 160 × 50 recorded screens) asserts
-fewer than 2 000; it is 972.
-
-**Live** (GPUI draw time from GPUIX's frame overlay; "JS batch" is one React
-render of every pane):
-
-| Load | Deltas/s per pane | Draw p99 / max | JS batch, average |
-|---|---|---|---|
-| 1 shell, `yes \| head -c 50M` | about 120 | 1.4 / 9.0 ms | 1.4 ms |
-| 4 shells, `yes \| head -c 50M` (60 Hz render cadence) | about 120 in, 60 drawn | 3.0 / 11.3 ms | about 2.1 ms |
-| 6 replayed agent panes, `plyd --replay … --speed 10` (40 KiB/s each) | 35–85 | 5.95 / 55 ms | about 5.4 ms (max 63 ms: the six first Snapshots) |
-
-P1 holds with six replayed panes (draw p99 5.95 ms plus about 5.4 ms of
-JavaScript); the one 55 ms frame is six panes attaching at once, so "no frame
-over 33 ms" is not met at attach.
-
-**P2**, key to the pty: in the app, building and encoding a KEY frame takes
-0.002 ms p50, 0.02 ms p99. KEY frame to the echoed Delta from plyd (shell echo
-and plyd's 120 Hz publisher included, six replayed panes streaming) takes
-0.48 ms p50, 1.93 ms p90, 8.97 ms p99, 15 ms max (n = 200), an upper bound of
-P2. plyd measures the part it owns itself: with `PLY_LOG=debug` every KEY frame
-logs `P2: key frame to pty write` with `latency_us`, from the data server
-decoding the frame to the pty writer's `write(2)` returning. A release plyd,
+**P2**, key to the pty. plyd measures the part it owns itself: with
+`PLY_LOG=debug` every KEY frame logs `P2: key frame to pty write` with
+`latency_us`, from the data server decoding the frame to the pty writer's
+`write(2)` returning. A release plyd,
 300 keys 5 ms apart into a shell pane, measured 21 µs p50, 52 µs p90, 231 µs
 p99 and 509 µs max, and 21 / 34 / 62 / 78 µs while another pane streamed
 `seq` output to its own client.
@@ -600,21 +463,11 @@ p99 and 509 µs max, and 21 / 34 / 62 / 78 µs while another pane streamed
   search, save and restore), `input.rs` (the key, ⇧⏎, ⌥, mouse, focus and paste
   rules, and the guards against undefined values), `memory.rs`.
 - `crates/ghostty-sys/tests/layout.rs`.
-- `app/src/terminal/replica.test.ts` (recorded agent streams rebuild the
-  engine's final screen; bad frames change nothing), `runs.test.ts`,
-  `input.test.ts`, `frames.test.ts`, `data-client.test.ts`.
-- `app/src/features/panes/terminal-view.test.tsx` with GPUIX's test renderer:
-  attaching with the measured grid, painting a recorded Claude Code screen as
-  style runs, the cursor, title, bell and exit callbacks, reconnecting,
-  resizing, keys (⌘ chords never sent), focus, paste and its confirmation,
-  dropped files, selection and ⌘C, mouse reporting with ⇧ bypass, wheel
-  scrollback, ⌘A, ⌘-click links (opening, the reporting bypass, the hover
-  underline), and the 2 000-node budget; `links.test.ts` for what counts as a
-  URL and where it ends; `drop.test.ts` for how dropped paths are escaped and
-  staged ones kept and released; `effects.test.ts` for when they are released;
-  `pane-grid.test.tsx` for a drop focusing its pane and never answering a
-  dialog; `dispatch-form.test.tsx` for drops joining the prompt and clicking
-  nothing.
+- `crates/app/src/select.rs`: copy joins rows except after a soft wrap and
+  trims trailing blanks, a double click takes a word with path characters,
+  find is case-insensitive and oldest first, a link is found under the pointer
+  without its trailing punctuation and a soft-wrapped link opens whole;
+  `crates/app/src/drop.rs`: dropped paths are escaped as terminals type them.
 - `crates/daemon/tests/lifecycle.rs`:
   `an_osc_11_query_is_answered_with_the_palette_background` and
   `a_shell_survives_detach_and_reattach_with_the_same_screen`.

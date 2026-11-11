@@ -6,8 +6,9 @@
 (Codex CLI) TUIs in terminal panes — tabs across the top, up to four panes per tab —
 and adds what a terminal multiplexer lacks: status per pane ("needs you", "your
 turn", running, exited), progress from the agent's own plan, the model the
-session reports, stored session history, the CLIs' own worktrees, and a queue of
-tasks the user writes for a pane, typed when that pane is idle.
+session reports, stored session history and the CLIs' own worktrees. plyd also
+keeps a queue of tasks the user writes for a pane, typed when that pane is idle
+(`task.*`); no app offers it today.
 
 It is **not** an LLM wrapper. It never calls a model API, holds a key, rewrites a
 prompt, hands a transcript between CLIs or picks a model or effort level; the
@@ -21,33 +22,30 @@ map. `docs/` has one document per subject (see the doc map below).
 
 | | |
 |---|---|
-| the app | `crates/app` (`ply-app`, binary `ply`) — Rust on GPUI 0.2.2; what `just dmg` bundles. `conn.rs` (C2 per pane, decoded off the UI thread), `paint.rs` (the terminal element), `chrome.rs` (tokens and chrome from the React app), `forms.rs` (⌘N/⌘T, accounts), `launcher.rs` (starting plyd) |
-| the earlier app | `app/` — Bun + React on GPUIX (`@gpuix/react` and `@gpuix/native` 0.11.0 from npm). `app/src/main.tsx` is the entry, `app/src/theme/tokens.ts` the palette both apps follow |
-| the terminal view | `app/src/terminal/` (C2 codec, replica, runs, input, selection) and `app/src/features/panes/terminal-view.tsx` |
+| the app | `crates/app` (`ply-app`, binary `ply`) — Rust on GPUI 0.2.2; what `just dmg` bundles. `main.rs` (the window, tabs, grid and ⌘ chords), `conn.rs` (C2 per pane, decoded off the UI thread), `paint.rs` (the terminal element), `select.rs` (selection, copy, find, links), `keys.rs` (keystrokes → KEY frames), `chrome.rs` (palette, type scale and chrome), `forms.rs` (⌘N/⌘T, accounts), `drop.rs` (dropped files, pasted images), `control.rs` (the C1 client), `launcher.rs` (starting plyd); Geist, Geist Mono and the icon in `assets/` |
 | the daemon | `crates/daemon` (`plyd`): ptys, one libghostty-vt terminal per pane, the C1 and C2 servers, SQLite, the LaunchAgent, the task queue and its dispatch (`panes/queue.rs`, `panes/dispatch.rs`), `skill.list`, `usage.get` (Claude panes' status line reports and the CLIs' own usage records, read-only), the Claude account switch (`accounts.rs`) and Codex's sign-in (`accounts/codex.rs`) |
-| the terminal engine | `crates/term` (`ply-term`) over `crates/ghostty-sys`, whose `build.rs` downloads pristine ghostty 0fa3d57 (libghostty-vt 1.0.0, SHA-256-verified) and builds libghostty-vt from it with Zig |
+| the terminal engine | `crates/term` (`ply-term`) over `crates/ghostty-sys`, whose `build.rs` downloads pristine ghostty 0fa3d57 (libghostty-vt 1.0.0, SHA-256-verified) and builds libghostty-vt from it with Zig; its `Replica` is the C2 decoder the app draws from |
 | the agent adapters | `crates/agents` (`ply-agents`): launch specs, the Claude hooks file, hook/notify/OSC 9/rollout parsing, progress, the version check, the plan-usage parsers, skill discovery (`skills.rs`, read-only) |
 | the hook helper | `crates/hook` (`ply-hook`): one hook or notify payload → one C3 line to plyd; as `ply-hook statusline`, Claude Code's status line in a pane |
-| the wire types | `crates/proto` (`ply-proto`): C1, C2, C3; `app/src/ipc/proto.gen.ts` is generated from it |
+| the wire types | `crates/proto` (`ply-proto`): C1, C2, C3 |
 | the bundle | `scripts/dmg.ts` (`just dmg`) → `dist/ply.app` and `dist/ply-<version>.dmg` with the GPUI app as `MacOS/ply` |
 | the gates | `scripts/check-rules.ts` (the invariants and layers), `scripts/check-deps.ts` + `deps.allow.toml` (dependency admission), `deny.toml` |
-| tests | `#[cfg(test)]` inline, `crates/*/tests/` (golden frames, fake CLIs, replays), `*.test.ts(x)` beside the app code |
+| tests | `#[cfg(test)]` inline, `crates/*/tests/` (golden frames, fake CLIs, replays), `scripts/*.test.ts` for the gates |
 
 ## Rules the tests enforce
 
-**Raw pty bytes never enter JavaScript.** plyd emulates every pane; the app
-receives decoded screen rows over C2 and draws them. C1 types carry no byte
-fields and the app never opens a pty (`checkInv2NoPtyBytes`).
+**Raw pty bytes never reach the app.** plyd emulates every pane; the app
+receives decoded screen rows over C2 and paints them. C1 types carry no byte
+fields (`checkInv2NoPtyBytes`), and ply-app may not depend on ghostty-sys or
+any pty crate (the layer table below).
 
-**No network.** No `fetch`, `WebSocket`, `XMLHttpRequest` or remote `<img>` in
-`app/` (`checkInv1NoNetwork`); no ply crate depends on an HTTP client
-(`cargo deny`).
+**No network.** No ply crate depends on an HTTP client (`cargo deny`), and each
+crate's dependencies are limited to its row of the layer table.
 
-**The UI moves to GPUI in Rust.** The owner reversed D4, INV-3 and INV-13 on
-2026-11-11: GPUIX is no longer ply's UI framework, a ply crate may depend on
-`gpui`, and GPUIX need not be used as released. Until the GPUI app replaces it,
-`app/` stays on `@gpuix/*` 0.11.0. plyd, ply-term and ply-agents still never
-link `gpui` (the layer table below).
+**The UI is GPUI in Rust.** The owner reversed D4, INV-3 and INV-13 on
+2026-11-11: GPUIX is no longer ply's UI framework and a ply crate may depend on
+`gpui`. The React app on GPUIX was deleted the same day; ply has no JavaScript
+UI. plyd, ply-term and ply-agents never link `gpui` (the layer table below).
 
 **libghostty-vt is plyd's alone and stays pristine.** Only ply-daemon enables
 ply-term's `engine` feature; `crates/ghostty-sys/build.rs` pins the ghostty
@@ -76,31 +74,23 @@ Enter does not clear it) or one showing a dialog; failure pauses the pane's queu
 `claude --worktree <name>` and shows what the CLI reports. The only worktree
 column is `worktree_seen` (`checkInv7Worktrees`).
 
-**One keymap, one palette.** Every binding is declared once in
-`app/src/keymap/keymap.ts`; `keymap.test.ts` fails on duplicates, reserved chords
-and chords without ⌘. `onKeyDown` appears only in `keymap/dispatcher.ts`, the
-overlay forms and `terminal-view.tsx` (`checkInv4KeyHandlers`). No hex colour
-outside `theme/tokens.ts` (`checkInv5Palette`).
-
 **The protocols are strict and pinned by golden files.** `deny_unknown_fields`
 on every C1/C3 struct, 1 MiB caps, version checks at `hello` and ATTACH; one
-golden file per message in `crates/proto/tests/golden/`, and the TypeScript C2
-codec must decode and re-encode `golden/c2/*.bin` byte for byte. `bun run gen`
-must leave `proto.gen.ts` unchanged (`checkGeneratedTypes`).
+golden file per message in `crates/proto/tests/golden/`, which the encoder must
+write byte for byte and the decoder read back.
 
-**Layers are checked, not agreed.** `checkCrateLayers` and `checkAppLayers`
-enforce the tables below: a crate's normal dependencies must all be in its row
-(dev- and build-dependencies may go beyond it, never to a forbidden crate), and
+**Layers are checked, not agreed.** `checkCrateLayers` enforces the table below:
+a crate's normal dependencies must all be in its row (dev- and
+build-dependencies may go beyond it, never to a forbidden crate), and
 `check-rules.test.ts` fails when the table and the check disagree;
-`checkRustStandards` rejects `unwrap`/`expect` and
-`unsafe` where they are not allowed; `checkExactPins` wants `=x.y.z`.
+`checkRustStandards` rejects `unsafe` and `anyhow` where they are not allowed;
+`checkExactPins` wants `=x.y.z`.
 
 **Every dependency is admitted.** A new direct dependency needs a row in
 `deps.allow.toml` with its repository, stars, last commit and number of
 contributors with ≥ 5 commits (≥ 1 000 stars, a commit in the last 6 months,
 ≥ 3 such contributors, not experimental). `bun scripts/check-deps.ts --add` fills
-it in. The exceptions by decision are GPUIX, libghostty-vt, `thiserror` and
-`anyhow`.
+it in. The exceptions by decision are libghostty-vt, `thiserror` and `anyhow`.
 
 **No personal data in the repository.** No real user names, `/Users/<name>`
 paths, hostnames or machine values in code, docs, tests or fixtures; use
@@ -108,11 +98,11 @@ paths, hostnames or machine values in code, docs, tests or fixtures; use
 
 ## The things that will bite you
 
-**Always set `PLY_HOME` when testing.** Without it `bun run dev` (and the app)
-starts plyd through `plyd install-agent`, which writes a real
-`~/Library/LaunchAgents/dev.ply.app.plyd.plist` and kickstarts it, and plyd uses
-the real `~/Library/Application Support/ply/`. With `PLY_HOME=<dir>` everything
-lives under that directory and plyd runs in the foreground.
+**Always set `PLY_HOME` when testing.** Without it the app (`cargo run -p
+ply-app`, or the bundle) starts plyd through `plyd install-agent`, which writes
+a real `~/Library/LaunchAgents/dev.ply.app.plyd.plist` and kickstarts it, and
+plyd uses the real `~/Library/Application Support/ply/`. With `PLY_HOME=<dir>`
+everything lives under that directory and the app starts `plyd --foreground`.
 
 **libghostty-vt needs Zig 0.17.0 and, once, the network.** Set `ZIG` or put
 `zig` on `PATH`. The first build of `ghostty-sys` downloads the ghostty source
@@ -129,45 +119,10 @@ machine.** They start Codex's self-updater (it updated an install once). The
 adapters read versions from the install layout instead. Never pass
 permission-skipping flags to `claude` or `codex`.
 
-**GPUIX owns ⌘Q, ⌘H, ⌥⌘H, ⌘M and ⌘W.** Its app menu binds them and they never
-reach the app: ⌘W closes the window (sessions keep running). Close pane is
-⌘⇧W. GPUIX moves focus on Tab and ⇧Tab and dims every focusable element but
-the focused one by default; ply turns both off (`WINDOW_KEY_DEFAULTS` in
-`keymap/dispatcher.ts`, which `windowKeyListeners` and `mountWithStore` pass to
-every `render()` and `createTestRoot()`), so Tab and ⇧Tab reach the terminal and
-the forms step their own fields.
-
-**AppKit sends no key-up for a key released while ⌘ is down**, and GPUIX
-reports no modifier change. A binding that must notice a release (the ⌘U hold)
-ends on the key's repeats stopping, any other key, or a blur, as well as the
-key-up (`keymap/dispatcher.ts`, `docs/keybindings.md`).
-
-**A file drop is a mouse-up to GPUIX.** It fires `onClick` on the drop's
-release, so a clickable a file may land on takes `onFileDrop` itself (the ⌘E
-form, the needs-you strip). GPUI hovers nothing while the last input was a key
-and a drop does not end that, so a drop right after typing reaches no element;
-a test that presses a key first must move the mouse (`nativeSimulateMouseMove`)
-by 8 px or more, which GPUIX 0.11 needs to end keyboard mode, before
-`nativeSimulateFileDrop` (`docs/terminal.md`, **Dropped files**).
-
-**GPUIX reports the border box.** `getElementBounds` is the element's border
-box, and a scroll container's bounds stay put while its rows move with its
-scroll offset (`palette.tsx`, `skill-list.tsx`).
-
-**GPUIX is not the DOM.** Every `<text>` needs an explicit `color` (text does not
-inherit it); `div` is block until `display: "flex"`; a shrinking flex child needs
-`minWidth: 0`; style values are numbers, not CSS shorthand, and `boxShadow` is an
-object; there is no `<button>` (use `<div onClick>`); never nest `<text>` inside
-`<text>`. Each `<text>` is its own box and Taffy rounds every box, so a flex row
-of fractional-width runs drifts: a terminal row is a `<div>` whose `<text>` runs
-are each placed absolutely at `round(col × cell width)` (`terminal-row.tsx`,
-since 22e57db), and rows are memoized and keyed by content. Every host node
-costs about 0.01 ms per frame.
-
-**Fonts.** ply loads no font file (GPUIX 0.11's `registerFont` is unused), so Geist and Geist Mono
-(`app/assets/fonts/`) are used only when installed in `~/Library/Fonts`
-(`just fonts` copies them there; the owner runs it); otherwise the app falls
-back to Menlo and the system font.
+**The app starts plyd only when it starts.** `launcher::ensure_plyd` runs once,
+before the window opens; when plyd stops later the app reconnects to whatever
+answers but starts nothing, so after stopping plyd reopen the app or start plyd
+yourself.
 
 **The comment hook.** A machine-level hook rejects comment blocks longer than one
 line (two with a tracking link). Doc comments state errors and safety inline
@@ -177,30 +132,27 @@ line (two with a tracking link). Doc comments state errors and safety inline
 
 ```
 cargo run -p ply-daemon -- --foreground        # plyd, with PLY_HOME=<dir> set
-bun run dev                                    # the app, hot-reloaded, attaching to that plyd
+cargo run -p ply-app                           # the app, with the same PLY_HOME; starts plyd itself when nothing answers
 cargo run -p ply-daemon --example ply-cli      # the command-line C1/C2 test client
 ```
 
 ## Build & test
 
 ```
-just check      # fmt, clippy -D warnings, cargo doc -D warnings, check-rules, check-deps, biome, tsc
-just test       # cargo nextest, doctests, bun test
-just e2e        # journeys J1–J7 on the full app and the release plyd (opens windows, unfocused)
+just check      # fmt, clippy -D warnings, cargo doc -D warnings, check-rules, check-deps, biome, tsc on scripts/
+just test       # cargo nextest, doctests, bun test on scripts/
 just deny       # licences, advisories, the HTTP-client ban
-just gen        # regenerate app/src/ipc/proto.gen.ts
-just fonts      # copy the Geist TTFs into ~/Library/Fonts (writes outside the checkout)
 just dmg        # dist/ply.app and dist/ply-<version>.dmg: the GPUI app, plyd, ply-hook at profile dist, ad-hoc signed
 ```
 
-Toolchain: Rust 1.97.1 (`rust-toolchain.toml`), Zig 0.17.0, Bun 1.3.10, just.
+Toolchain: Rust 1.97.1 (`rust-toolchain.toml`), Zig 0.17.0, Bun 1.3.10 (for `scripts/`), just.
 The GitHub repository is public; push only when asked. `docs/development.md` walks through setup, the
 run directory and the logs.
 
 ## Personal use
 
-ply is built for one person's machine. It runs from this checkout — `bun run
-dev` (or `bun app/src/main.tsx`) against a release `plyd` (`cargo build
+ply is built for one person's machine. It runs from this checkout —
+`cargo run --release -p ply-app` against a release `plyd` (`cargo build
 --release -p ply-daemon -p ply-hook`) — or as the `.app` that `just dmg` builds.
 The bundle is ad-hoc signed and not notarised, and there is no release workflow
 and no distribution, so notarisation and licensing questions do not arise.
@@ -218,28 +170,21 @@ with `pane_id` when there is one; `?` needs no log. Async only in plyd; each pty
 is read on its own std thread into a bounded channel; every channel is bounded
 and every socket read is capped. Workspace dependencies are pinned exactly.
 
-**TypeScript.** Strict, no `any`, named exports, kebab-case files, PascalCase
-components. One store (`state/store.ts`) read through selectors; state changes
-through typed actions and a pure reducer; `effects.ts` is the only ipc caller.
-Features select state and dispatch actions; `ui/` is presentational. Colours,
-fonts and sizes come from `tokens.ts`.
-
 **Documentation.** Every crate opens with a `//!` doc: what it is for, the
 contract it implements and what it must never do. Every public Rust item has a
 `///` doc stating its contract — guarantees, units, error cases, threading and
 blocking — never a restatement of its name (`missing_docs` is on and warnings are
-errors). Exported TypeScript symbols carry TSDoc for what the types do not say;
-each component gets a one-line role. A change that alters behaviour described in
-`docs/` or `ARCHITECTURE.md` updates that document in the same commit.
+errors). Exported TypeScript symbols in `scripts/` carry TSDoc for what the types
+do not say. A change that alters behaviour described in `docs/` or
+`ARCHITECTURE.md` updates that document in the same commit.
 
 **Comments.** Only a non-obvious why: a hidden invariant, a workaround with its
 upstream link, a surprising performance choice. One line. No restating the code,
 no dividers, no commented-out code, no TODO without an owner or trigger.
 
 **Tests.** Behaviour, not mocks. Daemon behaviour is tested with fake CLIs
-(`crates/daemon/tests/fake/`) and a sandboxed `HOME`/`CODEX_HOME`; UI with
-GPUIX's test renderer (`@gpuix/react/testing`) and the mock daemon
-(`app/src/ipc/mock-server.ts`, tests only). Output stays free of warnings.
+(`crates/daemon/tests/fake/`) and a sandboxed `HOME`/`CODEX_HOME`. Output stays
+free of warnings.
 
 **Commits.** Conventional Commits with the work package as scope
 (`feat(wp5): …`). Use the repository's git identity; stage explicit paths, never
@@ -250,16 +195,13 @@ GPUIX's test renderer (`@gpuix/react/testing`) and the mock daemon
 
 | Unit | May depend on | Must not depend on |
 |---|---|---|
-| ply-proto | serde, serde_json, ts-rs, thiserror | any ply crate |
+| ply-proto | serde, serde_json, thiserror | any ply crate |
 | ghostty-sys | nothing at runtime; Zig, curl, shasum and tar at build time | any ply crate |
 | ply-term | ply-proto, thiserror, tracing; ghostty-sys only with `engine` | gpui, tokio, any I/O crate |
 | ply-agents | ply-proto, serde, serde_json, thiserror | ply-term, tokio, gpui |
 | ply-daemon | ply-proto, ply-term (`engine`), ply-agents, anyhow (in `main.rs`), notify, rusqlite, rustix, serde, serde_json, thiserror, tokio, toml, tracing, tracing-appender, tracing-subscriber | gpui |
 | ply-hook | serde_json | everything else, tokio included |
 | ply-app | ply-proto, ply-term (no `engine`), futures, gpui, serde, serde_json, tracing, tracing-appender, tracing-subscriber | tokio, ghostty-sys |
-| app/src/features | state, ui, keymap types, theme, terminal | another feature, ipc |
-| app/src/ui | theme | state, ipc, features |
-| app/src/ipc, app/src/terminal | proto.gen, theme, state/actions | features, ui |
 
 ## Doc map
 
@@ -267,16 +209,16 @@ GPUIX's test renderer (`@gpuix/react/testing`) and the mock daemon
 - `docs/control-channel.md` — C1 in full: framing, handshake, every method, event and error code.
 - `docs/screen-protocol.md` — C2 in full: every frame's byte layout, flow control, history paging.
 - `docs/agents.md` — Claude Code and Codex: launch, hooks, notify, OSC 9, rollouts, progress, the status state machine.
-- `docs/terminal.md` — libghostty-vt, the engine options, input encoding, the React terminal view, measured numbers.
-- `docs/keybindings.md` — every binding, the reserved chords, how to add one.
+- `docs/terminal.md` — libghostty-vt, the engine options, input encoding, the GPUI terminal view, measured numbers.
+- `docs/keybindings.md` — every key the app acts on and every key it leaves to the pane.
 - `docs/configuration.md` — paths, `config.toml`, settings, environment variables, what a run writes to the machine.
 - `docs/development.md` — setup, the gates, running plyd and the app, adding a dependency.
-- `docs/perf.md` — the commissioning evidence: journeys J1–J7, P1–P5 and F1–F4 against their targets, the real-CLI
-  runs and the soak, with the commands that measured them.
+- `docs/perf.md` — the GPUI app against the React app it replaced, then the React app's commissioning evidence
+  (journeys J1–J7, P1–P5 and F1–F4, the real-CLI runs and the soak) as history.
 
 ## What lives elsewhere
 
-- GPUIX (React on Zed's GPUI) — npm `@gpuix/react` / `@gpuix/native`, source at remorses/gpuix.
+- GPUI — Zed's UI framework, crate `gpui` 0.2.2 from crates.io, source in zed-industries/zed.
 - libghostty-vt — 1.0.0, ghostty-org/ghostty at 0fa3d57 (`vt-1.0.0`), downloaded pristine by `crates/ghostty-sys/build.rs` into
   `~/Library/Caches/ply/ghostty/`.
 - `claude` and `codex` — the user's own installs, found on the login-shell `PATH`; ply never installs or

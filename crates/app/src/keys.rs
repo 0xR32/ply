@@ -1,4 +1,4 @@
-//! GPUI keystrokes → C2 KEY frames, the rules of app/src/terminal/input.ts `keyFrame` (option-as-meta off).
+//! GPUI keystrokes → C2 KEY frames that plyd encodes against the pane's live modes (option-as-meta off).
 
 use gpui::Keystroke;
 use ply_proto::data::{KeyAction, KeyEvent, Mods};
