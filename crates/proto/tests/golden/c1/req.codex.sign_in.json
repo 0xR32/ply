@@ -1,0 +1,8 @@
+{
+  "t": "req",
+  "id": 32,
+  "m": "codex.sign_in",
+  "p": {
+    "workspace_id": 1
+  }
+}

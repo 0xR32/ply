@@ -18,7 +18,7 @@ test:
     cargo test --doc --workspace --locked
     bun test ./app ./scripts
 
-# Licences, advisories and the INV-1/INV-3 crate bans.
+# Licences, advisories and the INV-1 crate ban.
 deny:
     cargo deny check
 
@@ -38,7 +38,7 @@ icon:
     for s in 16 32 128 256 512; do resvg app/assets/icon/ply.svg target/ply.iconset/icon_${s}x${s}.png -w $s && resvg app/assets/icon/ply.svg target/ply.iconset/icon_${s}x${s}@2x.png -w $((s * 2)); done
     iconutil -c icns target/ply.iconset -o app/assets/icon/ply.icns
 
-# dist/ply.app and dist/ply-<version>.dmg: plyd at profile dist, the app compiled by Bun to bytecode, ad-hoc signed.
+# dist/ply.app and dist/ply-<version>.dmg: the GPUI app, plyd and ply-hook at profile dist, ad-hoc signed.
 dmg:
     bun scripts/dmg.ts
 

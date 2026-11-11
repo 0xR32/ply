@@ -21,14 +21,15 @@ map. `docs/` has one document per subject (see the doc map below).
 
 | | |
 |---|---|
-| the app | `app/` — Bun + React on GPUIX (`@gpuix/react` and `@gpuix/native` 0.11.0 from npm, used as released). `app/src/main.tsx` is the entry, `app/src/theme/tokens.ts` the only palette |
+| the app | `crates/app` (`ply-app`, binary `ply`) — Rust on GPUI 0.2.2; what `just dmg` bundles. `conn.rs` (C2 per pane, decoded off the UI thread), `paint.rs` (the terminal element), `chrome.rs` (tokens and chrome from the React app), `forms.rs` (⌘N/⌘T, accounts), `launcher.rs` (starting plyd) |
+| the earlier app | `app/` — Bun + React on GPUIX (`@gpuix/react` and `@gpuix/native` 0.11.0 from npm). `app/src/main.tsx` is the entry, `app/src/theme/tokens.ts` the palette both apps follow |
 | the terminal view | `app/src/terminal/` (C2 codec, replica, runs, input, selection) and `app/src/features/panes/terminal-view.tsx` |
-| the daemon | `crates/daemon` (`plyd`): ptys, one libghostty-vt terminal per pane, the C1 and C2 servers, SQLite, the LaunchAgent, the task queue and its dispatch (`panes/queue.rs`, `panes/dispatch.rs`), `skill.list`, `usage.get` (Claude panes' status line reports and the CLIs' own usage records, read-only), the Claude account switch (`accounts.rs`) |
+| the daemon | `crates/daemon` (`plyd`): ptys, one libghostty-vt terminal per pane, the C1 and C2 servers, SQLite, the LaunchAgent, the task queue and its dispatch (`panes/queue.rs`, `panes/dispatch.rs`), `skill.list`, `usage.get` (Claude panes' status line reports and the CLIs' own usage records, read-only), the Claude account switch (`accounts.rs`) and Codex's sign-in (`accounts/codex.rs`) |
 | the terminal engine | `crates/term` (`ply-term`) over `crates/ghostty-sys`, whose `build.rs` downloads pristine ghostty 0fa3d57 (libghostty-vt 1.0.0, SHA-256-verified) and builds libghostty-vt from it with Zig |
 | the agent adapters | `crates/agents` (`ply-agents`): launch specs, the Claude hooks file, hook/notify/OSC 9/rollout parsing, progress, the version check, the plan-usage parsers, skill discovery (`skills.rs`, read-only) |
 | the hook helper | `crates/hook` (`ply-hook`): one hook or notify payload → one C3 line to plyd; as `ply-hook statusline`, Claude Code's status line in a pane |
 | the wire types | `crates/proto` (`ply-proto`): C1, C2, C3; `app/src/ipc/proto.gen.ts` is generated from it |
-| the bundle | `scripts/dmg.ts` (`just dmg`) → `dist/ply.app` and `dist/ply-<version>.dmg`; `app/src/bundle.ts` is the bundled app's entry |
+| the bundle | `scripts/dmg.ts` (`just dmg`) → `dist/ply.app` and `dist/ply-<version>.dmg` with the GPUI app as `MacOS/ply` |
 | the gates | `scripts/check-rules.ts` (the invariants and layers), `scripts/check-deps.ts` + `deps.allow.toml` (dependency admission), `deny.toml` |
 | tests | `#[cfg(test)]` inline, `crates/*/tests/` (golden frames, fake CLIs, replays), `*.test.ts(x)` beside the app code |
 
@@ -38,12 +39,15 @@ map. `docs/` has one document per subject (see the doc map below).
 receives decoded screen rows over C2 and draws them. C1 types carry no byte
 fields and the app never opens a pty (`checkInv2NoPtyBytes`).
 
-**No network, no GPUI, GPUIX as released.** No `fetch`, `WebSocket`,
-`XMLHttpRequest` or remote `<img>` in `app/` (`checkInv1NoNetwork`); no ply crate
-depends on `gpui` or an HTTP client (`checkInv3NoGpui`, `cargo deny`);
-`@gpuix/*` are pinned exactly at 0.11.0 with no patches, overrides or local
-builds (`checkInv13Gpuix`). Solve UI problems with GPUIX's public API; never
-patch or fork a dependency or drop to GPUI in Rust.
+**No network.** No `fetch`, `WebSocket`, `XMLHttpRequest` or remote `<img>` in
+`app/` (`checkInv1NoNetwork`); no ply crate depends on an HTTP client
+(`cargo deny`).
+
+**The UI moves to GPUI in Rust.** The owner reversed D4, INV-3 and INV-13 on
+2026-11-11: GPUIX is no longer ply's UI framework, a ply crate may depend on
+`gpui`, and GPUIX need not be used as released. Until the GPUI app replaces it,
+`app/` stays on `@gpuix/*` 0.11.0. plyd, ply-term and ply-agents still never
+link `gpui` (the layer table below).
 
 **libghostty-vt is plyd's alone and stays pristine.** Only ply-daemon enables
 ply-term's `engine` feature; `crates/ghostty-sys/build.rs` pins the ghostty
@@ -183,10 +187,10 @@ cargo run -p ply-daemon --example ply-cli      # the command-line C1/C2 test cli
 just check      # fmt, clippy -D warnings, cargo doc -D warnings, check-rules, check-deps, biome, tsc
 just test       # cargo nextest, doctests, bun test
 just e2e        # journeys J1–J7 on the full app and the release plyd (opens windows, unfocused)
-just deny       # licences, advisories, the HTTP-client and gpui bans
+just deny       # licences, advisories, the HTTP-client ban
 just gen        # regenerate app/src/ipc/proto.gen.ts
 just fonts      # copy the Geist TTFs into ~/Library/Fonts (writes outside the checkout)
-just dmg        # dist/ply.app and dist/ply-<version>.dmg: profile dist, Bun bytecode, ad-hoc signed
+just dmg        # dist/ply.app and dist/ply-<version>.dmg: the GPUI app, plyd, ply-hook at profile dist, ad-hoc signed
 ```
 
 Toolchain: Rust 1.97.1 (`rust-toolchain.toml`), Zig 0.17.0, Bun 1.3.10, just.
@@ -252,6 +256,7 @@ GPUIX's test renderer (`@gpuix/react/testing`) and the mock daemon
 | ply-agents | ply-proto, serde, serde_json, thiserror | ply-term, tokio, gpui |
 | ply-daemon | ply-proto, ply-term (`engine`), ply-agents, anyhow (in `main.rs`), notify, rusqlite, rustix, serde, serde_json, thiserror, tokio, toml, tracing, tracing-appender, tracing-subscriber | gpui |
 | ply-hook | serde_json | everything else, tokio included |
+| ply-app | ply-proto, ply-term (no `engine`), futures, gpui, serde, serde_json, tracing, tracing-appender, tracing-subscriber | tokio, ghostty-sys |
 | app/src/features | state, ui, keymap types, theme, terminal | another feature, ipc |
 | app/src/ui | theme | state, ipc, features |
 | app/src/ipc, app/src/terminal | proto.gen, theme, state/actions | features, ui |
@@ -275,6 +280,6 @@ GPUIX's test renderer (`@gpuix/react/testing`) and the mock daemon
 - libghostty-vt — 1.0.0, ghostty-org/ghostty at 0fa3d57 (`vt-1.0.0`), downloaded pristine by `crates/ghostty-sys/build.rs` into
   `~/Library/Caches/ply/ghostty/`.
 - `claude` and `codex` — the user's own installs, found on the login-shell `PATH`; ply never installs or
-  updates them, and never signs them in itself: an account switch runs Claude Code's own `claude auth login`
-  in a pane for the user to complete (`crates/daemon/src/accounts.rs`).
+  updates them, and never signs them in itself: an account switch runs Claude Code's own `claude auth login`,
+  and a Codex sign-in Codex's own `codex login`, in a pane for the user to complete (`crates/daemon/src/accounts.rs`).
 - The design canvas (visual reference) and the published specification are claude.ai artifacts, not files here.

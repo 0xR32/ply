@@ -4,7 +4,7 @@ ply is three processes and three pieces of wire:
 
 | Piece | Where | Talks to |
 |---|---|---|
-| the app | `app/` (TypeScript, React on GPUIX from npm) | plyd over C1 (`run/plyd.sock`) and C2 (`run/data.sock`); nothing else |
+| the app | `crates/app` (Rust, GPUI), binary `ply`; the earlier React app on GPUIX in `app/` still runs | plyd over C1 (`run/plyd.sock`) and C2 (`run/data.sock`); nothing else |
 | `plyd`, the daemon | `crates/daemon` (Rust, tokio) over `crates/term`, `crates/agents`, `crates/proto` | the app over C1 and C2; every pane's child process over its pty; `ply-hook` over C3 (`run/hook.sock`); Codex rollout files and Claude Code's usage cache on disk, read-only |
 | `ply-hook` | `crates/hook` (std + serde_json) | plyd over C3, once per hook or notify invocation |
 | the agents | the user's own `claude` and `codex`, found on the login-shell `PATH` | their pty; `ply-hook` through the hooks and notify program ply passes per invocation |
@@ -25,7 +25,10 @@ rollout files, and the plan usage ⌘U shows is what the CLIs last reported:
 Claude Code's status line payload in any Claude pane, else what the CLIs
 recorded on disk (`usage.get`). Switching the Claude account runs Claude
 Code's own `claude auth login` in a pane and restarts the Claude panes on the
-new sign-in; ply keeps only the accounts' emails and organizations.
+new sign-in; ply keeps only the accounts' emails and organizations. Codex's
+sign-in runs its own `codex login` the same way and restarts the Codex panes;
+ply reads Codex's `auth.json` only for the email, plan and whether it is an API
+key, and keeps no token or key.
 
 ## Three boundaries
 
@@ -34,10 +37,10 @@ line, `#[serde(deny_unknown_fields)]` on every struct, `PROTOCOL_VERSION = 1`
 checked at `hello`. Requests carry an id and a method (`workspace.*`, `pane.*`,
 `session.list`, `theme.set`, `layout.*`, `settings.*`, `daemon.shutdown`,
 `usage.get`, the task queue's `task.*`, `queue.pause` and `skill.list`, and
-the Claude account switch's `account.*`); plyd broadcasts events (`pane.added`,
-`pane.removed`, `pane.status`, `pane.progress`, `pane.meta`, `pane.exit`,
-`daemon.stopping`, `task.changed`, `queue.changed`, `account.changed`) to every
-client.
+the Claude account switch's `account.*` and Codex's sign-in, `codex.*`); plyd
+broadcasts events (`pane.added`, `pane.removed`, `pane.status`, `pane.progress`,
+`pane.meta`, `pane.exit`, `daemon.stopping`, `task.changed`, `queue.changed`,
+`account.changed`, `codex.changed`) to every client.
 The Rust types in `crates/proto/src/control.rs` and `pane.rs` are the single
 source; `bun run gen` writes `app/src/ipc/proto.gen.ts` from them with ts-rs, and
 `check-rules` fails when that file is stale. C1 carries no pty bytes (INV-2).
@@ -95,7 +98,7 @@ crates/agents/src
 │                    account.rs (`claude auth status` and `claude auth login` argv, the status parser)
 ├── codex/           mod.rs (launch, -c overrides, thread binding) · notify.rs · osc9.rs (classification) ·
 │                    rollout.rs (records, update_plan, discovery) · literal.rs (code-mode JS literals) ·
-│                    usage.rs (token_count rate limits)
+│                    usage.rs (token_count rate limits) · account.rs (`codex login` argv, the auth.json and ID token parser)
 ├── install.rs       reads a CLI's version from its install layout without executing it
 ├── usage.rs         what both usage parsers share: window labels, RFC 3339 times
 ├── skills.rs        skill, command and prompt files and the plugin registry → Skill records (R61)
@@ -115,7 +118,8 @@ crates/daemon/src
 ├── tail.rs          C4: finding and tailing a Codex pane's rollout
 ├── usage.rs         usage.get: Claude panes' status line reports, else the CLIs' own files, bounded, cached 5 s
 ├── skills.rs        skill.list: the folders each CLI reads its skills from, bounded, read-only, cached 10 s
-├── accounts.rs      account.list / account.switch: `claude auth status`, the sign-in pane, the restart on a new sign-in
+├── accounts.rs      account.list / account.switch: `claude auth status`, the sign-in pane, the restart on a new sign-in;
+│                    accounts/codex.rs: codex.account / codex.sign_in, auth.json read-only, `codex login`, the same restart
 ├── osc.rs · branch.rs   OSC 7/9 and typed input; the git branch label
 ├── publisher.rs     the C2 delivery rules as small clocked state machines
 ├── pty.rs           rustix pty + Command, setsid/TIOCSCTTY in the one audited pre_exec block
@@ -187,9 +191,9 @@ that `daemon-launcher.ts` finds its plyd beside the app's own executable in
 
 ## Layering rules
 
-- No ply crate depends on `gpui`; the UI is plain GPUIX + React
-  (`checkInv3NoGpui`). GPUIX is used exactly as released at 0.11.0, with no
-  patches, overrides or local builds (`checkInv13Gpuix`).
+- The UI moves from GPUIX + React to GPUI in Rust (the owner reversed D4,
+  INV-3 and INV-13 on 2026-11-11); until then `app/` stays on GPUIX 0.11.0.
+  plyd, ply-term and ply-agents never link `gpui` (`checkCrateLayers`).
 - libghostty-vt is linked only by plyd: `ghostty-sys` is reached through
   ply-term's `engine` feature, and only ply-daemon enables it
   (`checkInv17Ghostty`, which also checks that `ghostty-sys/build.rs` pins
@@ -208,5 +212,5 @@ that `daemon-launcher.ts` finds its plyd beside the app's own executable in
 - ply never creates, removes or records git worktrees; the only worktree column
   is `worktree_seen`, what the CLI reported (`checkInv7Worktrees`).
 - Every direct dependency is admitted in `deps.allow.toml` with its INV-16
-  numbers (`scripts/check-deps.ts`); `cargo deny` bans HTTP clients and `gpui`
-  for every ply crate.
+  numbers (`scripts/check-deps.ts`); `cargo deny` bans HTTP clients for every
+  ply crate.

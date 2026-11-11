@@ -86,7 +86,7 @@ pub enum PaneCmd {
     /// `starting`, and `stopped` is answered once the process exited and the terminal was reset, with no exit reported.
     /// A busy pane drops `stopped` at once; one closed meanwhile drops it at the exit, which it reports as usual.
     Reload(oneshot::Sender<()>),
-    /// Claude Code's sign-in changed (`account.switch`): once the agent is at rest, stop its process and relaunch it on the new sign-in, resuming its session when it has one; queued tasks wait for it.
+    /// The pane's CLI was signed in to another account (`account.switch`, `codex.sign_in`): once the agent is at rest, stop its process and relaunch it on the new sign-in, resuming its session when it has one; queued tasks wait for it.
     ReloadAtRest,
     /// The process about to be spawned from this spec (`pane.resume`): prepares the agent integration for it.
     Launch(Box<LaunchSpec>),

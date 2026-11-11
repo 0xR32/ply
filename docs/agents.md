@@ -767,14 +767,17 @@ checks that every file it read is unchanged (INV-8).
 ## What ply never does to the user's configuration
 
 ply never writes `~/.claude/settings.json`, `~/.claude.json` or
-`~/.codex/config.toml` (INV-8); it reads `~/.claude.json` only for the usage
-cache above, and the user's `settings.json` files only for their `statusLine`
-and their `enabledPlugins` (**Skills**). Everything it configures is per invocation:
-Claude Code's `--settings` file lives in ply's own `run/panes/<id>/`, and
-Codex's options are `-c` arguments. ply never passes a permission-skipping flag,
-never installs or updates either CLI, never signs one in itself (an account
-switch runs Claude Code's own `claude auth login`, which the user completes;
-**Switching the Claude account**), and adds no hook to the user's settings.
+`~/.codex/config.toml`, nor anything else under `CODEX_HOME` (INV-8); it reads
+`~/.claude.json` only for the usage cache above, Codex's `auth.json` only for
+the account it names (**Signing in to Codex**), and the user's `settings.json`
+files only for their `statusLine` and their `enabledPlugins` (**Skills**).
+Everything it configures is per invocation: Claude Code's `--settings` file
+lives in ply's own `run/panes/<id>/`, and Codex's options are `-c` arguments.
+ply never passes a permission-skipping flag, never installs or updates either
+CLI, never signs one in itself (an account switch runs Claude Code's own `claude
+auth login`, and a Codex sign-in Codex's own `codex login`, which the user
+completes; **Switching the Claude account**, **Signing in to Codex**), and adds
+no hook to the user's settings.
 
 The CLIs keep writing their own state as they do in any terminal: Claude Code
 its transcripts under `~/.claude/`, Codex its rollouts under
@@ -905,6 +908,53 @@ sign-in tab. The switch is held
 in memory, so after a plyd restart the sign-in tab comes back as a fresh shell
 and its switch is forgotten.
 
+## Signing in to Codex
+
+`codex.account` names the account Codex is signed in with, read from Codex's
+own `$CODEX_HOME/auth.json` (default `~/.codex/auth.json`;
+`crates/daemon/src/accounts/codex.rs`, parsed by
+`crates/agents/src/codex/account.rs`). plyd opens the file read-only, reads at
+most 64 KiB and takes three things from it: whether it is an API key
+(`auth_mode` other than ChatGPT, or, in an older file without `auth_mode`, an
+`OPENAI_API_KEY` and no `tokens`), and for a ChatGPT sign-in the `email` and the
+`https://api.openai.com/auth` claim's `chatgpt_plan_type` from the payload of
+`tokens.id_token`. That token is a JWT; plyd decodes its payload (base64url,
+then JSON) without checking its signature, since the result is only shown. The
+key's value, the access and refresh tokens and the rest of the file are skipped
+while parsing; none is kept, logged, returned or quoted in an error, and nothing
+under `CODEX_HOME` is ever written. A missing, oversized or unreadable file, or
+one without a key or tokens, is no sign-in. Codex set to keep its credentials
+in the keychain instead (`cli_auth_credentials_store`) has no `auth.json`, so
+ply shows it as signed out.
+
+Codex, unlike Claude Code, cannot be pointed at a specific account: `codex
+login` signs in to whatever the browser's ChatGPT sign-in picks. So there is no
+list of known accounts, and moving Codex to another account is signing in
+again:
+
+1. **Sign in.** `codex.sign_in` opens a new tab, `Codex sign-in`, running the
+   login `PATH`'s `codex login` with no other argument in the workspace's
+   directory. This is Codex's own sign-in: it opens the browser (or prints the
+   address), and on success Codex writes its own `auth.json`.
+2. **Check.** When `codex login` exits 0, plyd reads `auth.json` again. A
+   non-zero exit, or a file still without a sign-in, leaves the tab open with
+   what it printed (`failed`). Closing the tab while it runs cancels the
+   sign-in. The same account as before (the same email, ignoring case, or an API
+   key again) closes the tab and changes nothing more (`unchanged`). Another
+   email, or a move between a ChatGPT sign-in and an API key, closes the tab
+   (`signed_in`).
+3. **Restart.** On another account plyd tells every live Codex pane to restart
+   on it, since a running Codex keeps the credentials it started with. Each pane
+   restarts once at rest, as in **Switching the Claude account**: its process
+   stops, the terminal resets, and it comes back as `codex resume <thread>`
+   when its thread can be resumed, or as a new Codex session in the same
+   directory when it cannot. Queued tasks wait for the restarted process.
+   Claude and shell panes are untouched.
+
+`codex.changed` reports the outcome and the number of panes that restart. One
+Codex sign-in runs at a time, independently of a Claude account switch, and is
+held in memory like it.
+
 ## Tests
 
 - `crates/agents/tests/launch.rs`: the exact argv, environment and settings file
@@ -975,8 +1025,16 @@ and its switch is forgotten.
   pane with `--resume`, a pane without a prompt afresh and a running one only
   after its turn (with its queued task typed into the restarted process), the
   personal and Team accounts of one email kept apart; and a failed, cancelled
-  or unchanged sign-in restarting nothing. `crates/agents/src/claude/account.rs`
-  tests the status parser and the sign-in argv.
+  or unchanged sign-in restarting nothing. The same for Codex: `codex.account`
+  over a sandboxed `CODEX_HOME/auth.json` (a ChatGPT sign-in, an API key, none),
+  `codex.sign_in` running fake-codex's `codex login` with no other argument in
+  its own tab and refusing a second one, a new account restarting a Codex pane
+  with `resume <thread>` and one without a turn afresh while the Claude pane
+  stays, and a failed, cancelled or unchanged sign-in restarting nothing.
+  `crates/agents/src/claude/account.rs` tests the status parser and the sign-in
+  argv; `crates/agents/src/codex/account.rs` the `auth.json` and ID token parser
+  on synthetic JWTs (a personal plan, API-key modes, files without a sign-in,
+  malformed files and tokens whose errors quote none of them) and `codex login`.
 - `crates/daemon/tests/lifecycle.rs`:
   `an_agent_pane_runs_the_cli_from_the_login_path_with_its_launch_spec` (a fake
   `claude` on the login `PATH` gets the adapter's argv, environment and files)

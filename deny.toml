@@ -1,4 +1,4 @@
-# cargo-deny policy for every ply-* crate: INV-1 (no HTTP clients), INV-3 (no gpui), licences, advisories.
+# cargo-deny policy for every ply-* crate: INV-1 (no HTTP clients), licences, advisories.
 
 [graph]
 targets = ["aarch64-apple-darwin"]
@@ -34,8 +34,8 @@ allow-wildcard-paths = true
 highlight = "all"
 deny = [
   { crate = "reqwest", reason = "INV-1: ply makes no network requests" },
-  { crate = "hyper", reason = "INV-1: ply makes no network requests" },
-  { crate = "hyper-util", reason = "INV-1: ply makes no network requests" },
+  { crate = "hyper", wrappers = ["hyper-rustls", "hyper-util", "zed-reqwest"], reason = "INV-1: only inside gpui's image-URL client, which ply never configures" },
+  { crate = "hyper-util", wrappers = ["hyper-rustls", "zed-reqwest"], reason = "INV-1: only inside gpui's image-URL client, which ply never configures" },
   { crate = "ureq", reason = "INV-1: ply makes no network requests" },
   { crate = "isahc", reason = "INV-1: ply makes no network requests" },
   { crate = "surf", reason = "INV-1: ply makes no network requests" },
@@ -44,8 +44,6 @@ deny = [
   { crate = "curl-sys", reason = "INV-1: ply makes no network requests" },
   { crate = "http-client", reason = "INV-1: ply makes no network requests" },
   { crate = "awc", reason = "INV-1: ply makes no network requests" },
-  { crate = "gpui", reason = "INV-3: no ply crate links gpui (ADR-0011)" },
-  { crate = "gpuix-native", reason = "INV-3: no ply crate links gpuix-native (ADR-0011)" },
 ]
 
 [sources]

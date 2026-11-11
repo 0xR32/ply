@@ -9,7 +9,7 @@
 //! LaunchAgent ([`launchd`]) with no idle exit, holding a power assertion while an agent runs ([`power`]). One plyd
 //! runs per data directory ([`lock`]); every path moves under `PLY_HOME` for tests ([`paths`]).
 //!
-//! It never renders, never links gpui (spec 3.2, 8.2, INV-3), never sends raw pty bytes over C1 (INV-2), never
+//! It never renders, never links gpui (spec 3.2, 8.2), never sends raw pty bytes over C1 (INV-2), never
 //! writes the CLIs' own configuration (INV-8) and never creates or records the CLIs' worktrees (INV-7). `unsafe`
 //! is denied crate-wide and allowed only in the one audited `pre_exec` block of [`pty`] (spec 9.1).
 //!
@@ -19,7 +19,7 @@
 //! integration ([`panes::agent`]) into `pane.status`, `pane.progress` and `pane.meta`, with a branch label from git
 //! ([`branch`]). After a restart, panes whose process is gone are `lost`, and `pane.resume` brings them back (WP9).
 //! `usage.get` answers with the plan usage the CLIs report: Claude panes' status lines, else the CLIs' own files ([`usage`], Ruling R59), read-only.
-//! `account.switch` moves Claude Code to another claude.ai account through its own `claude auth login`, run in a pane, and restarts the Claude panes on it ([`accounts`]).
+//! `account.switch` moves Claude Code to another claude.ai account through its own `claude auth login`, run in a pane, and restarts the Claude panes on it ([`accounts`]); `codex.sign_in` does the same for Codex with `codex login` ([`accounts::codex`]).
 //!
 //! ```no_run
 //! # async fn start() -> Result<(), ply_daemon::Error> {

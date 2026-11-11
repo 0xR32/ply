@@ -1,0 +1,9 @@
+{
+  "t": "evt",
+  "e": "codex.changed",
+  "p": {
+    "pane_id": 10,
+    "outcome": "cancelled",
+    "panes": 0
+  }
+}

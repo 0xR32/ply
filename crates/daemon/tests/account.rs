@@ -1,7 +1,8 @@
 //! The Claude account switch against a real plyd and fake-claude: `account.list` reads `claude auth status`,
 //! `account.switch` runs `claude auth login` in a tab of its own, and a new sign-in restarts every Claude pane on it
 //! once at rest (resuming a session it can, ahead of a queued task); a failed, cancelled or unchanged sign-in moves
-//! nothing.
+//! nothing. Codex's sign-in, against fake-codex: `codex.account` reads `$CODEX_HOME/auth.json`, `codex.sign_in` runs
+//! `codex login` in a tab of its own, and a new account restarts every Codex pane on it the same way.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -11,11 +12,11 @@ use std::path::Path;
 use std::time::Duration;
 
 use common::fake::{
-    Fake, claude_payload, claude_session, hook_program, install, launches, sign_in_done, typed,
-    wait_status,
+    Fake, claude_payload, claude_session, codex_thread, hook_program, install, launches,
+    sign_in_done, typed, wait_status,
 };
 use common::{Control, Sandbox, eventually};
-use ply_proto::control::{AccountChanged, ErrorCode, Event};
+use ply_proto::control::{AccountChanged, CodexChanged, ErrorCode, Event};
 use ply_proto::pane::{PaneStatus, SignInOutcome, TaskState};
 use serde_json::{Value, json};
 
@@ -70,8 +71,12 @@ fn wait_listed(c: &mut Control, ws: u64, pane: u64, key: &str, want: &Value) {
 }
 
 fn runs_of(sb: &Sandbox, pane: u64) -> Vec<String> {
+    runs_in(sb, "claude", pane)
+}
+
+fn runs_in(sb: &Sandbox, cli: &str, pane: u64) -> Vec<String> {
     let tag = format!("launch pane={pane} ");
-    launches(sb, "claude")
+    launches(sb, cli)
         .into_iter()
         .filter(|l| l.starts_with(&tag))
         .collect()
@@ -295,6 +300,220 @@ fn a_failed_cancelled_or_unchanged_sign_in_restarts_nothing() {
         runs_of(&sb, pane).len(),
         1,
         "the Claude pane kept its process"
+    );
+    assert_eq!(listed(&mut c, ws, pane)["status"], "idle");
+}
+
+const CODEX_PLUS: &str = "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJlbWFpbCI6InNvbWVvbmVAZXhhbXBsZS5jb20iLCJodHRwczovL2FwaS5vcGVuYWkuY29tL2F1dGgiOnsiY2hhdGdwdF9wbGFuX3R5cGUiOiJwbHVzIn19.c2lnbmF0dXJl";
+
+const CODEX_TEAM: &str = "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJlbWFpbCI6Im90aGVyQGV4YW1wbGUuY29tIiwiaHR0cHM6Ly9hcGkub3BlbmFpLmNvbS9hdXRoIjp7ImNoYXRncHRfcGxhbl90eXBlIjoidGVhbSJ9fQ.c2lnbmF0dXJl";
+
+const CODEX_API_KEY: &str = r#"{"auth_mode":"apikey","OPENAI_API_KEY":"sk-example","tokens":null}"#;
+
+fn codex_auth(id_token: &str) -> String {
+    json!({
+        "auth_mode": "chatgpt",
+        "OPENAI_API_KEY": null,
+        "tokens": {
+            "id_token": id_token,
+            "access_token": "example-access-token",
+            "refresh_token": "example-refresh-token",
+            "account_id": "00000000-0000-4000-8000-0000000000c1"
+        },
+        "last_refresh": "2026-11-01T00:00:00Z"
+    })
+    .to_string()
+}
+
+fn codex_changed(c: &mut Control) -> CodexChanged {
+    match c.wait_event(WAIT, |e| matches!(e, Event::CodexChanged(_))) {
+        Some(Event::CodexChanged(a)) => a,
+        other => panic!("no codex.changed: {other:?}"),
+    }
+}
+
+fn codex_sign_in(c: &mut Control, ws: u64) -> u64 {
+    c.call("codex.sign_in", json!({"workspace_id": ws}))
+        .unwrap()["id"]
+        .as_u64()
+        .unwrap()
+}
+
+fn codex_logins(sb: &Sandbox) -> Vec<String> {
+    std::fs::read_to_string(sb.home.join("fake-codex-auth.log"))
+        .unwrap_or_default()
+        .lines()
+        .map(str::to_owned)
+        .collect()
+}
+
+#[test]
+fn a_new_codex_sign_in_restarts_every_codex_pane_on_it_once_at_rest() {
+    let sb = Sandbox::new("cxacct");
+    install(&sb);
+    hook_program();
+    let codex_home = sb.root.join("codex-home");
+    std::fs::create_dir_all(&codex_home).unwrap();
+    let auth = codex_home.join("auth.json");
+    std::fs::write(&auth, codex_auth(CODEX_PLUS)).unwrap();
+    let _plyd = sb.start_with(&[("CODEX_HOME", codex_home.to_str().unwrap())]);
+    let (mut c, ws) = sb.control();
+
+    assert_eq!(
+        c.call("codex.account", json!({})).unwrap(),
+        json!({"current": {"email": "someone@example.com", "plan": "plus", "api_key": false}})
+    );
+
+    let talked = create(&mut c, ws, "codex", &sb.home);
+    // A directory of its own, so its rollout tailer cannot claim the other pane's new rollout.
+    let fresh_dir = sb.home.join("fresh");
+    std::fs::create_dir_all(&fresh_dir).unwrap();
+    let fresh = create(&mut c, ws, "codex", &fresh_dir);
+    let claude = create(&mut c, ws, "claude", &sb.home);
+    let fake = Fake::ready(&sb, talked);
+    fake.send("session");
+    wait_listed(
+        &mut c,
+        ws,
+        talked,
+        "session_ref",
+        &json!(codex_thread(talked)),
+    );
+    fake.send("turn task_started turn-1");
+    wait_listed(&mut c, ws, talked, "status", &json!("running"));
+    fake.send("turn task_complete turn-1");
+    for pane in [talked, fresh, claude] {
+        wait_listed(&mut c, ws, pane, "status", &json!("idle"));
+    }
+
+    let sign_in = codex_sign_in(&mut c, ws);
+    let pane = listed(&mut c, ws, sign_in);
+    assert_eq!(pane["cli"], "shell");
+    let layout = c.call("layout.get", json!({"workspace_id": ws})).unwrap();
+    let tab = layout["tabs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["id"] == pane["tab_id"])
+        .cloned()
+        .unwrap();
+    assert_eq!(tab["name"], "Codex sign-in");
+    assert!(eventually(WAIT, || !codex_logins(&sb).is_empty()));
+    assert_eq!(codex_logins(&sb), ["login"], "codex login and nothing else");
+    assert_eq!(
+        c.call("codex.account", json!({})).unwrap()["signing_in"],
+        sign_in
+    );
+    let again = c
+        .call("codex.sign_in", json!({"workspace_id": ws}))
+        .unwrap_err();
+    assert_eq!(again.code, ErrorCode::InvalidState, "{again:?}");
+
+    c.events.clear();
+    sign_in_done(&sb, &format!("ok {}", codex_auth(CODEX_TEAM)));
+    let done = codex_changed(&mut c);
+    assert_eq!(done.outcome, SignInOutcome::SignedIn);
+    assert_eq!(done.pane_id, sign_in);
+    assert_eq!(done.panes, 2, "every live Codex pane, not the Claude one");
+    assert_eq!(
+        serde_json::to_value(&done.account).unwrap(),
+        json!({"email": "other@example.com", "plan": "team", "api_key": false})
+    );
+    assert_eq!(
+        listed(&mut c, ws, sign_in),
+        Value::Null,
+        "the sign-in pane closed"
+    );
+
+    wait_status(&mut c, talked, PaneStatus::Starting, WAIT);
+    wait_listed(&mut c, ws, talked, "status", &json!("idle"));
+    let runs = runs_in(&sb, "codex", talked);
+    assert_eq!(runs.len(), 2, "{runs:?}");
+    assert!(
+        runs[1].contains(&format!("resume {}", codex_thread(talked))),
+        "{runs:?}"
+    );
+    assert!(eventually(WAIT, || runs_in(&sb, "codex", fresh).len() == 2));
+    assert!(
+        !runs_in(&sb, "codex", fresh)[1].contains("resume"),
+        "a thread without a turn has nothing to resume, so it starts afresh"
+    );
+    wait_listed(&mut c, ws, fresh, "status", &json!("idle"));
+    assert_eq!(
+        runs_of(&sb, claude).len(),
+        1,
+        "the Claude pane kept its process"
+    );
+
+    assert_eq!(
+        c.call("codex.account", json!({})).unwrap(),
+        json!({"current": {"email": "other@example.com", "plan": "team", "api_key": false}})
+    );
+    assert_eq!(
+        std::fs::read_to_string(&auth).unwrap().trim_end(),
+        codex_auth(CODEX_TEAM),
+        "plyd left Codex's own auth.json as codex login wrote it"
+    );
+}
+
+#[test]
+fn a_failed_cancelled_or_unchanged_codex_sign_in_restarts_nothing() {
+    let sb = Sandbox::new("cxacctno");
+    install(&sb);
+    hook_program();
+    let _plyd = sb.start();
+    let (mut c, ws) = sb.control();
+    assert_eq!(
+        c.call("codex.account", json!({})).unwrap(),
+        json!({}),
+        "no auth.json is no sign-in"
+    );
+    let codex_home = sb.home.join(".codex");
+    std::fs::create_dir_all(&codex_home).unwrap();
+    std::fs::write(codex_home.join("auth.json"), CODEX_API_KEY).unwrap();
+    assert_eq!(
+        c.call("codex.account", json!({})).unwrap(),
+        json!({"current": {"api_key": true}})
+    );
+    let pane = create(&mut c, ws, "codex", &sb.home);
+    let fake = Fake::ready(&sb, pane);
+    fake.send("session");
+    wait_listed(&mut c, ws, pane, "session_ref", &json!(codex_thread(pane)));
+    wait_listed(&mut c, ws, pane, "status", &json!("idle"));
+
+    let failed = codex_sign_in(&mut c, ws);
+    sign_in_done(&sb, "fail 3");
+    let done = codex_changed(&mut c);
+    assert_eq!(done.outcome, SignInOutcome::Failed);
+    assert_eq!((done.account, done.panes), (None, 0));
+    let kept = listed(&mut c, ws, failed);
+    assert_eq!(
+        kept["status"], "exited",
+        "the failed sign-in stays to be read"
+    );
+    assert_eq!(kept["exit_code"], 3);
+    c.call("pane.close", json!({"pane_id": failed, "kill": false}))
+        .unwrap();
+
+    let cancelled = codex_sign_in(&mut c, ws);
+    assert!(eventually(WAIT, || sb.home.join("fake-login.cmd").exists()));
+    c.call("pane.close", json!({"pane_id": cancelled, "kill": true}))
+        .unwrap();
+    assert_eq!(codex_changed(&mut c).outcome, SignInOutcome::Cancelled);
+    std::fs::remove_file(sb.home.join("fake-login.cmd")).unwrap();
+
+    let unchanged = codex_sign_in(&mut c, ws);
+    sign_in_done(&sb, &format!("ok {CODEX_API_KEY}"));
+    let done = codex_changed(&mut c);
+    assert_eq!(done.outcome, SignInOutcome::Unchanged);
+    assert_eq!(done.panes, 0);
+    assert_eq!(listed(&mut c, ws, unchanged), Value::Null);
+
+    std::thread::sleep(Duration::from_millis(1500));
+    assert_eq!(
+        runs_in(&sb, "codex", pane).len(),
+        1,
+        "the Codex pane kept its process"
     );
     assert_eq!(listed(&mut c, ws, pane)["status"], "idle");
 }

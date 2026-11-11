@@ -3,8 +3,8 @@
 //! The app sends [`ClientMsg`] (`hello` first, then `req`); plyd answers with [`ServerMsg`] (`welcome`, `res`,
 //! `evt`). Every struct rejects unknown fields (INV-10). Requests carry a method name in `m` and its params in
 //! `p`; [`Call`] lists every method of the 4.1 table plus ADR-0009's additions, Ruling R59's `usage.get`, Ruling
-//! R60's task queue (`task.*`, `queue.pause`), Ruling R61's `skill.list` and the Claude account switch (`account.*`),
-//! and [`METHODS`] names the result type of each. No type here carries pty bytes (INV-2): a task's text is a string the user wrote, typed by plyd.
+//! R60's task queue (`task.*`, `queue.pause`), Ruling R61's `skill.list`, the Claude account switch (`account.*`) and
+//! Codex's sign-in (`codex.*`), and [`METHODS`] names the result type of each. No type here carries pty bytes (INV-2): a task's text is a string the user wrote, typed by plyd.
 //!
 //! ```
 //! use ply_proto::control::{Call, ClientMsg, PaneCloseParams, Request};
@@ -25,8 +25,8 @@ use ts_rs::TS;
 
 use crate::error::{Error, Result};
 use crate::pane::{
-    AgentCli, ClaudeAccount, Cli, Layout, Pane, PaneId, PaneStatus, Progress, QueueState, Settings,
-    SignInOutcome, Task, TaskId, TaskTarget, TerminalTheme, UnixSeconds,
+    AgentCli, ClaudeAccount, Cli, CodexAccount, Layout, Pane, PaneId, PaneStatus, Progress,
+    QueueState, Settings, SignInOutcome, Task, TaskId, TaskTarget, TerminalTheme, UnixSeconds,
 };
 
 /// Longest accepted C1 line in bytes, newline included; a reader must stop buffering at this size.
@@ -497,6 +497,12 @@ pub enum Call {
     /// `account.switch` → `Pane`: a new tab running `claude auth login`; `account.changed` follows when it ends.
     #[serde(rename = "account.switch")]
     AccountSwitch(AccountSwitchParams),
+    /// `codex.account` → [`crate::pane::CodexAccounts`]: Codex's sign-in now, from its `auth.json`, read-only.
+    #[serde(rename = "codex.account")]
+    CodexAccount(Empty),
+    /// `codex.sign_in` → `Pane`: a new tab running `codex login`; `codex.changed` follows when it ends.
+    #[serde(rename = "codex.sign_in")]
+    CodexSignIn(WorkspaceRef),
 }
 
 impl Call {
@@ -527,6 +533,8 @@ impl Call {
             Self::SkillList(_) => "skill.list",
             Self::AccountList(_) => "account.list",
             Self::AccountSwitch(_) => "account.switch",
+            Self::CodexAccount(_) => "codex.account",
+            Self::CodexSignIn(_) => "codex.sign_in",
         }
     }
 }
@@ -662,6 +670,16 @@ pub const METHODS: &[MethodInfo] = &[
     MethodInfo {
         name: "account.switch",
         params: "AccountSwitchParams",
+        result: "Pane",
+    },
+    MethodInfo {
+        name: "codex.account",
+        params: "Empty",
+        result: "CodexAccounts",
+    },
+    MethodInfo {
+        name: "codex.sign_in",
+        params: "WorkspaceRef",
         result: "Pane",
     },
 ];
@@ -905,6 +923,22 @@ pub struct AccountChanged {
     pub panes: u32,
 }
 
+/// `codex.changed` payload: a `codex.sign_in` ended.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+#[ts(optional_fields)]
+pub struct CodexChanged {
+    /// The pane that ran `codex login`; closed already unless the sign-in failed.
+    pub pane_id: PaneId,
+    /// How it ended: `signed_in`, `unchanged`, `failed` or `cancelled`, never `other_account`.
+    pub outcome: SignInOutcome,
+    /// The account Codex is signed in with now, when known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account: Option<CodexAccount>,
+    /// Codex panes that restart on the new sign-in, each once it is at rest; 0 when the account did not change.
+    pub panes: u32,
+}
+
 /// Daemon events, tagged `"e"` with the payload in `"p"`; broadcast to every connected client.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(tag = "e", content = "p", deny_unknown_fields)]
@@ -939,4 +973,7 @@ pub enum Event {
     /// An `account.switch` ended: signed in, unchanged, failed or cancelled.
     #[serde(rename = "account.changed")]
     AccountChanged(AccountChanged),
+    /// A `codex.sign_in` ended: signed in, unchanged, failed or cancelled.
+    #[serde(rename = "codex.changed")]
+    CodexChanged(CodexChanged),
 }

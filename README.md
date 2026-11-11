@@ -14,11 +14,14 @@ ply only manages terminal panes and tracks and stores sessions.
 
 Two processes cooperate over three local Unix-socket protocols:
 
-- **Ply.app** is a Bun process running React on [GPUIX](https://github.com/remorses/gpuix) (`@gpuix/react` and the
-  prebuilt `@gpuix/native` from npm, painted by Zed's GPUI with Metal). It draws the tabs, panes, overlays and the
-  terminal view, owns the keymap and the UI state, and sends control requests. It never opens a pty, never spawns an
-  agent and never sees raw pty bytes: it receives decoded screen rows and draws each row as a line of styled text
-  runs in Geist Mono.
+- **Ply.app** is a Rust app on Zed's [GPUI](https://www.gpui.rs) (`crates/app`, painted with Metal). It draws the tabs,
+  panes, the new-pane form, the account switch and the terminal view, and sends control requests. Each visible pane's
+  screen rows are decoded on a thread of their own and painted by one element per pane on the display's refresh, so
+  an idle window draws nothing. Dropped files are typed as paths, ⌘V pastes text or an image (saved, then typed as a
+  path the CLI reads), and clicks and drags reach programs that report the mouse. It never opens a pty, never spawns
+  an agent and never sees raw pty bytes. The earlier
+  React app on GPUIX (`app/`, `bun run dev`) still runs and still has what the GPUI app has not taken over yet
+  (selection and copy, find, the needs-you and queue strips, settings, ⌘U usage, ⌘E tasks).
 - **plyd** is a per-user LaunchAgent, not a child of the app. It owns every pane's process and pty, runs one
   [libghostty-vt](https://github.com/ghostty-org/ghostty) terminal per pane, encodes keys, mouse, focus and paste
   against that terminal's live modes, derives each pane's status from the CLIs' own hooks and notifications, and
@@ -41,7 +44,8 @@ crates/term                       ply-term: the libghostty-vt engine wrapper (pl
 crates/agents                     ply-agents: Claude Code and Codex launch specs, hook and rollout parsing
 crates/daemon                     ply-daemon, binary plyd
 crates/hook                       ply-hook, the hook and notify forwarder
-app/                              the React app (src/) and bundled fonts (assets/fonts, SIL OFL)
+crates/app                        ply-app, binary ply: the app on GPUI that `just dmg` bundles
+app/                              the earlier React app (src/), the icon and the bundled fonts (assets/, SIL OFL)
 scripts/                          repository gates: check-rules, check-deps, check-pr, gen
 deps.allow.toml                   every admitted dependency with its INV-16 numbers
 docs/                             one document per subject (control channel, screen protocol, agents, terminal, …)
@@ -71,7 +75,7 @@ macOS 13 or later on Apple Silicon, with:
 | `just check` | rustfmt, clippy `-D warnings`, rustdoc, check-rules, check-deps, Biome, tsc |
 | `just test` | `cargo nextest run` and `bun test` |
 | `just e2e` | journeys J1–J7 on the full app against the release `plyd` and fake CLIs (opens windows, unfocused) |
-| `just deny` | cargo-deny: licences, advisories, the HTTP-client and gpui bans |
+| `just deny` | cargo-deny: licences, advisories, the HTTP-client ban |
 | `bun run gen` | regenerates `app/src/ipc/proto.gen.ts` from ply-proto |
 | `just dmg` | builds `dist/ply.app` and `dist/ply-<version>.dmg`: optimised `plyd`, the app compiled to bytecode, Geist bundled |
 

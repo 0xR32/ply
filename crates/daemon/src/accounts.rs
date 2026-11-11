@@ -9,7 +9,7 @@
 //! before it records it, forgets the plan usage Claude Code reported for the old one, closes the sign-in pane and
 //! tells every live Claude pane to restart once at rest ([`PaneCmd::ReloadAtRest`]), resuming its session; the same
 //! account only closes the pane, and a failed sign-in leaves it open with what `claude auth login` printed.
-//! `account.changed` says how it ended. One switch runs at a time.
+//! `account.changed` says how it ended. One switch runs at a time per CLI; [`codex`] runs Codex's sign-in the same way.
 
 use std::collections::BTreeMap;
 use std::io::Write;
@@ -34,6 +34,8 @@ use crate::panes::launch;
 use crate::panes::pane::PaneCmd;
 use crate::panes::registry::{MethodResult, refuse};
 
+pub mod codex;
+
 /// Longest `claude auth status` may take before plyd gives up on it.
 pub const STATUS_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -56,10 +58,29 @@ enum Slot {
     Open(PaneId),
 }
 
+impl Slot {
+    fn pane(self) -> Option<PaneId> {
+        match self {
+            Self::Open(pane) => Some(pane),
+            Self::Free | Self::Opening => None,
+        }
+    }
+}
+
 #[derive(Debug)]
 struct State {
     known: Vec<ClaudeAccount>,
-    slot: Slot,
+    claude: Slot,
+    codex: Slot,
+}
+
+impl State {
+    fn slot(&mut self, cli: AgentCli) -> &mut Slot {
+        match cli {
+            AgentCli::Claude => &mut self.claude,
+            AgentCli::Codex => &mut self.codex,
+        }
+    }
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -68,7 +89,7 @@ struct AccountsFile {
     claude: Vec<ClaudeAccount>,
 }
 
-/// The accounts seen signed in and the switch under way; one per plyd, in [`Shared`].
+/// The Claude accounts seen signed in and each CLI's sign-in under way; one per plyd, in [`Shared`].
 #[derive(Debug)]
 pub struct Accounts {
     path: PathBuf,
@@ -96,7 +117,8 @@ impl Accounts {
             path: path.to_path_buf(),
             state: Mutex::new(State {
                 known,
-                slot: Slot::Free,
+                claude: Slot::Free,
+                codex: Slot::Free,
             }),
         }
     }
@@ -111,12 +133,9 @@ impl Accounts {
         }
     }
 
-    /// The pane of the switch under way, if one is.
-    pub fn signing_in(&self) -> Option<PaneId> {
-        match self.state().slot {
-            Slot::Open(pane) => Some(pane),
-            Slot::Free | Slot::Opening => None,
-        }
+    /// The pane of `cli`'s sign-in under way, once its pane is open.
+    pub fn signing_in(&self, cli: AgentCli) -> Option<PaneId> {
+        self.state().slot(cli).pane()
     }
 
     /// What `account.list` answers with `current` as Claude Code's sign-in now.
@@ -125,10 +144,7 @@ impl Accounts {
         ClaudeAccounts {
             current,
             known: state.known.clone(),
-            signing_in: match state.slot {
-                Slot::Open(pane) => Some(pane),
-                Slot::Free | Slot::Opening => None,
-            },
+            signing_in: state.claude.pane(),
         }
     }
 
@@ -155,26 +171,31 @@ impl Accounts {
         }
     }
 
-    fn begin(&self) -> MethodResult<()> {
+    fn begin(&self, cli: AgentCli) -> MethodResult<()> {
+        let name = match cli {
+            AgentCli::Claude => "Claude",
+            AgentCli::Codex => "Codex",
+        };
         let mut state = self.state();
-        match state.slot {
+        let slot = state.slot(cli);
+        match *slot {
             Slot::Free => {
-                state.slot = Slot::Opening;
+                *slot = Slot::Opening;
                 Ok(())
             }
             Slot::Opening => Err(refuse(
                 ErrorCode::InvalidState,
-                "a Claude sign-in is opening",
+                format!("a {name} sign-in is opening"),
             )),
             Slot::Open(pane) => Err(refuse(
                 ErrorCode::InvalidState,
-                format!("a Claude sign-in is open in pane {pane}"),
+                format!("a {name} sign-in is open in pane {pane}"),
             )),
         }
     }
 
-    fn set_slot(&self, slot: Slot) {
-        self.state().slot = slot;
+    fn set_slot(&self, cli: AgentCli, slot: Slot) {
+        *self.state().slot(cli) = slot;
     }
 }
 
@@ -208,12 +229,15 @@ pub async fn switch(shared: &Arc<Shared>, p: AccountSwitchParams) -> MethodResul
     if shared.is_stopping() {
         return Err(refuse(ErrorCode::ShuttingDown, "plyd is shutting down"));
     }
-    shared.accounts.begin()?;
+    shared.accounts.begin(AgentCli::Claude)?;
     let opened = open(shared, &p).await;
-    shared.accounts.set_slot(match &opened {
-        Ok((pane, _, _)) => Slot::Open(pane.id),
-        Err(_) => Slot::Free,
-    });
+    shared.accounts.set_slot(
+        AgentCli::Claude,
+        match &opened {
+            Ok((pane, _, _)) => Slot::Open(pane.id),
+            Err(_) => Slot::Free,
+        },
+    );
     let (pane, before, events) = opened?;
     tracing::info!(pane_id = pane.id, asked = ?p.account.as_ref().map(|a| &a.email), "a Claude sign-in opened");
     let sign_in = SignIn {
@@ -228,21 +252,8 @@ pub async fn switch(shared: &Arc<Shared>, p: AccountSwitchParams) -> MethodResul
 type Opened = (Pane, Option<ClaudeAccount>, broadcast::Receiver<Event>);
 
 async fn open(shared: &Arc<Shared>, p: &AccountSwitchParams) -> MethodResult<Opened> {
-    let cwd = {
-        let reg = shared.registry();
-        let workspace = reg
-            .workspaces()
-            .into_iter()
-            .find(|w| w.id == p.workspace_id)
-            .ok_or_else(|| {
-                refuse(
-                    ErrorCode::NotFound,
-                    format!("no workspace {}", p.workspace_id),
-                )
-            })?;
-        PathBuf::from(workspace.path)
-    };
-    let program = claude_program(shared).await?;
+    let cwd = workspace_dir(shared, p.workspace_id)?;
+    let program = cli_program(shared, AgentCli::Claude).await?;
     let email = p.account.as_ref().map(|a| a.email.as_str());
     let argv = sign_in_argv(&program, email).map_err(|e| {
         tracing::warn!(error = %e, "an account switch was refused");
@@ -255,9 +266,7 @@ async fn open(shared: &Arc<Shared>, p: &AccountSwitchParams) -> MethodResult<Ope
             None
         }
     };
-    // Subscribed before the process starts, so its exit cannot be missed.
-    let events = shared.events.subscribe();
-    let pane = launch::create_command(
+    let (pane, events) = open_tab(
         shared,
         p.workspace_id,
         &cwd,
@@ -267,6 +276,32 @@ async fn open(shared: &Arc<Shared>, p: &AccountSwitchParams) -> MethodResult<Ope
     )
     .await?;
     Ok((pane, before, events))
+}
+
+/// The directory of workspace `workspace_id`, where a sign-in tab runs; `not_found` when there is no such workspace.
+fn workspace_dir(shared: &Shared, workspace_id: u64) -> MethodResult<PathBuf> {
+    shared
+        .registry()
+        .workspaces()
+        .into_iter()
+        .find(|w| w.id == workspace_id)
+        .map(|w| PathBuf::from(w.path))
+        .ok_or_else(|| refuse(ErrorCode::NotFound, format!("no workspace {workspace_id}")))
+}
+
+/// Opens a new tab `tab` in the workspace running `argv` in `cwd`, with a subscription to the events that will tell how it ends.
+async fn open_tab(
+    shared: &Arc<Shared>,
+    workspace_id: u64,
+    cwd: &Path,
+    tab: &str,
+    title: &str,
+    argv: Vec<String>,
+) -> MethodResult<(Pane, broadcast::Receiver<Event>)> {
+    // Subscribed before the process starts, so its exit cannot be missed.
+    let events = shared.events.subscribe();
+    let pane = launch::create_command(shared, workspace_id, cwd, tab, title, argv).await?;
+    Ok((pane, events))
 }
 
 struct SignIn {
@@ -282,23 +317,28 @@ enum End {
     Stopping,
 }
 
+/// How a sign-in pane's login command ended, as a sign-in counts it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Ended {
+    Succeeded,
+    Failed,
+    Cancelled,
+    Stopping,
+}
+
 /// Waits for the sign-in pane's process to end, then carries out and announces the switch (module docs).
-async fn follow(shared: Arc<Shared>, sign_in: SignIn, mut events: broadcast::Receiver<Event>) {
+async fn follow(shared: Arc<Shared>, sign_in: SignIn, events: broadcast::Receiver<Event>) {
     let pane_id = sign_in.pane_id;
-    let end = wait_end(&shared, pane_id, &mut events).await;
-    drop(events);
-    if end == End::Stopping {
-        tracing::info!(pane_id, "plyd stops while a Claude sign-in is open");
-        shared.accounts.set_slot(Slot::Free);
-        return;
-    }
-    let closing = shared
-        .registry()
-        .entry(pane_id)
-        .is_none_or(|e| e.close_on_exit);
-    let (outcome, account) = match end {
-        End::Exited(_) | End::Closed if closing => (SignInOutcome::Cancelled, None),
-        End::Exited(0) => match auth_status(&shared).await {
+    let ended = wait_sign_in(&shared, pane_id, events).await;
+    let (outcome, account) = match ended {
+        Ended::Stopping => {
+            tracing::info!(pane_id, "plyd stops while a Claude sign-in is open");
+            shared.accounts.set_slot(AgentCli::Claude, Slot::Free);
+            return;
+        }
+        Ended::Cancelled => (SignInOutcome::Cancelled, None),
+        Ended::Failed => (SignInOutcome::Failed, None),
+        Ended::Succeeded => match auth_status(&shared).await {
             Ok(Some(account)) => (decide(&sign_in, &account), Some(account)),
             Ok(None) => (SignInOutcome::Failed, None),
             Err(e) => {
@@ -306,27 +346,55 @@ async fn follow(shared: Arc<Shared>, sign_in: SignIn, mut events: broadcast::Rec
                 (SignInOutcome::Failed, None)
             }
         },
-        End::Exited(_) | End::Closed | End::Stopping => (SignInOutcome::Failed, None),
     };
     let mut panes = 0;
     if let Some(account) = &account {
         shared.accounts.remember(account);
         if outcome != SignInOutcome::Unchanged {
             shared.usage.forget_claude().await;
-            panes = reload_claude_panes(&shared, pane_id).await;
+            panes = reload_panes(&shared, Cli::Claude, pane_id).await;
         }
         close_sign_in(&shared, pane_id).await;
     }
-    shared.accounts.set_slot(Slot::Free);
-    tracing::info!(pane_id, ?end, ?outcome, account = ?account.as_ref().map(|a| &a.email), panes, "the Claude sign-in ended");
-    let event = Event::AccountChanged(AccountChanged {
-        pane_id,
-        outcome,
-        account,
-        panes,
-    });
+    shared.accounts.set_slot(AgentCli::Claude, Slot::Free);
+    tracing::info!(pane_id, ?ended, ?outcome, account = ?account.as_ref().map(|a| &a.email), panes, "the Claude sign-in ended");
+    announce(
+        &shared,
+        Event::AccountChanged(AccountChanged {
+            pane_id,
+            outcome,
+            account,
+            panes,
+        }),
+    );
+}
+
+/// Waits for the sign-in pane's process to end: a pane closed first cancels the sign-in, and only exit code 0 succeeds.
+async fn wait_sign_in(
+    shared: &Shared,
+    pane_id: PaneId,
+    mut events: broadcast::Receiver<Event>,
+) -> Ended {
+    let end = wait_end(shared, pane_id, &mut events).await;
+    drop(events);
+    let closing = || {
+        shared
+            .registry()
+            .entry(pane_id)
+            .is_none_or(|e| e.close_on_exit)
+    };
+    match end {
+        End::Stopping => Ended::Stopping,
+        _ if closing() => Ended::Cancelled,
+        End::Exited(0) => Ended::Succeeded,
+        End::Exited(_) | End::Closed => Ended::Failed,
+    }
+}
+
+/// Broadcasts how a sign-in ended to every C1 client.
+fn announce(shared: &Shared, event: Event) {
     if shared.events.send(event).is_err() {
-        tracing::debug!("no C1 client to tell about the account switch");
+        tracing::debug!("no C1 client to tell how the sign-in ended");
     }
 }
 
@@ -380,8 +448,8 @@ async fn wait_end(
     }
 }
 
-/// Tells every live Claude pane but the sign-in's to restart on the new sign-in once at rest; returns how many were told.
-async fn reload_claude_panes(shared: &Shared, sign_in: PaneId) -> u32 {
+/// Tells every live `cli` pane but the sign-in's to restart on the new sign-in once at rest; returns how many were told.
+async fn reload_panes(shared: &Shared, cli: Cli, sign_in: PaneId) -> u32 {
     let handles: Vec<(PaneId, tokio::sync::mpsc::Sender<PaneCmd>)> = {
         let reg = shared.registry();
         reg.live_panes()
@@ -390,7 +458,7 @@ async fn reload_claude_panes(shared: &Shared, sign_in: PaneId) -> u32 {
             .filter_map(|id| {
                 let entry = reg.entry(id)?;
                 let handle = entry.handle.clone()?;
-                (entry.pane.cli == Cli::Claude).then_some((id, handle))
+                (entry.pane.cli == cli).then_some((id, handle))
             })
             .collect()
     };
@@ -421,13 +489,15 @@ async fn close_sign_in(shared: &Shared, pane_id: PaneId) {
     }
 }
 
-async fn claude_program(shared: &Shared) -> MethodResult<PathBuf> {
+/// The user's `cli` program on the login `PATH`, as panes find it; `cli_not_found` without one.
+async fn cli_program(shared: &Shared, cli: AgentCli) -> MethodResult<PathBuf> {
     let login = shared.login.settled().await;
-    let name = ply_agents::cli_name(AgentCli::Claude);
+    let name = ply_agents::cli_name(cli);
     login.which(name).ok_or_else(|| {
         tracing::warn!(
+            cli = name,
             from_shell = login.from_shell,
-            "claude is not on the login shell's PATH"
+            "the CLI is not on the login shell's PATH"
         );
         refuse(
             ErrorCode::CliNotFound,
@@ -438,7 +508,7 @@ async fn claude_program(shared: &Shared) -> MethodResult<PathBuf> {
 
 /// Runs `claude auth status --json` in the login environment, bounded by [`STATUS_TIMEOUT`] and [`MAX_STATUS_BYTES`]; its exit status is not used, since it may report a signed-out state with a failure.
 async fn auth_status(shared: &Shared) -> MethodResult<Option<ClaudeAccount>> {
-    let program = claude_program(shared).await?;
+    let program = cli_program(shared, AgentCli::Claude).await?;
     let fail = |what: String| -> ErrorBody {
         tracing::warn!(error = %what, "claude auth status failed");
         refuse(ErrorCode::Internal, what)
@@ -534,15 +604,30 @@ mod tests {
     }
 
     #[test]
-    fn one_switch_runs_at_a_time() {
+    fn one_sign_in_runs_at_a_time_per_cli() {
         let accounts = Accounts::load(Path::new("/nonexistent/accounts.json"));
-        accounts.begin().unwrap();
-        assert_eq!(accounts.begin().unwrap_err().code, ErrorCode::InvalidState);
-        accounts.set_slot(Slot::Open(7));
-        assert_eq!(accounts.signing_in(), Some(7));
-        assert!(accounts.begin().unwrap_err().msg.contains("pane 7"));
-        accounts.set_slot(Slot::Free);
-        accounts.begin().unwrap();
+        accounts.begin(AgentCli::Claude).unwrap();
+        assert_eq!(
+            accounts.begin(AgentCli::Claude).unwrap_err().code,
+            ErrorCode::InvalidState
+        );
+        accounts.set_slot(AgentCli::Claude, Slot::Open(7));
+        assert_eq!(accounts.signing_in(AgentCli::Claude), Some(7));
+        assert!(
+            accounts
+                .begin(AgentCli::Claude)
+                .unwrap_err()
+                .msg
+                .contains("pane 7")
+        );
+        accounts.begin(AgentCli::Codex).unwrap();
+        accounts.set_slot(AgentCli::Codex, Slot::Open(8));
+        assert_eq!(accounts.signing_in(AgentCli::Codex), Some(8));
+        assert_eq!(accounts.snapshot(None).signing_in, Some(7));
+        let codex = accounts.begin(AgentCli::Codex).unwrap_err();
+        assert!(codex.msg.contains("Codex") && codex.msg.contains("pane 8"));
+        accounts.set_slot(AgentCli::Claude, Slot::Free);
+        accounts.begin(AgentCli::Claude).unwrap();
     }
 
     #[test]

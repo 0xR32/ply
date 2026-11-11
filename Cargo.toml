@@ -7,6 +7,7 @@ members = [
   "crates/agents",
   "crates/daemon",
   "crates/hook",
+  "crates/app",
 ]
 
 [workspace.package]
@@ -21,9 +22,11 @@ ghostty-sys = { path = "crates/ghostty-sys" }
 ply-term = { path = "crates/term" }
 ply-agents = { path = "crates/agents" }
 anyhow = "=1.0.104"
+futures = "=0.3.34"
+gpui = { version = "=0.2.2", features = ["runtime_shaders"] }
 notify = "=8.2.0"
-rusqlite = { version = "=0.40.2", features = ["bundled", "fallible_uint"] }
-rustix = { version = "=1.1.5", default-features = false, features = ["std", "pty", "termios", "process", "fs", "stdio"] }
+rusqlite = { version = "=0.41.1", features = ["bundled", "fallible_uint"] }
+rustix = { version = "=1.1.6", default-features = false, features = ["std", "pty", "termios", "process", "fs", "stdio"] }
 serde = { version = "=1.0.229", features = ["derive"] }
 serde_json = "=1.0.151"
 thiserror = "=2.0.21"

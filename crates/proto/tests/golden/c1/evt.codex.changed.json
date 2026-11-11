@@ -1,0 +1,14 @@
+{
+  "t": "evt",
+  "e": "codex.changed",
+  "p": {
+    "pane_id": 10,
+    "outcome": "signed_in",
+    "account": {
+      "email": "someone@example.com",
+      "plan": "team",
+      "api_key": false
+    },
+    "panes": 2
+  }
+}

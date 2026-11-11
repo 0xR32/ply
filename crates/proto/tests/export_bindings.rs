@@ -11,21 +11,21 @@ use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 use ply_proto::control::{
-    AccountChanged, AccountSwitchParams, Answer, Call, ClientMsg, DaemonShutdownParams,
-    DaemonStopping, Empty, ErrorBody, ErrorCode, Event, HANDSHAKE_ID, Hello, LayoutSaveParams,
-    MAX_LINE_BYTES, METHODS, PaneAnswerParams, PaneCloseParams, PaneCreateParams, PaneExit,
-    PaneMeta, PaneProgress, PaneRef, PaneRemoved, PaneStatusChanged, QueuePauseParams, Request,
-    Response, ServerMsg, SessionListParams, SettingsSetParams, SkillListParams, TaskAddParams,
-    TaskMoveParams, TaskRef, ThemeSetParams, Welcome, WorkspaceOpenParams, WorkspaceRef,
-    WorktreeOption,
+    AccountChanged, AccountSwitchParams, Answer, Call, ClientMsg, CodexChanged,
+    DaemonShutdownParams, DaemonStopping, Empty, ErrorBody, ErrorCode, Event, HANDSHAKE_ID, Hello,
+    LayoutSaveParams, MAX_LINE_BYTES, METHODS, PaneAnswerParams, PaneCloseParams, PaneCreateParams,
+    PaneExit, PaneMeta, PaneProgress, PaneRef, PaneRemoved, PaneStatusChanged, QueuePauseParams,
+    Request, Response, ServerMsg, SessionListParams, SettingsSetParams, SkillListParams,
+    TaskAddParams, TaskMoveParams, TaskRef, ThemeSetParams, Welcome, WorkspaceOpenParams,
+    WorkspaceRef, WorktreeOption,
 };
 use ply_proto::hook::HookEnvelope;
 use ply_proto::pane::{
-    AccentName, AgentCli, BlockReason, ClaudeAccount, ClaudeAccounts, Cli, CliUsage, Layout,
-    MAX_PANES_PER_TAB, MAX_QUEUED_TASKS, MAX_TASK_TEXT_BYTES, OptionAsMeta, Pane, PaneStatus,
-    PauseReason, Progress, QueueState, Rgb, Session, Settings, SignInOutcome, Skill, SkillList,
-    SkillSource, Tab, Task, TaskList, TaskPool, TaskState, TaskTarget, TerminalTheme, Usage,
-    UsageWindow, Workspace,
+    AccentName, AgentCli, BlockReason, ClaudeAccount, ClaudeAccounts, Cli, CliUsage, CodexAccount,
+    CodexAccounts, Layout, MAX_PANES_PER_TAB, MAX_QUEUED_TASKS, MAX_TASK_TEXT_BYTES, OptionAsMeta,
+    Pane, PaneStatus, PauseReason, Progress, QueueState, Rgb, Session, Settings, SignInOutcome,
+    Skill, SkillList, SkillSource, Tab, Task, TaskList, TaskPool, TaskState, TaskTarget,
+    TerminalTheme, Usage, UsageWindow, Workspace,
 };
 use ply_proto::{C2_VERSION, HOOK_VERSION, PROTOCOL_VERSION};
 use ts_rs::{Config, TS};
@@ -86,6 +86,8 @@ fn generate() -> String {
         decl::<ClaudeAccount>(&cfg),
         decl::<ClaudeAccounts>(&cfg),
         decl::<SignInOutcome>(&cfg),
+        decl::<CodexAccount>(&cfg),
+        decl::<CodexAccounts>(&cfg),
         decl::<ClientMsg>(&cfg),
         decl::<ServerMsg>(&cfg),
         decl::<Hello>(&cfg),
@@ -123,6 +125,7 @@ fn generate() -> String {
         decl::<PaneExit>(&cfg),
         decl::<DaemonStopping>(&cfg),
         decl::<AccountChanged>(&cfg),
+        decl::<CodexChanged>(&cfg),
         decl::<HookEnvelope>(&cfg),
     ];
 
@@ -310,6 +313,8 @@ fn method_table_matches_call() {
             workspace_id: 1,
             account: None,
         }),
+        Call::CodexAccount(Empty {}),
+        Call::CodexSignIn(WorkspaceRef { workspace_id: 1 }),
     ];
     let from_calls: Vec<&str> = calls.iter().map(Call::method).collect();
     assert_eq!(names, from_calls);

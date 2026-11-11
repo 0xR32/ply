@@ -96,7 +96,7 @@ pub async fn create(shared: &Arc<Shared>, p: PaneCreateParams) -> MethodResult<P
     .await
 }
 
-/// A pane running `argv` instead of a shell, in a new tab named `tab_name` of `workspace_id` (`account.switch`'s `claude auth login`); it is a shell pane in every other way, so it comes back as one after a plyd restart.
+/// A pane running `argv` instead of a shell, in a new tab named `tab_name` of `workspace_id` (`claude auth login`, `codex login`); it is a shell pane in every other way, so it comes back as one after a plyd restart.
 /// Fails with `bad_request`, `not_found`, `invalid_state`, `spawn_failed`, `shutting_down`.
 pub async fn create_command(
     shared: &Arc<Shared>,
@@ -387,7 +387,7 @@ async fn relaunch_stopped(
     resumed.map(|()| true)
 }
 
-/// The second half of an account switch's reload ([`PaneCmd::ReloadAtRest`]), which the pane task started at rest: once its process exited, the pane resumes its session (`resume`) or starts its CLI afresh, now on Claude Code's new sign-in.
+/// The second half of a sign-in's reload ([`PaneCmd::ReloadAtRest`]), which the pane task started at rest: once its process exited, the pane resumes its session (`resume`) or starts its CLI afresh, now on the CLI's new sign-in.
 pub async fn resume_reloaded(
     shared: Arc<Shared>,
     pane_id: PaneId,
@@ -403,7 +403,7 @@ pub async fn resume_reloaded(
             tracing::info!(
                 pane_id,
                 resume,
-                "the pane restarted on Claude Code's new sign-in"
+                "the pane restarted on its CLI's new sign-in"
             );
         }
         Ok(false) => {

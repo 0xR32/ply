@@ -1,0 +1,13 @@
+{
+  "t": "res",
+  "id": 31,
+  "ok": true,
+  "r": {
+    "current": {
+      "email": "someone@example.com",
+      "plan": "pro",
+      "api_key": false
+    },
+    "signing_in": 10
+  }
+}

@@ -364,6 +364,8 @@ function applyEvent(state: AppState, event: Event): AppState {
       return upsertTask(state, event.p);
     case 'queue.changed':
       return setQueue(state, event.p);
+    case 'codex.changed':
+      return state;
     case 'account.changed':
       return accountChanged(state, event.p);
   }

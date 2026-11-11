@@ -12,9 +12,16 @@ import {
 } from './lib/repo';
 
 const ROOT = normalize(join(import.meta.dir, '..'));
-const GPUIX_VERSION = '0.11.0';
 
-const PLY_CRATES = ['ply-proto', 'ghostty-sys', 'ply-term', 'ply-agents', 'ply-daemon', 'ply-hook'];
+const PLY_CRATES = [
+  'ply-proto',
+  'ghostty-sys',
+  'ply-term',
+  'ply-agents',
+  'ply-daemon',
+  'ply-hook',
+  'ply-app',
+];
 const GPUI_CRATES = ['gpui', 'gpuix-native'];
 const IO_CRATES = ['tokio', 'async-std', 'mio', 'rusqlite', 'notify', 'rustix', 'libc', 'nix'];
 const HTTP_CRATES = [
@@ -148,47 +155,6 @@ function cargoMetadata(root: string): CargoMetadata | { error: string } {
     return { error: r.stderr.trim().split('\n').slice(-1)[0] ?? 'cargo metadata failed' };
   metadataCache = JSON.parse(r.stdout) as CargoMetadata;
   return metadataCache;
-}
-
-/** INV-3: no ply crate depends on gpui or gpuix-native, directly or transitively. */
-export function checkInv3NoGpui(root: string): CheckResult {
-  const res = ok();
-  const meta = cargoMetadata(root);
-  if ('error' in meta) {
-    res.violations.push({ check: 'INV-3', message: `cannot read cargo metadata: ${meta.error}` });
-    return res;
-  }
-  const byId = new Map(meta.packages.map((p) => [p.id, p]));
-  const graph = new Map((meta.resolve?.nodes ?? []).map((n) => [n.id, n.deps.map((d) => d.pkg)]));
-  for (const member of meta.workspace_members) {
-    const start = byId.get(member);
-    if (!start) continue;
-    const seen = new Map<string, string | null>([[member, null]]);
-    const queue = [member];
-    while (queue.length > 0) {
-      const id = queue.shift() as string;
-      const pkg = byId.get(id);
-      if (pkg && GPUI_CRATES.includes(pkg.name)) {
-        const path: string[] = [];
-        for (let at: string | null = id; at; at = seen.get(at) ?? null) {
-          path.unshift(byId.get(at)?.name ?? at);
-        }
-        res.violations.push({
-          check: 'INV-3',
-          file: relative(root, start.manifest_path),
-          message: `${start.name} depends on ${pkg.name} (${path.join(' -> ')})`,
-        });
-        break;
-      }
-      for (const next of graph.get(id) ?? []) {
-        if (!seen.has(next)) {
-          seen.set(next, id);
-          queue.push(next);
-        }
-      }
-    }
-  }
-  return res;
 }
 
 const KEY_HANDLER_FILES = new Set([
@@ -342,79 +308,6 @@ export function checkInv11PersonalData(
   return res;
 }
 
-function stripJsonTrailingCommas(text: string): string {
-  return text.replace(/,(\s*[}\]])/g, '$1');
-}
-
-/** INV-13 (ADR-0011): @gpuix/react and @gpuix/native pinned exactly at 0.11.0 from npm, unpatched. */
-export function checkInv13Gpuix(root: string): CheckResult {
-  const res = ok();
-  const manifests = ['package.json', 'app/package.json'];
-  for (const file of manifests) {
-    const text = readText(root, file);
-    if (text === null) continue;
-    const pkg = JSON.parse(text) as Record<string, unknown>;
-    for (const key of ['patchedDependencies', 'overrides', 'resolutions']) {
-      const section = pkg[key] as Record<string, unknown> | undefined;
-      const hits = Object.keys(section ?? {}).filter((k) => k.startsWith('@gpuix/'));
-      for (const hit of hits) {
-        res.violations.push({ check: 'INV-13', file, message: `${key} entry for ${hit}` });
-      }
-    }
-  }
-  const app = JSON.parse(readText(root, 'app/package.json') ?? '{}') as {
-    dependencies?: Record<string, string>;
-  };
-  for (const name of ['@gpuix/react', '@gpuix/native']) {
-    const spec = app.dependencies?.[name];
-    if (spec !== GPUIX_VERSION) {
-      res.violations.push({
-        check: 'INV-13',
-        file: 'app/package.json',
-        message: `${name} must be pinned exactly at "${GPUIX_VERSION}" (found ${JSON.stringify(spec ?? null)})`,
-      });
-    }
-  }
-  const lockText = readText(root, 'bun.lock');
-  if (lockText === null) {
-    res.violations.push({ check: 'INV-13', file: 'bun.lock', message: 'bun.lock is missing' });
-    return res;
-  }
-  const lock = JSON.parse(stripJsonTrailingCommas(lockText)) as {
-    packages?: Record<string, unknown[]>;
-    patchedDependencies?: Record<string, string>;
-    overrides?: Record<string, string>;
-  };
-  for (const key of ['patchedDependencies', 'overrides'] as const) {
-    for (const name of Object.keys(lock[key] ?? {}).filter((k) => k.startsWith('@gpuix/'))) {
-      res.violations.push({
-        check: 'INV-13',
-        file: 'bun.lock',
-        message: `${key} entry for ${name}`,
-      });
-    }
-  }
-  for (const [name, entry] of Object.entries(lock.packages ?? {})) {
-    if (!name.startsWith('@gpuix/')) continue;
-    const resolved = String(entry[0] ?? '');
-    const registry = entry[1];
-    const want = `${name}@${GPUIX_VERSION}`;
-    if (resolved !== want || registry !== '') {
-      res.violations.push({
-        check: 'INV-13',
-        file: 'bun.lock',
-        message: `${name} resolves to ${JSON.stringify(resolved)}, expected ${want} from the npm registry`,
-      });
-    }
-  }
-  for (const name of ['@gpuix/react', '@gpuix/native']) {
-    if (!lock.packages?.[name]) {
-      res.violations.push({ check: 'INV-13', file: 'bun.lock', message: `${name} is not locked` });
-    }
-  }
-  return res;
-}
-
 function cargoTreeInverse(root: string, pkg: string, target: string): string[] | null {
   const r = run(
     ['cargo', 'tree', '-p', pkg, '-i', target, '--prefix', 'depth', '-e', 'normal,build'],
@@ -546,6 +439,19 @@ export const LAYERS: Record<string, LayerRule> = {
     forbidden: [...GPUI_CRATES],
   },
   'ply-hook': { onlyAllowed: ['serde_json'], allowedPly: [], forbidden: ['tokio'] },
+  'ply-app': {
+    onlyAllowed: [
+      'futures',
+      'gpui',
+      'serde',
+      'serde_json',
+      'tracing',
+      'tracing-appender',
+      'tracing-subscriber',
+    ],
+    allowedPly: ['ply-proto', 'ply-term'],
+    forbidden: ['tokio', 'ghostty-sys'],
+  },
 };
 
 /** A workspace crate as `cargo metadata` describes it, reduced to what the layer check reads. */
@@ -797,12 +703,10 @@ export function checkAll(root: string): CheckResult {
   const results = [
     checkInv1NoNetwork(root, files),
     checkInv2NoPtyBytes(root, files),
-    checkInv3NoGpui(root),
     checkInv4KeyHandlers(root, files),
     checkInv5Palette(root, files),
     checkInv7Worktrees(root, files),
     checkInv11PersonalData(root, files),
-    checkInv13Gpuix(root),
     checkInv17Ghostty(root),
     checkCrateLayers(root),
     checkAppLayers(root, files),

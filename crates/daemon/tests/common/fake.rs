@@ -26,7 +26,8 @@
 //! `claude auth status` prints `$HOME/fake-claude-auth.json`, or a signed-out status without it. `claude auth login`
 //! appends `login <args>` to `$HOME/fake-claude-auth.log`, prints one line and waits for one line on the FIFO
 //! `$HOME/fake-login.cmd` ([`sign_in_done`]): `ok <status json>` writes that status file and exits 0, `fail <code>`
-//! exits with the code.
+//! exits with the code. `codex login` does the same, logging its arguments to `$HOME/fake-codex-auth.log`, and its
+//! `ok <auth json>` writes `$CODEX_HOME/auth.json` (default `$HOME/.codex`).
 //!
 //! fake-claude enters `<cwd>/.claude/worktrees/<name>` for `--worktree <name>`, then fires SessionStart (session id
 //! [`claude_session`] of the pane, or the one given to `--resume`, model `claude-example-model`) and, with a prompt,
@@ -191,12 +192,12 @@ pub fn typed(sb: &Sandbox, cli: &str) -> Vec<String> {
         .collect()
 }
 
-/// Ends fake-claude's `claude auth login` once it waits: `ok <status json>` or `fail <code>`.
+/// Ends fake-claude's `claude auth login` or fake-codex's `codex login` once it waits: `ok <json>` or `fail <code>`.
 pub fn sign_in_done(sb: &Sandbox, line: &str) {
     let fifo = sb.home.join("fake-login.cmd");
     assert!(
         eventually(Duration::from_secs(10), || fifo.exists()),
-        "claude auth login did not start"
+        "the fake login did not start"
     );
     let mut f = std::fs::OpenOptions::new().write(true).open(&fifo).unwrap();
     f.write_all(format!("{line}\n").as_bytes()).unwrap();

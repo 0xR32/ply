@@ -144,29 +144,20 @@ mounted image, because the LaunchAgent will name the plyd inside whichever copy 
 ```
 ply.app/Contents/
 ├── Info.plist                  dev.ply.app, the minimum macOS of the binaries, ATSApplicationFontsPath = Fonts
-├── MacOS/ply                   the app: Bun's runtime with the bundled app compiled in (bun build --compile)
-├── MacOS/plyd, MacOS/ply-hook  cargo profile dist; plyd finds ply-hook beside itself
-├── Frameworks/gpuix-native.darwin-arm64.node   GPUIX's addon, as released on npm
+├── MacOS/ply                   the app (crates/app, GPUI), cargo profile dist
+├── MacOS/plyd, MacOS/ply-hook  cargo profile dist; plyd finds ply-hook beside itself; the app finds plyd beside itself
 ├── Resources/ply.icns          the icon, CFBundleIconFile
-└── Resources/Fonts/            Geist and Geist Mono (SIL OFL)
+└── Resources/Fonts/            Geist and Geist Mono (SIL OFL); the app also carries them compiled in
 ```
 
-What makes it faster than `bun run dev`:
-
-- **React's production build.** The app is compiled with `process.env.NODE_ENV` defined as `"production"`, which drops
-  React's development checks and warnings from every render.
-- **Bytecode.** `--bytecode` ships JavaScriptCore bytecode, so the app is not parsed and compiled from source at
-  launch, and `--minify` shrinks what is loaded. Bytecode needs CommonJS output, which has no top-level await, so
-  `app/src/bundle.ts` loads `main.tsx` with a dynamic import.
-- **plyd at `[profile.dist]`**: the release profile with fat LTO and one codegen unit, whole-program optimisation
-  across ply's crates. libghostty-vt is Zig's `ReleaseFast` in every build.
-- **The addon loads in place.** napi-rs's loader cannot find a `.node` file inside a compiled executable, and
-  embedding it would extract 23 MB to a temporary directory on every launch; `bundle.ts` sets
-  `NAPI_RS_NATIVE_LIBRARY_PATH` to the copy in `Contents/Frameworks` before GPUIX loads.
+All three binaries are built at `[profile.dist]`: the release profile with fat LTO and one codegen unit,
+whole-program optimisation across ply's crates. libghostty-vt is Zig's `ReleaseFast` in every build. When no plyd
+answers, the app runs `plyd install-agent` with the plyd beside it (or, with `PLY_HOME` set, starts `plyd
+--foreground`), as the React app's launcher did.
 
 The script checks that `plyd --version` names the same `<version>+<commit>` it compiles into the app as
-`PLY_BUILD_ID` (a bundle has no checkout for `git rev-parse`), so the status bar's "another build" check works in the
-bundle too; it warns when the tree has uncommitted changes, which the id does not show. The Geist fonts work without
+`PLY_BUILD_ID` (a bundle has no checkout for `git rev-parse`; the GPUI app reads it at compile time and says it in
+`hello`), so the app and plyd of one bundle report the same build; it warns when the tree has uncommitted changes, which the id does not show. The Geist fonts work without
 `just fonts`: `ATSApplicationFontsPath` registers them with CoreText for the bundle's own process only, and
 `fontDirs` in `app/src/ipc/os.ts` looks in `Contents/Resources/Fonts`.
 
@@ -228,11 +219,9 @@ runs the formatting, lint, rustdoc, rule and type gates; `just test` runs nextes
   with `-D warnings`, so an undocumented public item fails. `clippy::unwrap_used` and `expect_used` are denied outside
   tests (`clippy.toml`).
 - **`scripts/check-rules.ts`** prints one line per violation and exits non-zero on any. One function per rule:
-  INV-1 (no network API in `app/`), INV-2 (no byte fields in C1 types, no pty API in `app/`), INV-3 (no ply crate
-  reaches `gpui`), INV-4 (`onKeyDown` only in the keymap dispatcher, the overlay forms and the terminal view), INV-5
+  INV-1 (no network API in `app/`), INV-2 (no byte fields in C1 types, no pty API in `app/`), INV-4 (`onKeyDown` only in the keymap dispatcher, the overlay forms and the terminal view), INV-5
   (colour literals only in `app/src/theme/tokens.ts` and fixtures), INV-7 (no `git worktree` call, no worktree column
-  but `worktree_seen`), INV-11 (no real home path or committer identity in any file), INV-13 (GPUIX pinned
-  exactly at 0.11.0 from npm, unpatched), INV-17 (`ghostty-sys` reaches only `plyd` through `ply-term`, and
+  but `worktree_seen`), INV-11 (no real home path or committer identity in any file), INV-17 (`ghostty-sys` reaches only `plyd` through `ply-term`, and
   `crates/ghostty-sys/build.rs` pins the ghostty commit, an archive URL naming it and the archive's SHA-256), the
   dependency layers of spec 8.2 for crates and for `app/src` imports, the unsafe and `anyhow` rules of spec 9.1, exact
   version pins, and the freshness of `proto.gen.ts`. A check that needs code a later work package writes prints a
@@ -241,14 +230,15 @@ runs the formatting, lint, rustdoc, rule and type gates; `just test` runs nextes
   `deps.allow.toml`, or when its recorded numbers fail INV-16.
 - **`scripts/check-pr.ts`** requires a `Spec: x.y.z` line and a `WP: n` line in the pull-request body (`$PR_BODY`, or a
   file given as the first argument).
-- **cargo-deny** (`deny.toml`) bans HTTP client crates and `gpui` for every ply crate (INV-1, INV-3), allows only the
-  listed licences and fails on advisories.
+- **cargo-deny** (`deny.toml`) bans HTTP client crates for every ply crate (INV-1), allows only the listed licences
+  and fails on advisories.
 
 ## Adding a dependency
 
 INV-16 admits a direct third-party dependency only with at least 1 000 stars, a commit in the last six months, at
 least three contributors with five or more commits, and no "experimental" label from its maintainers. GPUIX (D4) and
-libghostty-vt (D5) are the only exceptions, by decision.
+libghostty-vt (D5) are the only exceptions, by decision; GPUIX's lasts until the GPUI app replaces `app/` (D4 was
+reversed on 2026-11-11).
 
 1. Check the numbers and add the entry in one step (needs an authenticated `gh`):
 

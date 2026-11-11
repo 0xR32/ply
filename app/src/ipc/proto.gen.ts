@@ -629,9 +629,41 @@ export type ClaudeAccounts = {
 };
 
 /**
- * How an `account.switch` ended (`account.changed`).
+ * How an `account.switch` or a `codex.sign_in` ended (`account.changed`, `codex.changed`).
  */
 export type SignInOutcome = 'signed_in' | 'other_account' | 'unchanged' | 'failed' | 'cancelled';
+
+/**
+ * Codex's sign-in as its `auth.json` records it; ply keeps no token or key of it.
+ */
+export type CodexAccount = {
+  /**
+   * The ChatGPT account's email, from the sign-in's ID token; absent for an API key.
+   */
+  email?: string;
+  /**
+   * The ChatGPT plan as Codex records it (`chatgpt_plan_type`, e.g. `plus`, `pro`, `team`); absent for an API key.
+   */
+  plan?: string;
+  /**
+   * Whether Codex authenticates with an API key rather than a ChatGPT sign-in.
+   */
+  api_key: boolean;
+};
+
+/**
+ * What `codex.account` returns: Codex's sign-in now and the `codex.sign_in` under way.
+ */
+export type CodexAccounts = {
+  /**
+   * Absent while Codex is signed out, or when its `auth.json` is missing or unreadable.
+   */
+  current?: CodexAccount;
+  /**
+   * The pane running `codex login` while a `codex.sign_in` waits for it.
+   */
+  signing_in?: number;
+};
 
 /**
  * Messages from the app to plyd, tagged by `"t"`.
@@ -711,6 +743,8 @@ export type Request = {
   | { m: 'skill.list'; p: SkillListParams }
   | { m: 'account.list'; p: Empty }
   | { m: 'account.switch'; p: AccountSwitchParams }
+  | { m: 'codex.account'; p: Empty }
+  | { m: 'codex.sign_in'; p: WorkspaceRef }
 );
 
 /**
@@ -740,7 +774,9 @@ export type Call =
   | { m: 'queue.pause'; p: QueuePauseParams }
   | { m: 'skill.list'; p: SkillListParams }
   | { m: 'account.list'; p: Empty }
-  | { m: 'account.switch'; p: AccountSwitchParams };
+  | { m: 'account.switch'; p: AccountSwitchParams }
+  | { m: 'codex.account'; p: Empty }
+  | { m: 'codex.sign_in'; p: WorkspaceRef };
 
 /**
  * The answer to a request: `{"t":"res","id","ok":true,"r":…}` or `{"t":"res","id","ok":false,"err":{…}}`.
@@ -1047,7 +1083,8 @@ export type Event =
   | { e: 'daemon.stopping'; p: DaemonStopping }
   | { e: 'task.changed'; p: Task }
   | { e: 'queue.changed'; p: QueueState }
-  | { e: 'account.changed'; p: AccountChanged };
+  | { e: 'account.changed'; p: AccountChanged }
+  | { e: 'codex.changed'; p: CodexChanged };
 
 /**
  * `pane.removed` payload.
@@ -1184,6 +1221,28 @@ export type AccountChanged = {
 };
 
 /**
+ * `codex.changed` payload: a `codex.sign_in` ended.
+ */
+export type CodexChanged = {
+  /**
+   * The pane that ran `codex login`; closed already unless the sign-in failed.
+   */
+  pane_id: number;
+  /**
+   * How it ended: `signed_in`, `unchanged`, `failed` or `cancelled`, never `other_account`.
+   */
+  outcome: SignInOutcome;
+  /**
+   * The account Codex is signed in with now, when known.
+   */
+  account?: CodexAccount;
+  /**
+   * Codex panes that restart on the new sign-in, each once it is at rest; 0 when the account did not change.
+   */
+  panes: number;
+};
+
+/**
  * `{"v":1,"pane_id":2,"cli":"claude","event":"Notification","payload":{…}}`; `event` is absent for Codex notify.
  */
 export type HookEnvelope = {
@@ -1235,6 +1294,8 @@ export type Methods = {
   'skill.list': { params: SkillListParams; result: SkillList };
   'account.list': { params: Empty; result: ClaudeAccounts };
   'account.switch': { params: AccountSwitchParams; result: Pane };
+  'codex.account': { params: Empty; result: CodexAccounts };
+  'codex.sign_in': { params: WorkspaceRef; result: Pane };
 };
 
 /** A C1 method name. */

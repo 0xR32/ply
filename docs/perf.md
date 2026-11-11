@@ -50,7 +50,7 @@ open and nothing blinking, same run). GPUIX's frame loop calls `tick()` from an
 8 ms `setTimeout`, about 125 times a second, whether or not anything changed;
 GPUIX's README quotes 1.5 % for an idle paced app. plyd stays at zero: an idle
 pane sends nothing and is compressed. Meeting 0.5 % needs a frame loop that
-sleeps when idle, which is GPUIX's to change (ply uses it as released, INV-13).
+sleeps when idle, which GPUIX does not have; the move to GPUI in Rust removes the pump.
 
 **P5 in detail.** A switch mounts four terminal views, which open four C2
 connections, receive four Snapshots and render them before the frame is drawn

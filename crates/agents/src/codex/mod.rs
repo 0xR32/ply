@@ -1,5 +1,6 @@
 //! Codex adapter (spec 6.2, ADR-0004): per-invocation `-c` overrides, and notify, OSC 9 and rollout records to signals.
 
+pub mod account;
 mod literal;
 pub mod notify;
 pub mod osc9;

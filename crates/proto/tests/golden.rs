@@ -18,7 +18,8 @@ use ply_proto::data::{
 };
 use ply_proto::hook::HookEnvelope;
 use ply_proto::pane::{
-    ClaudeAccounts, Layout, Pane, Session, Settings, SkillList, Task, TaskList, Usage, Workspace,
+    ClaudeAccounts, CodexAccounts, Layout, Pane, Session, Settings, SkillList, Task, TaskList,
+    Usage, Workspace,
 };
 use ply_proto::{C2_VERSION, Error, PROTOCOL_VERSION, version};
 use serde_json::Value;
@@ -116,6 +117,7 @@ fn c1_goldens_cover_every_method_and_event() {
         "task.changed",
         "queue.changed",
         "account.changed",
+        "codex.changed",
     ] {
         assert!(
             names.contains(&format!("evt.{e}.json")),
@@ -130,6 +132,7 @@ fn c1_goldens_cover_every_method_and_event() {
         "res.err.tab_full.json",
         "res.ok.usage.json",
         "res.ok.accounts.json",
+        "res.ok.codex.json",
     ] {
         assert!(names.contains(n), "no golden {n}");
     }
@@ -160,6 +163,8 @@ fn c1_results_decode_into_their_method_types() {
         result_of::<TaskList>(&read("res.ok.tasks.json")),
         result_of::<SkillList>(&read("res.ok.skills.json")),
         result_of::<ClaudeAccounts>(&read("res.ok.accounts.json")),
+        result_of::<CodexAccounts>(&read("res.ok.codex.json")),
+        result_of::<CodexAccounts>(&read("res.ok.codex.api_key.json")),
         result_of::<control::Empty>(&read("res.ok.empty.json")),
     ];
     for (typed, raw) in pairs {

@@ -9,13 +9,11 @@ import {
   symlinkSync,
   writeFileSync,
 } from 'node:fs';
-import { createRequire } from 'node:module';
-import { dirname, join, normalize } from 'node:path';
+import { join, normalize } from 'node:path';
 import { run } from './lib/repo';
 
 const ROOT = normalize(join(import.meta.dir, '..'));
 const DIST = join(ROOT, 'dist');
-const ADDON = 'gpuix-native.darwin-arm64.node';
 
 /** The values the bundle's Info.plist carries. */
 export interface BundleInfo {
@@ -118,59 +116,34 @@ function main(): void {
   const app = join(DIST, 'ply.app');
   const contents = join(app, 'Contents');
   const macos = join(contents, 'MacOS');
-  const frameworks = join(contents, 'Frameworks');
   const fonts = join(contents, 'Resources', 'Fonts');
   rmSync(app, { recursive: true, force: true });
-  for (const dir of [macos, frameworks, fonts]) mkdirSync(dir, { recursive: true });
+  for (const dir of [macos, fonts]) mkdirSync(dir, { recursive: true });
 
-  step('plyd and ply-hook (profile dist: fat LTO, one codegen unit; libghostty-vt ReleaseFast)', [
-    'cargo',
-    'build',
-    '--profile',
-    'dist',
-    '--locked',
-    '-p',
-    'ply-daemon',
-    '-p',
-    'ply-hook',
-  ]);
+  step(
+    'the app, plyd and ply-hook (profile dist: fat LTO, one codegen unit; libghostty-vt ReleaseFast)',
+    [
+      'cargo',
+      'build',
+      '--profile',
+      'dist',
+      '--locked',
+      '-p',
+      'ply-app',
+      '-p',
+      'ply-daemon',
+      '-p',
+      'ply-hook',
+    ],
+    { PLY_BUILD_ID: buildId },
+  );
   const daemonVersion = output([join(ROOT, 'target', 'dist', 'plyd'), '--version']).trim();
   if (daemonVersion !== `plyd ${buildId}`) {
     throw new Error(`plyd says "${daemonVersion}", the app would say ${buildId}`);
   }
-  for (const bin of ['plyd', 'ply-hook']) {
+  for (const bin of ['ply', 'plyd', 'ply-hook']) {
     copyFileSync(join(ROOT, 'target', 'dist', bin), join(macos, bin));
   }
-
-  const build = join(DIST, 'build');
-  rmSync(build, { recursive: true, force: true });
-  step('the app (React production build, minified, JavaScriptCore bytecode)', [
-    'bun',
-    'build',
-    'app/src/bundle.ts',
-    '--compile',
-    '--target=bun-darwin-arm64',
-    '--bytecode',
-    '--minify',
-    '--define',
-    'process.env.NODE_ENV="production"',
-    '--define',
-    `process.env.PLY_BUILD_ID="${buildId}"`,
-    '--outfile',
-    join(build, 'ply'),
-  ]);
-  copyFileSync(join(build, 'ply'), join(macos, 'ply'));
-  rmSync(build, { recursive: true, force: true });
-
-  const appRequire = createRequire(join(ROOT, 'app', 'package.json'));
-  const nativePkg = appRequire.resolve('@gpuix/native/package.json');
-  const addonPkg = appRequire.resolve('@gpuix/native-darwin-arm64/package.json');
-  const versionOf = (p: string) =>
-    (JSON.parse(readFileSync(p, 'utf8')) as { version: string }).version;
-  if (versionOf(nativePkg) !== versionOf(addonPkg)) {
-    throw new Error(`@gpuix/native ${versionOf(nativePkg)} with addon ${versionOf(addonPkg)}`);
-  }
-  copyFileSync(join(dirname(addonPkg), ADDON), join(frameworks, ADDON));
 
   copyFileSync(
     join(ROOT, 'app', 'assets', 'icon', 'ply.icns'),
@@ -182,12 +155,7 @@ function main(): void {
     copyFileSync(join(fontSrc, f), join(fonts, f));
   }
 
-  const machO = [
-    join(macos, 'ply'),
-    join(macos, 'plyd'),
-    join(macos, 'ply-hook'),
-    join(frameworks, ADDON),
-  ];
+  const machO = [join(macos, 'ply'), join(macos, 'plyd'), join(macos, 'ply-hook')];
   const minos = minimumSystemVersion(machO.map((f) => output(['otool', '-l', f])));
   writeFileSync(
     join(contents, 'Info.plist'),
@@ -196,7 +164,7 @@ function main(): void {
   output(['plutil', '-lint', join(contents, 'Info.plist')]);
 
   // Nested code is signed before the bundle that seals it; ad-hoc, since nothing here is notarised.
-  for (const f of [join(frameworks, ADDON), join(macos, 'plyd'), join(macos, 'ply-hook')]) {
+  for (const f of [join(macos, 'plyd'), join(macos, 'ply-hook')]) {
     output(['codesign', '--force', '--sign', '-', '--timestamp=none', f]);
   }
   output(['codesign', '--force', '--sign', '-', '--timestamp=none', app]);

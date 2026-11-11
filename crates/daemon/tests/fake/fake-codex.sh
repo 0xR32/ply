@@ -1,5 +1,20 @@
 #!/bin/sh
 # Stand-in for Codex in plyd's tests; the protocol is documented in crates/daemon/tests/common/fake.rs.
+if [ "$1" = login ]; then
+  printf '%s\n' "$*" >> "$HOME/fake-codex-auth.log"
+  fifo="$HOME/fake-login.cmd"
+  rm -f "$fifo"
+  mkfifo "$fifo" || exit 71
+  printf 'fake codex %s\r\n' "$*"
+  IFS= read -r line < "$fifo"
+  rm -f "$fifo"
+  home=${CODEX_HOME:-$HOME/.codex}
+  case "$line" in
+    "ok "*) mkdir -p "$home" && printf '%s\n' "${line#ok }" > "$home/auth.json"; printf 'Successfully logged in\r\n'; exit 0 ;;
+    "fail "*) printf 'Login failed.\r\n'; exit "${line#fail }" ;;
+  esac
+  exit 1
+fi
 args="$*"
 hook=
 resume=

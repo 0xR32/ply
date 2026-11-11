@@ -9,6 +9,20 @@ checked = "2026-09-25"
 exception = "R35"
 note = "single-maintainer but foundational, actively maintained and ubiquitous; named by the spec (9.1) for binaries' main.rs only"
 
+[cargo.futures]
+repo = "rust-lang/futures-rs"
+stars = 5943
+last_commit = "2026-11-01"
+contributors_5plus = 48
+checked = "2026-11-11"
+
+[cargo.gpui]
+repo = "zed-industries/zed"
+stars = 94735
+last_commit = "2026-11-11"
+contributors_5plus = 258
+checked = "2026-11-11"
+
 [cargo.notify]
 repo = "notify-rs/notify"
 stars = 3457
@@ -109,7 +123,7 @@ last_commit = "2026-09-23"
 contributors_5plus = 3
 checked = "2026-09-25"
 exception = "D4"
-note = "GPUIX is ply's UI framework by the owner's decision (ADR-0007, ADR-0011); pinned exactly at 0.11.0 (INV-13)"
+note = "GPUIX is the UI framework of app/ until the GPUI app replaces it (D4, reversed by the owner on 2026-11-11)"
 
 [npm."@gpuix/react"]
 repo = "remorses/gpuix"
@@ -118,7 +132,7 @@ last_commit = "2026-09-23"
 contributors_5plus = 3
 checked = "2026-09-25"
 exception = "D4"
-note = "GPUIX is ply's UI framework by the owner's decision (ADR-0007, ADR-0011); pinned exactly at 0.11.0 (INV-13)"
+note = "GPUIX is the UI framework of app/ until the GPUI app replaces it (D4, reversed by the owner on 2026-11-11)"
 
 [npm."@types/bun"]
 repo = "DefinitelyTyped/DefinitelyTyped"

@@ -1,6 +1,6 @@
 //! Domain records C1 carries: panes, workspaces, tabs, layouts, sessions, the terminal palette, settings, the
-//! CLIs' plan usage, the task queue (Ruling R60), the skills installed for each CLI (Ruling R61) and Claude Code's
-//! sign-ins an account switch moves between.
+//! CLIs' plan usage, the task queue (Ruling R60), the skills installed for each CLI (Ruling R61), Claude Code's
+//! sign-ins an account switch moves between and the ChatGPT account or API key Codex is signed in with.
 
 use std::fmt;
 
@@ -605,18 +605,46 @@ pub struct ClaudeAccounts {
     pub signing_in: Option<PaneId>,
 }
 
-/// How an `account.switch` ended (`account.changed`).
+/// Codex's sign-in as its `auth.json` records it; ply keeps no token or key of it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+#[ts(optional_fields)]
+pub struct CodexAccount {
+    /// The ChatGPT account's email, from the sign-in's ID token; absent for an API key.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub email: Option<String>,
+    /// The ChatGPT plan as Codex records it (`chatgpt_plan_type`, e.g. `plus`, `pro`, `team`); absent for an API key.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan: Option<String>,
+    /// Whether Codex authenticates with an API key rather than a ChatGPT sign-in.
+    pub api_key: bool,
+}
+
+/// What `codex.account` returns: Codex's sign-in now and the `codex.sign_in` under way.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+#[ts(optional_fields)]
+pub struct CodexAccounts {
+    /// Absent while Codex is signed out, or when its `auth.json` is missing or unreadable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current: Option<CodexAccount>,
+    /// The pane running `codex login` while a `codex.sign_in` waits for it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signing_in: Option<PaneId>,
+}
+
+/// How an `account.switch` or a `codex.sign_in` ended (`account.changed`, `codex.changed`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
 pub enum SignInOutcome {
-    /// Signed in to the account asked for, or to any when none was named; the Claude panes move to it.
+    /// Signed in to the account asked for, or to any when none was named (for Codex, to another account than before); the CLI's panes move to it.
     SignedIn,
-    /// Signed in, but to another email or organization than the one asked for; the Claude panes move to it all the same.
+    /// Signed in, but to another email or organization than the one asked for; the Claude panes move to it all the same. Never for Codex.
     OtherAccount,
     /// Signed in to the account that was signed in before; nothing moves.
     Unchanged,
-    /// `claude auth login` failed or left Claude Code signed out; its pane stays open with what it printed.
+    /// `claude auth login` or `codex login` failed or left the CLI signed out; its pane stays open with what it printed.
     Failed,
-    /// The sign-in pane was closed before `claude auth login` finished.
+    /// The sign-in pane was closed before the login command finished.
     Cancelled,
 }

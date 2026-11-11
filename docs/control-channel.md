@@ -89,9 +89,10 @@ message bumps it, with three exceptions whose mismatch is already loud:
 `pane.answer`'s R55 field, which `deny_unknown_fields` turns into `bad_request`
 (see there); the `usage.get` method (Ruling R59); the task queue and skill
 list (Rulings R60 and R61: the `task.*`, `queue.pause` and `skill.list` methods
-and the `task.changed` and `queue.changed` events); and the Claude account
+and the `task.changed` and `queue.changed` events); the Claude account
 switch (the `account.list` and `account.switch` methods and the
-`account.changed` event). A plyd from before answers
+`account.changed` event); and Codex's sign-in (the `codex.account` and
+`codex.sign_in` methods and the `codex.changed` event). A plyd from before answers
 the new methods `unknown_method`, and an app from before ignores events it does
 not know. The client checks `welcome.v` the same way.
 
@@ -166,11 +167,13 @@ the results are made of are under **Records**.
 | `skill.list` | `{cli, cwd}` | `SkillList` |
 | `account.list` | `{}` | `ClaudeAccounts` |
 | `account.switch` | `{workspace_id, account?}` | `Pane` |
+| `codex.account` | `{}` | `CodexAccounts` |
+| `codex.sign_in` | `{workspace_id}` | `Pane` |
 
 The implementations are `crates/daemon/src/server/control.rs` (`dispatch`),
 `crates/daemon/src/panes/launch.rs`, `crates/daemon/src/panes/registry.rs`,
-`crates/daemon/src/usage.rs`, `crates/daemon/src/skills.rs` and
-`crates/daemon/src/accounts.rs`.
+`crates/daemon/src/usage.rs`, `crates/daemon/src/skills.rs`,
+`crates/daemon/src/accounts.rs` and `crates/daemon/src/accounts/codex.rs`.
 
 ### `workspace.list`
 
@@ -473,6 +476,32 @@ what `claude auth login` printed. Closing the pane first (`pane.close
 characters, no `@`, a leading `-`); `not_found`, `cli_not_found`,
 `spawn_failed` and `shutting_down` as for `pane.create`.
 
+### Codex's sign-in: `codex.account` and `codex.sign_in`
+
+**`codex.account`** reads Codex's own `auth.json` under the `CODEX_HOME` the
+panes run with (default `~/.codex`; read-only, at most 64 KiB) and answers
+`current`, the ChatGPT account or API key Codex is signed in with, and
+`signing_in`, the pane of a sign-in under way. `current` is absent when Codex is
+signed out, or when `auth.json` is missing, larger than the cap or unreadable
+(logged). It never fails and runs no command; ply keeps no token or key
+(`docs/agents.md`, **Signing in to Codex**).
+
+**`codex.sign_in`** opens a new tab named `Codex sign-in` in the workspace, its
+one pane running `codex login` (the login `PATH`'s `codex`, no other argument)
+in the workspace's directory, and returns that pane (a `shell` pane in every
+other way, announced with `pane.added`). The user finishes Codex's own sign-in
+there. Codex cannot be pointed at one account, so moving to another is signing
+in again. When the process exits 0, plyd reads `auth.json` again and sends
+`codex.changed`: another account than before (another email, or a move between
+a ChatGPT sign-in and an API key) closes the pane and has every live Codex pane
+restart on it once at rest, resuming its thread; the same account closes the
+pane and restarts nothing; a non-zero exit, or `auth.json` still without a
+sign-in, leaves the pane `exited` with what `codex login` printed. Closing the
+pane first (`pane.close {kill:true}`) cancels it. One Codex sign-in runs at a
+time, independently of `account.switch`: another `codex.sign_in` meanwhile is
+`invalid_state`. `not_found`, `cli_not_found`, `bad_request`, `spawn_failed`
+and `shutting_down` as for `pane.create`.
+
 ## Events
 
 ```
@@ -496,6 +525,7 @@ is connected is dropped; a client learns the current state from `pane.list`,
 | `task.changed` | a `Task` | A task was added, changed state, moved or was taken by a pane from its pool: the whole record. |
 | `queue.changed` | a `QueueState` | A pane's queue was paused, resumed, blocked or unblocked. |
 | `account.changed` | `{pane_id, outcome, account?, panes}` | An `account.switch` ended. `outcome` is `signed_in` (to the account asked for, or any when none was), `other_account` (signed in, but to another email or organization than asked), `unchanged` (the account signed in before), `failed` or `cancelled`; `account` is the sign-in now, when known; `panes` counts the Claude panes that restart on it, 0 unless the account changed. After `signed_in`, `other_account` and `unchanged` the sign-in pane's `pane.removed` comes first. |
+| `codex.changed` | `{pane_id, outcome, account?, panes}` | A `codex.sign_in` ended. `outcome` is `signed_in` (another account than before, or the first), `unchanged`, `failed` or `cancelled`, never `other_account`; `account` is Codex's sign-in now, when known; `panes` counts the Codex panes that restart on it, 0 unless the account changed. After `signed_in` and `unchanged` the sign-in pane's `pane.removed` comes first. |
 
 `pane.status` values are `starting`, `idle`, `running`, `waiting_permission`,
 `waiting_input`, `exited` and `lost`; `docs/agents.md` has the machine behind
@@ -617,6 +647,16 @@ status` reports a claude.ai sign-in (`email`, `orgId`, `orgName`,
 two accounts, told apart by `org_id`. No credential is part of it.
 
 **`ClaudeAccounts`** — `{current?, known, signing_in?}`: see `account.list`.
+
+**`CodexAccount`** — `{email?, plan?, api_key}`, Codex's sign-in as its
+`auth.json` records it. `api_key` is true when Codex authenticates with an API
+key (`auth_mode` other than ChatGPT, or, in a file without `auth_mode`, an
+`OPENAI_API_KEY` and no `tokens`), and then `email` and `plan` are absent. For a
+ChatGPT sign-in, `email` and `plan` (`chatgpt_plan_type` as Codex records it,
+e.g. `plus`, `pro`, `team`) come from the payload of its ID token. No token or
+key is part of it.
+
+**`CodexAccounts`** — `{current?, signing_in?}`: see `codex.account`.
 
 **`TerminalTheme`** (the `palette` of `theme.set`) — camelCase keys, colours as
 `"#RRGGBB"` strings (either case read, upper case written):

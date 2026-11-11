@@ -391,6 +391,8 @@ async fn dispatch(shared: &Arc<Shared>, call: Call) -> Result<Value, ErrorBody> 
         }
         Call::AccountList(Empty {}) => ok(&accounts::list(shared).await?),
         Call::AccountSwitch(p) => ok(&accounts::switch(shared, p).await?),
+        Call::CodexAccount(Empty {}) => ok(&accounts::codex::account(shared).await),
+        Call::CodexSignIn(p) => ok(&accounts::codex::sign_in(shared, p).await?),
     }
 }
 
